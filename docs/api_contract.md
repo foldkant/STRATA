@@ -516,10 +516,9 @@ POST /api/v1/teacher/lesson-steps/ai-generate-questions/
 
 ```json
 {
-  "direction": "围绕数据采集流程，给 B/C 层生成基础巩固题。",
+  "direction": "围绕数据采集流程，分别设计拓展题、核心题、基础支架题和相邻层级共用题。",
   "question_type": "single",
-  "target_layer": "B/C",
-  "count": 3,
+  "count": 1,
   "subject_name": "信息科技",
   "lesson_title": "数据采集",
   "step_title": "任务分析",
@@ -532,6 +531,14 @@ POST /api/v1/teacher/lesson-steps/ai-generate-questions/
 
 ```json
 {
+  "groups": [
+    {
+      "target_layer": "A",
+      "target_layer_label": "A",
+      "questions": [],
+      "score_defaults": {"base_score": 2, "layer_scores": {"A": 3, "B": 2, "C": 2}}
+    }
+  ],
   "questions": [
     {
       "id": "q_xxx",
@@ -552,8 +559,14 @@ POST /api/v1/teacher/lesson-steps/ai-generate-questions/
   ],
   "score_defaults": {
     "base_score": 2,
-    "layer_scores": {"A": 2, "B": 2, "C": 1.5},
-    "note": "系统先给基础分和 A/B/C 建议分值；后续接入分层模型后，只作为建议，必须由教师确认。"
+    "groups": {
+      "A": {"base_score": 2, "layer_scores": {"A": 3, "B": 2, "C": 2}},
+      "B": {"base_score": 2, "layer_scores": {"A": 2, "B": 2, "C": 2}},
+      "C": {"base_score": 2, "layer_scores": {"A": 2, "B": 2, "C": 1.5}},
+      "A/B": {"base_score": 2, "layer_scores": {"A": 2.5, "B": 2, "C": 2}},
+      "B/C": {"base_score": 2, "layer_scores": {"A": 2, "B": 2, "C": 1.5}}
+    },
+    "note": "系统按 A、B、C、A/B、B/C 同时给题目和分值建议；后续接入分层模型后，只作为建议，必须由教师确认。"
   }
 }
 ```
@@ -561,6 +574,7 @@ POST /api/v1/teacher/lesson-steps/ai-generate-questions/
 规则：
 
 - 仅教师可用，且只使用该教师在 `AI 接入` 中保存的 DeepSeek API Key。
+- 教师只提交一个出题方向；系统必须同时生成 `A`、`B`、`C`、`A/B`、`B/C` 五组题目。
 - 后端要求模型返回 JSON，并二次校验题型、层级、选项、答案和分值。
 - 接口只返回草稿，不直接写入 `LessonStep.question_items`。
 - 教师端必须经过“直接加入”或“编辑后加入”才会写入当前环节。

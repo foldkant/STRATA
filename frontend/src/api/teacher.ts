@@ -193,7 +193,6 @@ export type LessonStepPayload = {
 export type AiQuestionGenerationPayload = {
   direction: string
   question_type: LessonStepQuestionType
-  target_layer: string
   count: number | string
   lesson_title?: string
   step_title?: string
@@ -204,9 +203,21 @@ export type AiQuestionGenerationPayload = {
 
 export type AiQuestionGenerationResult = {
   questions: LessonStepQuestion[]
+  groups: Array<{
+    target_layer: string
+    target_layer_label: string
+    questions: LessonStepQuestion[]
+    score_defaults: {
+      base_score: number
+      layer_scores: Record<'A' | 'B' | 'C', number>
+    }
+  }>
   score_defaults: {
     base_score: number
-    layer_scores: Record<'A' | 'B' | 'C', number>
+    groups: Record<string, {
+      base_score: number
+      layer_scores: Record<'A' | 'B' | 'C', number>
+    }>
     note: string
   }
 }

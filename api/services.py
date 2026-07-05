@@ -84,6 +84,7 @@ LESSON_QUESTION_TYPE_LABELS = {
     "text": "简答",
 }
 LESSON_TARGET_LAYER_VALUES = {item.value for item in LessonStep.TargetLayer}
+AI_LAYER_TARGETS = ("A", "B", "C", "A/B", "B/C")
 TEACHER_IMPORT_HEADERS = ["登录账号", "姓名", "联系电话", "初始密码", "状态"]
 STUDENT_IMPORT_HEADERS = ["登录账号", "姓名", "学号", "班级", "联系电话", "初始密码", "层级", "小组号", "积分", "状态"]
 DEFAULT_AI_BASE_URL = "https://api.deepseek.com"
@@ -450,7 +451,7 @@ def _clean_ai_generated_questions(raw_questions, *, requested_count: int, fallba
 def generate_lesson_step_questions_with_ai(request, data) -> dict:
     direction = normalize_text(str(data.get("direction") or ""))
     question_type = str(data.get("question_type") or "single").strip()
-    target_layer = str(data.get("target_layer") or "B/C").strip()
+    layer_targets = list(AI_LAYER_TARGETS)
     raw_count = data.get("count", 3)
     try:
         count = int(raw_count)
@@ -465,10 +466,8 @@ def generate_lesson_step_questions_with_ai(request, data) -> dict:
     errors: dict[str, list[str]] = {}
     if question_type not in LESSON_QUESTION_TYPES:
         errors["question_type"] = ["题型不正确。"]
-    if target_layer not in LESSON_TARGET_LAYER_VALUES or target_layer == "all":
-        errors["target_layer"] = ["分层专属题需选择 A、B、C、A/B、B/C 或 A/B/C。"]
     if count < 1 or count > 10:
-        errors["count"] = ["生成数量需为 1-10。"]
+        errors["count"] = ["每组题目数量需为 1-10。"]
     if len(direction) < 4 or len(direction) > 1000:
         errors["direction"] = ["出题方向需为 4-1000 个字符。"]
     if len(requirement) > 1000:
@@ -477,29 +476,40 @@ def generate_lesson_step_questions_with_ai(request, data) -> dict:
         raise ServiceError("AI 出题参数校验失败。", errors=errors, status=400)
 
     base_score = _lesson_question_base_score(question_type)
-    initial_scores = _initial_layer_scores(base_score, target_layer)
+    score_defaults = {
+        target: {
+            "base_score": base_score,
+            "layer_scores": _initial_layer_scores(base_score, target),
+        }
+        for target in layer_targets
+    }
     system_prompt = (
         "你是 STRATA 数智教学系统的教师备课助手。"
         "你只能生成结构化课堂题草稿，不能生成代码、网页脚本或外链。"
         "输出必须是严格 JSON 对象，不能包含 Markdown。"
     )
     user_prompt = f"""
-请生成 {count} 道课堂题草稿，用于分层教学。请严格返回 JSON：
+请按同一个出题方向，同时生成 A、B、C、A/B、B/C 五组分层课堂题草稿，每组 {count} 道题。请严格返回 JSON：
 {{
-  "questions": [
+  "groups": [
     {{
-      "question_type": "{question_type}",
-      "stem": "题干",
-      "options": ["选项1", "选项2"],
-      "answer": ["参考答案"],
-      "score": {base_score},
-      "target_layer": "{target_layer}",
-      "use_layer_scores": true,
-      "layer_scores": {json.dumps(initial_scores, ensure_ascii=False)},
-      "analysis": "解析或评分说明",
-      "is_required": true,
-      "difficulty": "support|normal|extension",
-      "score_note": "分值建议理由"
+      "target_layer": "A",
+      "questions": [
+        {{
+          "question_type": "{question_type}",
+          "stem": "题干",
+          "options": ["选项1", "选项2"],
+          "answer": ["参考答案"],
+          "score": {base_score},
+          "target_layer": "A",
+          "use_layer_scores": true,
+          "layer_scores": {json.dumps(score_defaults["A"]["layer_scores"], ensure_ascii=False)},
+          "analysis": "解析或评分说明",
+          "is_required": true,
+          "difficulty": "extension",
+          "score_note": "分值建议理由"
+        }}
+      ]
     }}
   ]
 }}
@@ -518,19 +528,49 @@ def generate_lesson_step_questions_with_ai(request, data) -> dict:
 
 规则：
 1. 题型只能是 {question_type}。
-2. 适用层级只能是 {target_layer}。
-3. 单选/多选至少 4 个选项；判断题 options 固定为 ["正确","错误"]；填空和简答不需要 options。
-4. answer 必须是数组；单选和判断只给 1 个答案。
-5. 分值先给建议值，教师会确认或修改。若不能判断，基础分用 {base_score}，layer_scores 用 {json.dumps(initial_scores, ensure_ascii=False)}。
-6. 语言简洁，贴近高中课堂，避免空泛 AI 味表述。
+2. 必须生成 5 个 group，target_layer 分别为 A、B、C、A/B、B/C，不要生成 all 或 A/B/C。
+3. 每个 group 必须有 {count} 道题，组内每道题的 target_layer 必须等于该组 target_layer。
+4. A 题偏拓展提升，B 题偏核心达成，C 题偏基础支架，A/B 题用于核心加拓展，B/C 题用于基础巩固和支架。
+5. 单选/多选至少 4 个选项；判断题 options 固定为 ["正确","错误"]；填空和简答不需要 options。
+6. answer 必须是数组；单选和判断只给 1 个答案。
+7. 分值先给建议值，教师会确认或修改。基础分用 {base_score}，各组默认分值参考：{json.dumps(score_defaults, ensure_ascii=False)}。
+8. 语言简洁，贴近高中课堂，避免空泛 AI 味表述。
 """.strip()
-    payload = _call_teacher_chat_json(request, system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=2200)
-    questions = _clean_ai_generated_questions(
-        payload.get("questions"),
-        requested_count=count,
-        fallback_type=question_type,
-        fallback_layer=target_layer,
-    )
+    payload = _call_teacher_chat_json(request, system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=5200)
+    raw_groups = payload.get("groups")
+    groups: list[dict] = []
+    questions: list[dict] = []
+    if isinstance(raw_groups, list):
+        by_target = {
+            str(group.get("target_layer") or ""): group.get("questions")
+            for group in raw_groups
+            if isinstance(group, dict)
+        }
+    else:
+        by_target = {}
+    for target in layer_targets:
+        raw_questions = by_target.get(target, [])
+        group_questions = _clean_ai_generated_questions(
+            raw_questions,
+            requested_count=count,
+            fallback_type=question_type,
+            fallback_layer=target,
+        )
+        for index, question in enumerate(group_questions, start=1):
+            question["target_layer"] = target
+            question["use_layer_scores"] = True
+            question["layer_scores"] = question.get("layer_scores") or score_defaults[target]["layer_scores"]
+            question["sort_order"] = len(questions) * 10 + 10
+            question["ai_group_order"] = index
+        groups.append(
+            {
+                "target_layer": target,
+                "target_layer_label": target,
+                "questions": group_questions,
+                "score_defaults": score_defaults[target],
+            }
+        )
+        questions.extend(group_questions)
     if not questions:
         raise ServiceError("AI 没有生成可用题目，请调整出题方向后重试。", errors={"ai": ["未得到可用题目。"]}, status=400)
 
@@ -541,7 +581,7 @@ def generate_lesson_step_questions_with_ai(request, data) -> dict:
         target_type="lesson_step_question",
         detail={
             "question_type": question_type,
-            "target_layer": target_layer,
+            "target_layers": layer_targets,
             "count": len(questions),
             "subject": subject_name,
             "lesson_title": lesson_title,
@@ -550,10 +590,11 @@ def generate_lesson_step_questions_with_ai(request, data) -> dict:
     )
     return {
         "questions": questions,
+        "groups": groups,
         "score_defaults": {
             "base_score": base_score,
-            "layer_scores": initial_scores,
-            "note": "系统先给基础分和 A/B/C 建议分值；后续接入分层模型后，只作为建议，必须由教师确认。",
+            "groups": score_defaults,
+            "note": "系统按 A、B、C、A/B、B/C 同时给题目和分值建议；后续接入分层模型后，只作为建议，必须由教师确认。",
         },
     }
 
