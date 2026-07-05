@@ -1,0 +1,77 @@
+{% extends "ops/base.html" %}
+
+{% block content %}
+  <section class="panel page-actions-panel">
+    <div class="panel-heading split compact-heading">
+      <div>
+        <h2>系统健康</h2>
+        <p>导出当前检查项与失败任务清单。</p>
+      </div>
+      <a class="secondary-button" href="{% url 'ops_system_health_export' %}">导出 XLSX</a>
+    </div>
+  </section>
+
+  <section class="metric-grid" aria-label="系统健康指标">
+    {% for item in metrics %}
+      <article class="metric-card">
+        <span>{{ item.label }}</span>
+        <strong>{{ item.value }}</strong>
+        <small>{{ item.sub }}</small>
+      </article>
+    {% endfor %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading">
+      <h2>健康检查</h2>
+      <p>当前版本先检查数据库、采集任务、模型训练和审计日志。</p>
+    </div>
+    <div class="health-grid">
+      {% for check in checks %}
+        <article class="health-card health-{{ check.level }}">
+          <div>
+            <strong>{{ check.name }}</strong>
+            <span>{{ check.status }}</span>
+          </div>
+          <p>{{ check.detail }}</p>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="screen-grid">
+    <article class="panel">
+      <div class="panel-heading">
+        <h2>失败采集</h2>
+        <p>需要重新提交或检查采集包。</p>
+      </div>
+      <div class="log-list">
+        {% for item in failed_collections %}
+          <div>
+            <strong><a class="table-link" href="{% url 'ops_import_detail' item.pk %}">{{ item.batch_code }}</a></strong>
+            <span>{{ item.source_school.name|default:item.source_school_code|default:"-" }} · {{ item.uploaded_at|date:"Y-m-d H:i" }}</span>
+          </div>
+        {% empty %}
+          <p class="empty">暂无失败采集</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-heading">
+        <h2>失败训练</h2>
+        <p>后续接入任务日志和重试入口。</p>
+      </div>
+      <div class="log-list">
+        {% for job in failed_jobs %}
+          <div>
+            <strong>训练任务 #{{ job.pk }}</strong>
+            <span>{{ job.class_group|default:"-" }} · {{ job.created_at|date:"Y-m-d H:i" }}</span>
+          </div>
+        {% empty %}
+          <p class="empty">暂无失败训练</p>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+{% endblock %}

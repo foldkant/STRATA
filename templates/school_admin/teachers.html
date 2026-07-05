@@ -1,0 +1,83 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="panel list-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>教师管理</h2>
+        <p>维护本校教师信息与登录状态。</p>
+      </div>
+      <div class="heading-actions">
+        <a class="secondary-button" href="{% url 'school_admin_teacher_export' %}?q={{ query|urlencode }}&status={{ status|urlencode }}">导出 XLSX</a>
+        <a class="secondary-button" href="{% url 'school_admin_teacher_template' %}">下载模板</a>
+        <a class="secondary-button" href="{% url 'school_admin_teacher_import' %}">批量导入</a>
+        <a class="primary-button" href="{% url 'school_admin_teacher_create' %}">新增教师</a>
+      </div>
+    </div>
+
+    <form class="toolbar" method="get">
+      <label>
+        <span>关键词</span>
+        <input name="q" value="{{ query }}" placeholder="账号、姓名、电话">
+      </label>
+      <label>
+        <span>状态</span>
+        <select name="status">
+          <option value="">全部状态</option>
+          <option value="active" {% if status == "active" %}selected{% endif %}>启用</option>
+          <option value="disabled" {% if status == "disabled" %}selected{% endif %}>停用</option>
+        </select>
+      </label>
+      <button type="submit">查询</button>
+      <a class="secondary-button" href="{% url 'school_admin_teacher_list' %}">重置</a>
+    </form>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>登录账号</th>
+            <th>姓名</th>
+            <th>电话</th>
+            <th>状态</th>
+            <th>首次登录</th>
+            <th>最近登录</th>
+            <th>任课班级</th>
+            <th class="actions-col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for teacher in teachers %}
+            <tr>
+              <td>{{ teacher.username }}</td>
+              <td>{{ teacher.display_name|default:"-" }}</td>
+              <td>{{ teacher.phone|default:"-" }}</td>
+              <td>
+                {% if teacher.is_active %}
+                  <span class="status-pill status-active">启用</span>
+                {% else %}
+                  <span class="status-pill status-disabled">停用</span>
+                {% endif %}
+              </td>
+              <td>{{ teacher.is_first_login|yesno:"是,否" }}</td>
+              <td>{{ teacher.last_login|date:"Y-m-d H:i"|default:"-" }}</td>
+              <td>{{ teacher.teaching_classes.count }}</td>
+              <td class="row-actions">
+                <a href="{% url 'school_admin_teacher_update' teacher.pk %}">编辑</a>
+                <a href="{% url 'school_admin_teacher_reset_password' teacher.pk %}">重置密码</a>
+                <a href="{% url 'school_admin_teacher_toggle_active' teacher.pk %}">
+                  {% if teacher.is_active %}停用{% else %}启用{% endif %}
+                </a>
+                {% if not teacher.is_active %}
+                  <a class="danger-link" href="{% url 'school_admin_teacher_delete' teacher.pk %}">删除</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8" class="empty">暂无教师</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

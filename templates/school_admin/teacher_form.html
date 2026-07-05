@@ -1,0 +1,37 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="panel form-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>{{ form_title }}</h2>
+        {% if teacher %}
+          <p>{{ teacher.username }} · {{ teacher.display_name|default:"-" }}</p>
+        {% else %}
+          <p>维护本校教师信息。</p>
+        {% endif %}
+      </div>
+      <a class="secondary-button" href="{{ back_url }}">返回列表</a>
+    </div>
+
+    <form method="post" class="form-grid" novalidate>
+      {% csrf_token %}
+      {% include "school_admin/_form_errors.html" %}
+      {% for field in form %}
+        {% if field.field.widget.input_type == "checkbox" %}
+          <label class="check-field wide">
+            {{ field }}
+            <span>{{ field.label }}</span>
+            {% for error in field.errors %}<em>{{ error }}</em>{% endfor %}
+          </label>
+        {% else %}
+          {% include "school_admin/_field.html" with field=field %}
+        {% endif %}
+      {% endfor %}
+      <div class="form-actions wide">
+        <button class="primary-button" type="submit">{{ submit_label }}</button>
+        <a class="secondary-button" href="{{ back_url }}">取消</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

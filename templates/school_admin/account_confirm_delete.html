@@ -1,0 +1,28 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="panel confirm-panel">
+    <div class="panel-heading">
+      <h2>删除{{ account_label }}</h2>
+      <p>该账号已停用。删除后账号不能再登录，且无法从列表恢复。</p>
+    </div>
+
+    <div class="confirm-box">
+      <strong>{{ account.display_name|default:account.username }}</strong>
+      <span>{{ account.username }} · {{ account_label }}</span>
+    </div>
+
+    <div class="form-errors import-errors" role="alert">
+      <p>删除前请确认：</p>
+      <p>1. 账号必须已停用。</p>
+      <p>2. 若账号已有课程、资源、学习行为、评价记录等业务关联，系统会阻止物理删除并保留停用状态。</p>
+      <p>3. 删除动作会写入操作日志。</p>
+    </div>
+
+    <form method="post" class="form-actions">
+      {% csrf_token %}
+      <button class="danger-button" type="submit">确认删除</button>
+      <a class="secondary-button" href="{{ back_url }}">取消</a>
+    </form>
+  </section>
+{% endblock %}

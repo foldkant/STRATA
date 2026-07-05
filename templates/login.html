@@ -1,0 +1,53 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="STRATA数智教学系统登录。">
+  <title>登录 - STRATA数智教学系统</title>
+  <link rel="icon" href="{% static 'brand/favicon.ico' %}?v=202607011241" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'brand/favicon-32.png' %}?v=202607011241">
+  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'brand/favicon-180.png' %}?v=202607011241">
+  <link rel="stylesheet" href="{% static 'css/login.css' %}">
+</head>
+<body>
+  <main class="login-page">
+    <section class="login-panel" aria-labelledby="login-title">
+      <a class="brand" href="/" aria-label="返回首页">
+        <img class="brand-logo" src="{% static 'brand/brand-logo.png' %}?v=202607011241" alt="">
+        <span>STRATA数智教学系统</span>
+      </a>
+
+      <div class="login-heading">
+        <h1 id="login-title">账号登录</h1>
+      </div>
+
+      {% if form.errors %}
+        <p class="form-error" role="alert">用户名或密码不正确，请重新输入。</p>
+      {% endif %}
+
+      <form method="post" action="{% url 'login' %}" novalidate>
+        {% csrf_token %}
+        {% if next %}
+          <input type="hidden" name="next" value="{{ next }}">
+        {% endif %}
+
+        <div class="field">
+          <label for="id_username">账号</label>
+          <input id="id_username" name="username" type="text" autocomplete="username" required autofocus>
+        </div>
+
+        <div class="field">
+          <label for="id_password">密码</label>
+          <input id="id_password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+
+        <button class="submit-button" type="submit">登录</button>
+      </form>
+
+      <a class="back-link" href="/">返回首页</a>
+    </section>
+  </main>
+</body>
+</html>

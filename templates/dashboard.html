@@ -1,0 +1,29 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作台 - STRATA数智教学系统</title>
+  <link rel="icon" href="{% static 'brand/favicon.ico' %}?v=202607011241" sizes="any">
+  <link rel="stylesheet" href="{% static 'css/login.css' %}">
+</head>
+<body>
+  <main class="login-page">
+    <section class="login-panel dashboard-panel" aria-labelledby="dashboard-title">
+      <a class="brand" href="/">
+        <img class="brand-logo" src="{% static 'brand/brand-logo.png' %}?v=202607011241" alt="">
+        <span>STRATA数智教学系统</span>
+      </a>
+      <div class="login-heading">
+        <h1 id="dashboard-title">工作台建设中</h1>
+      </div>
+      <p class="dashboard-text">{{ request.user.display_name|default:request.user.username }}，你已登录。当前角色工作台尚未开放。</p>
+      <div class="dashboard-actions">
+        <a class="submit-button link-button" href="{% url 'home' %}">返回首页</a>
+        <a class="back-link" href="{% url 'logout' %}">退出登录</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

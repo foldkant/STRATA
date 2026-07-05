@@ -1,0 +1,49 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="panel list-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>教师权限</h2>
+        <p>配置教师扩展教学权限。</p>
+      </div>
+      <div class="heading-actions">
+        <a class="secondary-button" href="#">批量配置</a>
+        <a class="primary-button" href="#">权限模板</a>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>教师</th>
+            <th>账号</th>
+            <th>题库导入</th>
+            <th>公共题审核</th>
+            <th>学生数据导出</th>
+            <th>分层调整</th>
+            <th>课堂控制</th>
+            <th class="actions-col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for teacher in teachers %}
+            <tr>
+              <td>{{ teacher.display_name|default:"-" }}</td>
+              <td>{{ teacher.username }}</td>
+              <td><span class="status-pill status-pending">待配置</span></td>
+              <td><span class="status-pill status-pending">待配置</span></td>
+              <td><span class="status-pill status-pending">待配置</span></td>
+              <td><span class="status-pill status-pending">待配置</span></td>
+              <td><span class="status-pill status-pending">待配置</span></td>
+              <td class="row-actions"><a href="#">配置</a></td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="8" class="empty">暂无教师</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

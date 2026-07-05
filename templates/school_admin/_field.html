@@ -1,0 +1,8 @@
+<label class="field {% if wide %}wide{% endif %}">
+  <span>{{ field.label }}{% if field.field.required %}<b>*</b>{% endif %}</span>
+  {{ field }}
+  {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+  {% for error in field.errors %}
+    <em>{{ error }}</em>
+  {% endfor %}
+</label>

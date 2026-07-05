@@ -1,0 +1,39 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="STRATA数智教学系统，面向课堂教学使用，关注学习过程与分层成长。">
+  <title>STRATA数智教学系统</title>
+  <link rel="icon" href="{% static 'brand/favicon.ico' %}?v=202607011241" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'brand/favicon-32.png' %}?v=202607011241">
+  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'brand/favicon-180.png' %}?v=202607011241">
+  <link rel="stylesheet" href="{% static 'css/home.css' %}">
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <header class="site-header" aria-label="平台导航">
+    <a class="brand" href="/" aria-label="STRATA数智教学系统首页">
+      <img class="brand-mark" src="{% static 'brand/brand-logo.png' %}?v=202607011241" alt="" aria-hidden="true">
+      <span class="brand-name">STRATA数智教学系统</span>
+    </a>
+    <a class="header-action" href="{% url 'login' %}">进入平台</a>
+  </header>
+
+  <main id="main" class="home-main">
+    <section class="hero" aria-labelledby="hero-title">
+      <p class="eyebrow">关注过程 · 尊重差异 · 促进成长</p>
+      <h1 id="hero-title">STRATA数智教学系统</h1>
+      <a class="primary-action" href="{% url 'login' %}">进入平台</a>
+    </section>
+  </main>
+
+  <footer class="site-footer" aria-label="版权与课题成果">
+    <p>中华人民共和国国家版权局软件著作权（登字第8184117号 | 登记号2021SR1461491）</p>
+    <p class="research-note" title="本平台为以下课题研究成果：广东省教育技术中心2020年度教育信息化应用融合创新课题“基于网络平台过程性评价的高中信息技术分层教学研究”（课题立项号：20JX07171）；中山市教育科研2023年度重点课题“基于数据网络平台的中小学信息科技分层教学研究”（课题立项号：A2023035）；湛江市哲学社会科学2024年度规划项目“基于人工智能的教师教学模式创新赋能中小学高质量课堂”（课题立项号：ZJ24YB107）；广东省中小学教师数字素养提升工程专项科研课题“生成式人工智能小学教学应用实践研究”（课题立项号：GDSZSYKT2024217）。">本平台为以下课题研究成果：广东省教育技术中心2020年度教育信息化应用融合创新课题“基于网络平台过程性评价的高中信息技术分层教学研究”（课题立项号：20JX07171）；中山市教育科研2023年度重点课题“基于数据网络平台的中小学信息科技分层教学研究”（课题立项号：A2023035）；湛江市哲学社会科学2024年度规划项目“基于人工智能的教师教学模式创新赋能中小学高质量课堂”（课题立项号：ZJ24YB107）；广东省中小学教师数字素养提升工程专项科研课题“生成式人工智能小学教学应用实践研究”（课题立项号：GDSZSYKT2024217）。</p>
+    <p>©中山市小榄中学“小平科技创新实验室”</p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{% extends "ops/base.html" %}
+
+{% block content %}
+  <section class="panel form-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>{{ page_title }}</h2>
+        <p>{{ page_hint }}</p>
+      </div>
+      <div class="heading-actions">
+        <a class="secondary-button" href="{{ template_url }}">下载模板</a>
+        <a class="secondary-button" href="{{ back_url }}">返回列表</a>
+      </div>
+    </div>
+
+    {% if errors %}
+      <div class="form-errors import-errors" role="alert">
+        <p>导入未执行，请先处理以下问题：</p>
+        {% for error in errors %}
+          <p>{{ error }}</p>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <form method="post" enctype="multipart/form-data" class="form-grid" novalidate>
+      {% csrf_token %}
+      {% include "ops/_form_errors.html" %}
+      {% include "ops/_field.html" with field=form.file wide=True %}
+      <div class="form-actions wide">
+        <button class="primary-button" type="submit">上传并导入</button>
+        <a class="secondary-button" href="{{ template_url }}">下载模板</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

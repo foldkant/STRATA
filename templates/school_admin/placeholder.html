@@ -1,0 +1,14 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="panel">
+    <div class="panel-heading">
+      <h2>{{ page_title }}</h2>
+      <p>{{ hint }}</p>
+    </div>
+    <div class="confirm-box">
+      <strong>模块规划已写入文档</strong>
+      <span>后续按 `docs/school_admin_module_design.md` 的顺序接入具体 CRUD、导入导出和权限控制。</span>
+    </div>
+  </section>
+{% endblock %}

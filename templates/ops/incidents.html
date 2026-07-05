@@ -1,0 +1,53 @@
+{% extends "ops/base.html" %}
+
+{% block content %}
+  <section class="panel list-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>严重故障</h2>
+        <p>汇总需要优先处理的采集失败和模型训练失败。</p>
+      </div>
+      <div class="heading-actions">
+        <a class="secondary-button" href="{% url 'ops_incident_export' %}">导出 XLSX</a>
+        <span class="status-pill status-failed">当前 {{ incident_count }} 项</span>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>级别</th>
+            <th>类型</th>
+            <th>学校</th>
+            <th>对象</th>
+            <th>说明</th>
+            <th class="actions-col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in incidents %}
+            <tr>
+              <td>{{ item.time|date:"Y-m-d H:i" }}</td>
+              <td><span class="status-pill status-failed">{{ item.level }}</span></td>
+              <td>{{ item.type }}</td>
+              <td>{{ item.school }}</td>
+              <td>{{ item.target }}</td>
+              <td class="detail-cell">{{ item.detail }}</td>
+              <td class="row-actions">
+                {% if item.url %}
+                  <a href="{{ item.url }}">查看</a>
+                {% else %}
+                  <span class="empty">-</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7" class="empty">暂无严重故障</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "ops/base.html" %}
+
+{% block content %}
+  <section class="panel form-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>{{ form_title }}</h2>
+        <p>学校编号用于跨校数据包识别，保存后仍可编辑。</p>
+      </div>
+      <a class="secondary-button" href="{{ back_url }}">返回列表</a>
+    </div>
+
+    <form method="post" class="form-grid" novalidate>
+      {% csrf_token %}
+      {% include "ops/_form_errors.html" %}
+      {% include "ops/_field.html" with field=form.name %}
+      {% include "ops/_field.html" with field=form.code %}
+      {% include "ops/_field.html" with field=form.contact_name %}
+      {% include "ops/_field.html" with field=form.contact_phone %}
+      {% include "ops/_field.html" with field=form.status %}
+      {% include "ops/_field.html" with field=form.address wide=True %}
+      {% include "ops/_field.html" with field=form.note wide=True %}
+
+      <div class="form-actions wide">
+        <button class="primary-button" type="submit">{{ submit_label }}</button>
+        <a class="secondary-button" href="{{ back_url }}">取消</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

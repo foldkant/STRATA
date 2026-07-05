@@ -1,0 +1,80 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="panel list-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>学生管理</h2>
+        <p>维护本校学生信息和学习档案。删除学生前必须先停用账号。</p>
+      </div>
+      <div class="heading-actions">
+        <a class="secondary-button" href="#">导出 XLSX</a>
+        <a class="secondary-button" href="#">下载模板</a>
+        <a class="secondary-button" href="#">批量导入</a>
+        <a class="primary-button" href="#">新增学生</a>
+      </div>
+    </div>
+
+    <form class="toolbar" method="get">
+      <label>
+        <span>关键词</span>
+        <input name="q" value="{{ query }}" placeholder="账号、姓名、学号">
+      </label>
+      <label>
+        <span>班级</span>
+        <select name="class">
+          <option value="">全部班级</option>
+          {% for class_group in classes %}
+            <option value="{{ class_group.pk }}" {% if class_id == class_group.pk|stringformat:"s" %}selected{% endif %}>{{ class_group.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">查询</button>
+      <a class="secondary-button" href="{% url 'school_admin_student_list' %}">重置</a>
+    </form>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>登录账号</th>
+            <th>姓名</th>
+            <th>学号</th>
+            <th>班级</th>
+            <th>层级</th>
+            <th>小组</th>
+            <th>状态</th>
+            <th>最近登录</th>
+            <th class="actions-col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for profile in students %}
+            <tr>
+              <td>{{ profile.user.username }}</td>
+              <td>{{ profile.user.display_name|default:"-" }}</td>
+              <td>{{ profile.student_no|default:"-" }}</td>
+              <td>{{ profile.class_group.name }}</td>
+              <td>{{ profile.current_layer }}</td>
+              <td>{{ profile.current_group_no|default:"-" }}</td>
+              <td>
+                {% if profile.user.is_active %}
+                  <span class="status-pill status-active">启用</span>
+                {% else %}
+                  <span class="status-pill status-disabled">停用</span>
+                {% endif %}
+              </td>
+              <td>{{ profile.user.last_login|date:"Y-m-d H:i"|default:"-" }}</td>
+              <td class="row-actions">
+                <a href="#">编辑</a>
+                <a href="#">转班</a>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="9" class="empty">暂无学生</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

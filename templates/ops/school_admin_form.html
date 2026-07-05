@@ -1,0 +1,35 @@
+{% extends "ops/base.html" %}
+
+{% block content %}
+  <section class="panel form-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>{{ form_title }}</h2>
+        <p>该账号用于学校本地日常管理。</p>
+      </div>
+      <a class="secondary-button" href="{{ back_url }}">返回列表</a>
+    </div>
+
+    <form method="post" class="form-grid" novalidate>
+      {% csrf_token %}
+      {% include "ops/_form_errors.html" %}
+      {% include "ops/_field.html" with field=form.school wide=True %}
+      {% include "ops/_field.html" with field=form.username %}
+      {% include "ops/_field.html" with field=form.display_name %}
+      {% include "ops/_field.html" with field=form.phone %}
+      {% include "ops/_field.html" with field=form.password %}
+      <label class="check-field wide">
+        {{ form.is_active }}
+        <span>{{ form.is_active.label }}</span>
+        {% for error in form.is_active.errors %}
+          <em role="alert">{{ error }}</em>
+        {% endfor %}
+      </label>
+
+      <div class="form-actions wide">
+        <button class="primary-button" type="submit">{{ submit_label }}</button>
+        <a class="secondary-button" href="{{ back_url }}">取消</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

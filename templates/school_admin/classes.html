@@ -1,0 +1,52 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="panel list-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>班级管理</h2>
+        <p>维护本校年级、班级和学生归属。</p>
+      </div>
+      <div class="heading-actions">
+        <a class="secondary-button" href="#">导出 XLSX</a>
+        <a class="secondary-button" href="#">下载模板</a>
+        <a class="secondary-button" href="#">批量导入</a>
+        <a class="primary-button" href="#">新增班级</a>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>年级</th>
+            <th>班级</th>
+            <th>入学年份</th>
+            <th>学生</th>
+            <th>教师</th>
+            <th>创建时间</th>
+            <th class="actions-col">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for class_group in classes %}
+            <tr>
+              <td>{{ class_group.grade|default:"-" }}</td>
+              <td>{{ class_group.name }}</td>
+              <td>{{ class_group.entry_year|default:"-" }}</td>
+              <td>{{ class_group.student_count }}</td>
+              <td>{{ class_group.teacher_count }}</td>
+              <td>{{ class_group.created_at|date:"Y-m-d" }}</td>
+              <td class="row-actions">
+                <a href="#">编辑</a>
+                <a href="#">学生</a>
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="7" class="empty">暂无班级</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

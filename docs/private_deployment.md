@@ -1,0 +1,135 @@
+# 私有化部署说明
+
+本项目要求在离线局域网内可运行。推荐部署形态：
+
+- 应用服务器：Windows Server 或 Linux
+- Python：3.12.x
+- 数据库：PostgreSQL 16/17
+- 缓存与消息：Redis 7.x
+- Web 后端：Django ASGI
+- 后台任务：Celery worker + Celery beat
+- 文件存储：本机目录起步，后期可换 MinIO
+
+## 为什么选 Python 3.12
+
+Python 3.12 对 Django、Celery、Channels、PostgreSQL 驱动、NumPy、pandas、scikit-learn 等生态兼容性更稳。Python 3.14 太新，离线部署时很多 AI 二进制包更容易缺 wheel。
+
+## 服务端口建议
+
+- Django/ASGI：8000 或安装向导自动选择的可用端口
+- PostgreSQL：5432
+- Redis：6379
+- 前端静态服务：80 或 8080
+
+注意：如果安装了 ONLYOFFICE Document Server，它可能占用 `80` 或 `8000` 等端口。STRATA 后续 setup 需要检测端口占用并允许调整，不应假设 `8000` 永远可用。
+
+## Windows 局域网安装建议
+
+当前机器没有 PostgreSQL、Redis、Docker，但存在 Chocolatey。联网准备机可用：
+
+```powershell
+choco install postgresql redis-64 -y
+```
+
+离线环境建议提前下载 PostgreSQL 和 Redis 安装包，放入内网软件库。安装完成后创建数据库：
+
+```sql
+CREATE USER xlzxedu WITH PASSWORD 'your-private-password';
+CREATE DATABASE xlzxedu OWNER xlzxedu ENCODING 'UTF8';
+```
+
+也可以参考 `deploy/postgres_init.sql`，执行前必须替换默认密码。
+
+PostgreSQL 安装并启动后，可执行：
+
+```powershell
+.\scripts\switch_to_postgres.ps1
+```
+
+该脚本会把 `.env` 从 SQLite 切换到 PostgreSQL 并执行 Django 迁移。
+
+## Redis 用途
+
+- Channels WebSocket channel layer
+- Celery broker
+- Celery result backend
+
+建议生产环境 Redis 配置密码和局域网访问白名单。
+
+## ONLYOFFICE 可选组件
+
+ONLYOFFICE 只作为 Office 预览、在线编辑和多人协作的增强组件，不作为 STRATA 必装依赖。
+
+本地根目录当前已有离线安装包：
+
+```text
+E:\newproject\onlyoffice-documentserver.exe
+```
+
+后续 setup 应按以下逻辑处理：
+
+1. 先检测当前服务器是否已安装 ONLYOFFICE。
+2. 检测 Document Server 地址和 `/web-apps/apps/api/documents/api.js`。
+3. 检测端口占用，必要时调整 STRATA 端口或配置 ONLYOFFICE 地址。
+4. 未安装时提示用户是否安装离线包。
+5. 安装失败时继续完成 STRATA 主系统安装，仅关闭协作编辑能力。
+6. 检测结果写入 `.env`：
+
+```env
+ONLYOFFICE_ENABLED=false
+ONLYOFFICE_DOCUMENT_SERVER_URL=
+```
+
+当前已提供 Django 检测命令，后续 setup 安装器应直接调用它：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py sync_onlyoffice_config --write-env
+```
+
+如果学校的 ONLYOFFICE 安装路径或访问地址不同：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py sync_onlyoffice_config `
+  --config "D:\Program Files\ONLYOFFICE\DocumentServer\config\local.json" `
+  --server-url "http://192.168.1.10" `
+  --write-env
+```
+
+该命令会检测 ONLYOFFICE 是否启用浏览器 JWT，并把 `ONLYOFFICE_DOCUMENT_SERVER_URL` 和 `ONLYOFFICE_JWT_SECRET` 写入 `.env`。JWT 密钥只写入配置文件，不在命令输出中明文显示。
+
+没有 ONLYOFFICE 时，资源仍应支持降级预览：
+
+- PDF：PDF.js 离线预览。
+- 图片、音频、视频：浏览器原生预览。
+- Word、PPT、Excel：优先使用 LibreOffice headless 转 PDF 预览；不能转换时允许下载。
+- Excel：可选用 Python `openpyxl` 生成表格预览。
+- 压缩包：显示文件清单，不默认解压到公开目录。
+
+因此成员校即使无法安装 ONLYOFFICE，也能完成课程学习、课堂投放、资源查看和作答；只是不能使用多人协作编辑。
+
+## 启动顺序
+
+1. PostgreSQL
+2. Redis
+3. Django migration
+4. ASGI Web 服务
+5. Celery worker
+6. Celery beat
+
+开发命令：
+
+```powershell
+.\scripts\run_dev.ps1
+```
+
+Celery worker：
+
+```powershell
+.\.venv\Scripts\celery.exe -A config worker -l info --pool=solo
+```
+
+Celery beat：
+
+```powershell
+.\.venv\Scripts\celery.exe -A config beat -l info
+```

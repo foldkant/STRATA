@@ -1,0 +1,142 @@
+{% extends "ops/base.html" %}
+
+{% block content %}
+  <section class="panel page-actions-panel">
+    <div class="panel-heading split compact-heading">
+      <div>
+        <h2>跨校分析</h2>
+        <p>汇总各学校采集后的核心指标。</p>
+      </div>
+      <a class="secondary-button" href="{% url 'ops_cross_school_analysis_export' %}">导出 XLSX</a>
+    </div>
+  </section>
+
+  <section class="metric-grid" aria-label="跨校分析概况">
+    {% for item in metrics %}
+      <article class="metric-card">
+        <span>{{ item.label }}</span>
+        <strong>{{ item.value }}</strong>
+        <small>{{ item.sub }}</small>
+      </article>
+    {% endfor %}
+  </section>
+
+  <section class="screen-grid">
+    <article class="panel">
+      <div class="panel-heading">
+        <h2>采集状态</h2>
+        <p>各学校数据采集包处理情况。</p>
+      </div>
+      <div class="ratio-list">
+        {% for row in collection_status_rows %}
+          <div class="ratio-row">
+            <div>
+              <span>{{ row.label }}</span>
+              <strong>{{ row.count }}</strong>
+            </div>
+            <div class="ratio-track accent"><span style="width: {{ row.percent }}%"></span></div>
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-heading">
+        <h2>当前分层</h2>
+        <p>按学生档案当前层级统计。</p>
+      </div>
+      <div class="ratio-list">
+        {% for row in layer_rows %}
+          <div class="ratio-row">
+            <div>
+              <span>{{ row.value }}层 · {{ row.label }}</span>
+              <strong>{{ row.count }}</strong>
+            </div>
+            <div class="ratio-track"><span style="width: {{ row.percent }}%"></span></div>
+          </div>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+
+  <section class="screen-grid">
+    <article class="panel panel-large">
+      <div class="panel-heading">
+        <h2>学校覆盖</h2>
+        <p>按学生档案数量展示前 10 所学校。</p>
+      </div>
+      <div class="school-bars">
+        {% for school in school_rows %}
+          <div class="school-bar-row">
+            <div>
+              <strong>{{ school.name }}</strong>
+              <span>{{ school.code }} · 班级 {{ school.class_count }} · 采集 {{ school.collection_count }}</span>
+            </div>
+            <div class="ratio-track"><span style="width: {{ school.percent }}%"></span></div>
+            <b>{{ school.student_count }}</b>
+          </div>
+        {% empty %}
+          <p class="empty">暂无学校数据</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel">
+      <div class="panel-heading">
+        <h2>行为类型</h2>
+        <p>学习过程数据类型分布。</p>
+      </div>
+      <div class="ratio-list">
+        {% for row in event_rows %}
+          <div class="ratio-row">
+            <div>
+              <span>{{ row.label }}</span>
+              <strong>{{ row.count }}</strong>
+            </div>
+            <div class="ratio-track"><span style="width: {{ row.percent }}%"></span></div>
+          </div>
+        {% empty %}
+          <p class="empty">暂无行为数据</p>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>最近采集</h2>
+        <p>用于跨校分析的数据来源。</p>
+      </div>
+      <a class="text-link" href="{% url 'ops_import_list' %}">进入采集管理</a>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>批次</th>
+            <th>学校编号</th>
+            <th>学校</th>
+            <th>版本</th>
+            <th>状态</th>
+            <th>上传时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in recent_collections %}
+            <tr>
+              <td><a class="table-link" href="{% url 'ops_import_detail' item.pk %}">{{ item.batch_code }}</a></td>
+              <td>{{ item.source_school_code|default:"-" }}</td>
+              <td>{{ item.source_school.name|default:"-" }}</td>
+              <td>{{ item.source_system_version|default:"-" }}</td>
+              <td><span class="status-pill status-{{ item.status }}">{{ item.get_status_display }}</span></td>
+              <td>{{ item.uploaded_at|date:"Y-m-d H:i" }}</td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="6" class="empty">暂无采集记录</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

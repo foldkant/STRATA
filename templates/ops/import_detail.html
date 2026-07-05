@@ -1,0 +1,65 @@
+{% extends "ops/base.html" %}
+
+{% block content %}
+  <section class="panel detail-panel">
+    <div class="panel-heading split">
+      <div>
+        <h2>采集详情</h2>
+        <p>{{ import_batch.batch_code }}</p>
+      </div>
+      <div class="heading-actions">
+        <a class="secondary-button" href="{{ back_url }}">返回列表</a>
+        <a class="danger-button link-danger" href="{% url 'ops_import_delete' import_batch.pk %}">删除</a>
+      </div>
+    </div>
+
+    <dl class="detail-grid">
+      <div>
+        <dt>批次号</dt>
+        <dd>{{ import_batch.batch_code }}</dd>
+      </div>
+      <div>
+        <dt>状态</dt>
+        <dd><span class="status-pill status-{{ import_batch.status }}">{{ import_batch.get_status_display }}</span></dd>
+      </div>
+      <div>
+        <dt>学校编号</dt>
+        <dd>{{ import_batch.source_school_code|default:"-" }}</dd>
+      </div>
+      <div>
+        <dt>学校</dt>
+        <dd>{{ import_batch.source_school.name|default:"-" }}</dd>
+      </div>
+      <div>
+        <dt>系统版本</dt>
+        <dd>{{ import_batch.source_system_version|default:"-" }}</dd>
+      </div>
+      <div>
+        <dt>上传人</dt>
+        <dd>{{ import_batch.uploaded_by|default:"-" }}</dd>
+      </div>
+      <div>
+        <dt>上传时间</dt>
+        <dd>{{ import_batch.uploaded_at|date:"Y-m-d H:i:s" }}</dd>
+      </div>
+      <div>
+        <dt>校验码</dt>
+        <dd class="mono">{{ import_batch.checksum|default:"-" }}</dd>
+      </div>
+    </dl>
+
+    {% if import_batch.log %}
+      <div class="form-errors">
+        <p>{{ import_batch.log }}</p>
+      </div>
+    {% endif %}
+
+    <div class="code-panel">
+      <div class="panel-heading">
+        <h2>manifest.json</h2>
+        <p>数据采集包清单。</p>
+      </div>
+      <pre>{{ manifest_pretty|default:"暂无清单" }}</pre>
+    </div>
+  </section>
+{% endblock %}

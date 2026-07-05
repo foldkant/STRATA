@@ -1,0 +1,59 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }} - STRATA数智教学系统</title>
+  <link rel="icon" href="{% static 'brand/favicon.ico' %}" sizes="any">
+  <link rel="stylesheet" href="{% static 'css/ops.css' %}">
+</head>
+<body>
+  <div class="ops-shell">
+    <aside class="ops-sidebar" aria-label="超级管理员菜单">
+      <a class="ops-brand" href="{% url 'super_admin_console' %}">
+        <span class="brand-symbol" aria-hidden="true">2.0</span>
+        <span>
+          <strong>STRATA</strong>
+          <small>超级管理员</small>
+        </span>
+      </a>
+
+      <nav class="ops-nav">
+        {% for key, label, href in nav_items %}
+          <a class="{% if active_page == key %}active{% endif %}" href="{{ href }}">{{ label }}</a>
+        {% endfor %}
+      </nav>
+
+      <div class="ops-sidebar-footer">
+        <strong>{{ request.user.display_name|default:request.user.username }}</strong>
+      </div>
+    </aside>
+
+    <div class="ops-workspace">
+      <header class="ops-topbar">
+        <div>
+          <p class="eyebrow">超级管理员</p>
+          <h1>{{ page_title }}</h1>
+        </div>
+        <div class="ops-user">
+          <span>{{ request.user.display_name|default:request.user.username }}</span>
+          <a class="secondary-button" href="{% url 'logout' %}">退出</a>
+        </div>
+      </header>
+
+      {% if messages %}
+        <div class="message-list" aria-live="polite">
+          {% for message in messages %}
+            <p class="message {{ message.tags }}">{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <main class="ops-content" id="main">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>

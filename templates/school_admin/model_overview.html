@@ -1,0 +1,71 @@
+{% extends "school_admin/base.html" %}
+
+{% block content %}
+  <section class="screen-grid">
+    <article class="panel list-panel">
+      <div class="panel-heading">
+        <h2>模型版本</h2>
+        <p>本校班级模型版本。</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>班级</th>
+              <th>名称</th>
+              <th>版本</th>
+              <th>状态</th>
+              <th>算法</th>
+              <th>训练时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for model in model_versions %}
+              <tr>
+                <td>{{ model.class_group.name }}</td>
+                <td>{{ model.name }}</td>
+                <td>{{ model.version }}</td>
+                <td><span class="status-pill status-{{ model.status }}">{{ model.get_status_display }}</span></td>
+                <td>{{ model.algorithm }}</td>
+                <td>{{ model.trained_at|date:"Y-m-d H:i"|default:"-" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6" class="empty">暂无模型版本</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <article class="panel list-panel">
+      <div class="panel-heading">
+        <h2>训练任务</h2>
+        <p>本校模型训练任务。</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>任务</th>
+              <th>班级</th>
+              <th>状态</th>
+              <th>创建时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in training_jobs %}
+              <tr>
+                <td>#{{ job.pk }}</td>
+                <td>{{ job.class_group.name }}</td>
+                <td><span class="status-pill status-{{ job.status }}">{{ job.get_status_display }}</span></td>
+                <td>{{ job.created_at|date:"Y-m-d H:i" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="4" class="empty">暂无训练任务</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+{% endblock %}
