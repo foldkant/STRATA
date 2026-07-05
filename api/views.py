@@ -98,6 +98,7 @@ from .services import (
     import_students_from_xlsx,
     import_teachers_from_xlsx,
     get_teacher_ai_provider,
+    generate_lesson_step_questions_with_ai,
     publish_pretest_paper,
     promote_class_groups,
     reset_school_admin_password,
@@ -2236,6 +2237,16 @@ def teacher_lesson_step_detail(request, pk):
     except ServiceError as exc:
         return _service_fail(exc)
     return ok({}, "课时环节已删除")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_lesson_step_ai_generate_questions(request):
+    try:
+        payload = generate_lesson_step_questions_with_ai(request, request.data)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(payload, "AI 题目草稿已生成")
 
 
 def _teacher_classroom_sessions(request):

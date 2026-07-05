@@ -190,6 +190,27 @@ export type LessonStepPayload = {
   collect_class_log: boolean
 }
 
+export type AiQuestionGenerationPayload = {
+  direction: string
+  question_type: LessonStepQuestionType
+  target_layer: string
+  count: number | string
+  lesson_title?: string
+  step_title?: string
+  subject_name?: string
+  student_instruction?: string
+  requirement?: string
+}
+
+export type AiQuestionGenerationResult = {
+  questions: LessonStepQuestion[]
+  score_defaults: {
+    base_score: number
+    layer_scores: Record<'A' | 'B' | 'C', number>
+    note: string
+  }
+}
+
 export type ActivityTypeRow = {
   value: string
   label: string
@@ -442,6 +463,13 @@ export function reorderTeacherLessonSteps(lessonId: number, ids: number[]) {
   return apiRequest<LessonStepRow[]>(`/api/v1/teacher/lessons/${lessonId}/steps/reorder/`, {
     method: 'POST',
     body: toJsonBody({ ids })
+  })
+}
+
+export function generateTeacherLessonStepQuestions(payload: AiQuestionGenerationPayload) {
+  return apiRequest<AiQuestionGenerationResult>('/api/v1/teacher/lesson-steps/ai-generate-questions/', {
+    method: 'POST',
+    body: toJsonBody(payload)
   })
 }
 

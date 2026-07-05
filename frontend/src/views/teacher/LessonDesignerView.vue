@@ -5,6 +5,7 @@ import { ApiError, type FieldErrors } from '@/api/client'
 import {
   createTeacherLessonStep,
   deleteTeacherLessonStep,
+  generateTeacherLessonStepQuestions,
   getTeacherCourse,
   getTeacherLesson,
   getTeacherLessonSteps,
@@ -64,9 +65,15 @@ const editingQuestionId = ref<string | null>(null)
 const stepModalOpen = ref(false)
 const resourceUploadOpen = ref(false)
 const questionBuilderOpen = ref(false)
+const aiQuestionModalOpen = ref(false)
 const settingsOpen = ref(false)
 const questionListRef = ref<HTMLElement | null>(null)
 const lastTouchedQuestionId = ref('')
+const aiQuestionLoading = ref(false)
+const aiQuestionErrors = ref<FieldErrors>({})
+const aiQuestionNotice = ref('')
+const aiGeneratedQuestions = ref<LessonStepQuestion[]>([])
+const aiScoreDefaults = ref<{ base_score: number; layer_scores: Record<LayerCode, number>; note: string } | null>(null)
 
 const stepTypeOptions: Array<{ value: LessonStepType; label: string }> = [
   { value: 'intro', label: '导入' },
@@ -134,6 +141,14 @@ const questionDraft = reactive<LessonStepQuestion>({
 const resourceUploadForm = reactive({
   title: '',
   content: ''
+})
+
+const aiQuestionForm = reactive({
+  direction: '',
+  question_type: 'single' as LessonStepQuestionType,
+  target_layer: 'B/C',
+  count: 3,
+  requirement: ''
 })
 
 const allowedResourceExt = new Set([
@@ -249,11 +264,27 @@ function scoreNumber(value: number | string | undefined | null, fallback = 0) {
   return Number.isFinite(number) ? number : fallback
 }
 
+function defaultScoreForType(type: LessonStepQuestionType) {
+  if (type === 'text') return 5
+  if (type === 'blank') return 3
+  return 2
+}
+
+function suggestedLayerScores(baseScore: number, targetLayer = questionDraft.target_layer): Record<LayerCode, number> {
+  const scores: Record<LayerCode, number> = { A: baseScore, B: baseScore, C: baseScore }
+  if (targetLayer === 'A') scores.A = Math.min(baseScore + 1, 100)
+  if (targetLayer === 'C') scores.C = Math.max(baseScore - 0.5, 0)
+  if (targetLayer === 'A/B') scores.A = Math.min(baseScore + 0.5, 100)
+  if (targetLayer === 'B/C') scores.C = Math.max(baseScore - 0.5, 0)
+  return scores
+}
+
 function syncLayerScoresWithBase(overwrite = false) {
   const baseScore = scoreNumber(questionDraft.score)
+  const suggested = suggestedLayerScores(baseScore, questionDraft.target_layer)
   layerScoreCodes.forEach((layer) => {
     if (overwrite || questionDraft.layer_scores[layer] === '' || questionDraft.layer_scores[layer] === undefined || questionDraft.layer_scores[layer] === null) {
-      questionDraft.layer_scores[layer] = baseScore
+      questionDraft.layer_scores[layer] = suggested[layer]
     }
   })
 }
@@ -457,16 +488,17 @@ function resetQuestionDraft(type: LessonStepQuestionType = 'single') {
   questionDraft.stem = ''
   questionDraft.options = type === 'judge' ? ['正确', '错误'] : ['', '']
   questionDraft.answer = []
-  questionDraft.score = type === 'text' ? 5 : 2
+  questionDraft.score = defaultScoreForType(type)
   questionDraft.target_layer = 'all'
   questionDraft.use_layer_scores = false
-  questionDraft.layer_scores = { A: '', B: '', C: '' }
+  questionDraft.layer_scores = suggestedLayerScores(defaultScoreForType(type), 'all')
   questionDraft.analysis = ''
   questionDraft.is_required = true
   questionDraft.sort_order = (stepForm.question_items.length + 1) * 10
 }
 
 function onQuestionTypeChange() {
+  questionDraft.score = defaultScoreForType(questionDraft.question_type)
   if (questionDraft.question_type === 'judge') {
     questionDraft.options = ['正确', '错误']
     questionDraft.answer = []
@@ -477,6 +509,7 @@ function onQuestionTypeChange() {
     questionDraft.options = []
     questionDraft.answer = []
   }
+  syncLayerScoresWithBase(true)
 }
 
 function addQuestionOption() {
@@ -594,6 +627,118 @@ function editQuestion(item: LessonStepQuestion) {
 function removeQuestionItem(id: string) {
   stepForm.question_items = stepForm.question_items.filter((item) => item.id !== id)
   if (editingQuestionId.value === id) resetQuestionDraft()
+}
+
+function openAiQuestionModal() {
+  aiQuestionErrors.value = {}
+  aiQuestionNotice.value = ''
+  aiGeneratedQuestions.value = []
+  aiScoreDefaults.value = null
+  aiQuestionForm.direction = stepForm.ai_prompt || stepForm.student_instruction || ''
+  aiQuestionForm.question_type = questionDraft.question_type || 'single'
+  aiQuestionForm.target_layer = questionDraft.target_layer && questionDraft.target_layer !== 'all' ? questionDraft.target_layer : 'B/C'
+  aiQuestionForm.count = 3
+  aiQuestionForm.requirement = ''
+  aiQuestionModalOpen.value = true
+}
+
+function validateAiQuestionForm() {
+  const errors: FieldErrors = {}
+  if (aiQuestionForm.direction.trim().length < 4 || aiQuestionForm.direction.trim().length > 1000) {
+    errors.direction = ['出题方向需为 4-1000 个字符。']
+  }
+  if (!questionTypeOptions.some((item) => item.value === aiQuestionForm.question_type)) {
+    errors.question_type = ['题型不正确。']
+  }
+  if (!targetLayerOptions.some((item) => item.value === aiQuestionForm.target_layer) || aiQuestionForm.target_layer === 'all') {
+    errors.target_layer = ['请选择 A、B、C、A/B、B/C 或 A/B/C。']
+  }
+  const count = Number(aiQuestionForm.count)
+  if (!Number.isInteger(count) || count < 1 || count > 10) {
+    errors.count = ['生成数量需为 1-10。']
+  }
+  if (aiQuestionForm.requirement.trim().length > 1000) {
+    errors.requirement = ['补充要求不能超过 1000 个字符。']
+  }
+  aiQuestionErrors.value = errors
+  return Object.keys(errors).length === 0
+}
+
+async function generateAiQuestions() {
+  if (!validateAiQuestionForm()) return
+  aiQuestionLoading.value = true
+  aiQuestionNotice.value = ''
+  aiGeneratedQuestions.value = []
+  try {
+    const result = await generateTeacherLessonStepQuestions({
+      direction: aiQuestionForm.direction.trim(),
+      question_type: aiQuestionForm.question_type,
+      target_layer: aiQuestionForm.target_layer,
+      count: Number(aiQuestionForm.count),
+      subject_name: subjectName.value,
+      lesson_title: lessonTitle.value,
+      step_title: stepForm.title,
+      student_instruction: stepForm.student_instruction,
+      requirement: aiQuestionForm.requirement.trim()
+    })
+    aiGeneratedQuestions.value = result.questions.map((item, index) => ({
+      ...item,
+      id: item.id || makeQuestionId(),
+      sort_order: (stepForm.question_items.length + index + 1) * 10
+    }))
+    aiScoreDefaults.value = result.score_defaults
+    aiQuestionNotice.value = `已生成 ${result.questions.length} 道草稿。请确认或修改后加入当前环节。`
+  } catch (error) {
+    if (error instanceof ApiError) {
+      aiQuestionNotice.value = error.message
+      aiQuestionErrors.value = error.errors
+    } else {
+      aiQuestionNotice.value = 'AI 出题失败，请稍后重试。'
+    }
+  } finally {
+    aiQuestionLoading.value = false
+  }
+}
+
+function addAiGeneratedQuestion(item: LessonStepQuestion) {
+  const cleaned = cleanQuestionItems([
+    {
+      ...item,
+      id: makeQuestionId(),
+      sort_order: (stepForm.question_items.length + 1) * 10
+    }
+  ])[0]
+  if (!cleaned) return
+  stepForm.question_items = [...stepForm.question_items, cleaned]
+  lastTouchedQuestionId.value = cleaned.id
+  aiGeneratedQuestions.value = aiGeneratedQuestions.value.filter((question) => question.id !== item.id)
+  notice.value = 'AI 题目草稿已加入当前环节，请保存环节后同步到学生端。'
+}
+
+function editAiGeneratedQuestion(item: LessonStepQuestion) {
+  editQuestion({
+    ...item,
+    id: makeQuestionId(),
+    sort_order: (stepForm.question_items.length + 1) * 10
+  })
+  aiGeneratedQuestions.value = aiGeneratedQuestions.value.filter((question) => question.id !== item.id)
+  aiQuestionModalOpen.value = false
+}
+
+function addAllAiGeneratedQuestions() {
+  const cleaned = cleanQuestionItems(
+    aiGeneratedQuestions.value.map((item, index) => ({
+      ...item,
+      id: makeQuestionId(),
+      sort_order: (stepForm.question_items.length + index + 1) * 10
+    }))
+  )
+  if (!cleaned.length) return
+  stepForm.question_items = [...stepForm.question_items, ...cleaned]
+  lastTouchedQuestionId.value = cleaned[cleaned.length - 1].id
+  aiGeneratedQuestions.value = []
+  aiQuestionModalOpen.value = false
+  notice.value = `已加入 ${cleaned.length} 道 AI 题目草稿，请保存环节后同步到学生端。`
 }
 
 function isQuestionInCurrentStep(item: QuestionLibraryItem) {
@@ -1208,7 +1353,10 @@ onMounted(loadLesson)
             <section class="tool-entry-panel">
               <strong>题目</strong>
               <p>新增课堂题后会加入当前环节。开启分层后，可设置题目适用层级和 A/B/C 分值。</p>
-              <button class="primary-button" type="button" @click="openCreateQuestionModal">新增课堂题</button>
+              <div class="tool-entry-actions">
+                <button class="primary-button" type="button" @click="openCreateQuestionModal">新增课堂题</button>
+                <button class="secondary-button" type="button" @click="openAiQuestionModal">AI 生成分层题</button>
+              </div>
             </section>
 
             <section class="question-list-card question-list-card-priority">
@@ -1371,6 +1519,122 @@ onMounted(loadLesson)
     </Teleport>
 
     <Teleport to="body">
+      <div v-if="aiQuestionModalOpen" class="modal-backdrop" role="presentation" @click.self="aiQuestionModalOpen = false">
+        <section class="entity-modal compact-modal lesson-ai-question-modal" role="dialog" aria-modal="true" aria-labelledby="ai-question-title">
+          <header class="modal-header">
+            <div>
+              <h2 id="ai-question-title">AI 生成分层题</h2>
+              <p>调用教师自己的 DeepSeek 接口生成题目草稿。题目不会自动发布，必须由教师确认或修改后加入环节。</p>
+            </div>
+            <button class="icon-button" type="button" aria-label="关闭" @click="aiQuestionModalOpen = false">×</button>
+          </header>
+
+          <div class="ai-question-modal-body">
+            <section class="ai-question-form-panel">
+              <label class="span-2">
+                <span>出题方向 <b>*</b></span>
+                <textarea
+                  v-model.trim="aiQuestionForm.direction"
+                  rows="5"
+                  maxlength="1000"
+                  placeholder="例如：围绕数据采集流程，给 B/C 层学生生成基础巩固题，强调数据来源、字段含义和采集规范。"
+                ></textarea>
+                <small v-if="aiQuestionErrors.direction" class="field-error">{{ aiQuestionErrors.direction[0] }}</small>
+              </label>
+              <label>
+                <span>题型</span>
+                <select v-model="aiQuestionForm.question_type">
+                  <option v-for="item in questionTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+                </select>
+                <small v-if="aiQuestionErrors.question_type" class="field-error">{{ aiQuestionErrors.question_type[0] }}</small>
+              </label>
+              <label>
+                <span>适用层级</span>
+                <select v-model="aiQuestionForm.target_layer">
+                  <option v-for="item in targetLayerSpecificOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+                  <option value="A/B/C">A/B/C</option>
+                </select>
+                <small v-if="aiQuestionErrors.target_layer" class="field-error">{{ aiQuestionErrors.target_layer[0] }}</small>
+              </label>
+              <label>
+                <span>生成数量</span>
+                <input v-model="aiQuestionForm.count" type="number" min="1" max="10" />
+                <small v-if="aiQuestionErrors.count" class="field-error">{{ aiQuestionErrors.count[0] }}</small>
+              </label>
+              <label class="span-2">
+                <span>补充要求</span>
+                <textarea
+                  v-model.trim="aiQuestionForm.requirement"
+                  rows="3"
+                  maxlength="1000"
+                  placeholder="可写题目难度、选项风格、是否贴近项目任务、是否需要易错项等。"
+                ></textarea>
+                <small v-if="aiQuestionErrors.requirement" class="field-error">{{ aiQuestionErrors.requirement[0] }}</small>
+              </label>
+              <div class="ai-score-defaults span-2">
+                <strong>分值初始规则</strong>
+                <span>选择/判断默认 2 分，填空默认 3 分，简答默认 5 分；AI 返回的是建议值，教师可逐题修改。</span>
+              </div>
+            </section>
+
+            <section class="ai-question-result-panel">
+              <header>
+                <div>
+                  <strong>生成结果</strong>
+                  <span>{{ aiGeneratedQuestions.length ? `${aiGeneratedQuestions.length} 道草稿待确认` : '生成后在这里确认' }}</span>
+                </div>
+                <button class="secondary-button" type="button" :disabled="aiQuestionLoading || !aiGeneratedQuestions.length" @click="addAllAiGeneratedQuestions">
+                  全部加入
+                </button>
+              </header>
+
+              <NoticeLine v-if="aiQuestionNotice" :message="aiQuestionNotice" :tone="aiGeneratedQuestions.length ? 'success' : 'warning'" />
+
+              <div v-if="aiScoreDefaults" class="ai-score-note">
+                <strong>建议分值</strong>
+                <span>
+                  基础 {{ aiScoreDefaults.base_score }} 分 ·
+                  A {{ aiScoreDefaults.layer_scores.A }} / B {{ aiScoreDefaults.layer_scores.B }} / C {{ aiScoreDefaults.layer_scores.C }}
+                </span>
+                <small>{{ aiScoreDefaults.note }}</small>
+              </div>
+
+              <div class="ai-question-result-list">
+                <article v-for="item in aiGeneratedQuestions" :key="item.id">
+                  <header>
+                    <span>{{ questionTypeLabel(item.question_type) }} · {{ targetLayerLabel(item.target_layer) }}</span>
+                    <strong>{{ questionScoreSummary(item) }}</strong>
+                  </header>
+                  <p>{{ item.stem }}</p>
+                  <div v-if="item.options.length" class="ai-option-preview">
+                    <small v-for="(option, index) in item.options" :key="`${item.id}-option-${index}`">{{ String.fromCharCode(65 + index) }}. {{ option }}</small>
+                  </div>
+                  <small>参考答案：{{ questionAnswerSummary(item) }}</small>
+                  <small v-if="item.analysis">解析：{{ item.analysis }}</small>
+                  <div class="resource-card-actions">
+                    <button type="button" @click="editAiGeneratedQuestion(item)">编辑后加入</button>
+                    <button type="button" @click="addAiGeneratedQuestion(item)">直接加入</button>
+                  </div>
+                </article>
+                <p v-if="!aiQuestionLoading && !aiGeneratedQuestions.length" class="empty">
+                  尚未生成题目。生成前请确认教师 AI 接入已配置并启用。
+                </p>
+              </div>
+            </section>
+          </div>
+
+          <footer class="modal-actions">
+            <RouterLink class="secondary-button" to="/teacher/ai">AI 接入</RouterLink>
+            <button class="secondary-button" type="button" :disabled="aiQuestionLoading" @click="aiQuestionModalOpen = false">关闭</button>
+            <button class="primary-button" type="button" :disabled="aiQuestionLoading" @click="generateAiQuestions">
+              {{ aiQuestionLoading ? '生成中' : '生成题目草稿' }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
       <div v-if="questionBuilderOpen" class="modal-backdrop" role="presentation" @click.self="questionBuilderOpen = false">
         <section class="entity-modal compact-modal lesson-question-modal" role="dialog" aria-modal="true" aria-labelledby="question-builder-title">
           <header class="modal-header">
@@ -1392,6 +1656,7 @@ onMounted(loadLesson)
               <label>
                 <span>基础分值</span>
                 <input v-model="questionDraft.score" type="number" min="0" max="100" step="0.5" @input="onQuestionBaseScoreInput" />
+                <small>系统先按题型给基础分，后续 AI 只提供建议，教师可修改。</small>
               </label>
               <label class="check-row">
                 <input v-model="questionDraft.is_required" type="checkbox" />
@@ -1429,6 +1694,7 @@ onMounted(loadLesson)
                     <span>{{ layer }} 层分值</span>
                     <input v-model="questionDraft.layer_scores[layer]" type="number" min="0" max="100" step="0.5" />
                   </label>
+                  <small class="span-2">这里的 A/B/C 分值会作为题目设计上下文进入后续学习分析，但不直接作为学生分层模型的唯一标签。</small>
                 </div>
               </section>
               <label class="span-2">

@@ -76,6 +76,14 @@ RESOURCE_ALLOWED_EXTENSIONS = {
     ".7z",
 }
 LESSON_QUESTION_TYPES = {"single", "multiple", "judge", "blank", "text"}
+LESSON_QUESTION_TYPE_LABELS = {
+    "single": "单选",
+    "multiple": "多选",
+    "judge": "判断",
+    "blank": "填空",
+    "text": "简答",
+}
+LESSON_TARGET_LAYER_VALUES = {item.value for item in LessonStep.TargetLayer}
 TEACHER_IMPORT_HEADERS = ["登录账号", "姓名", "联系电话", "初始密码", "状态"]
 STUDENT_IMPORT_HEADERS = ["登录账号", "姓名", "学号", "班级", "联系电话", "初始密码", "层级", "小组号", "积分", "状态"]
 DEFAULT_AI_BASE_URL = "https://api.deepseek.com"
@@ -260,6 +268,294 @@ def test_teacher_ai_provider(request) -> TeacherAIProvider:
         detail={"provider": provider.provider, "model": provider.model, "ok": True},
     )
     return provider
+
+
+def _call_teacher_chat_json(request, *, system_prompt: str, user_prompt: str, max_tokens: int = 1800) -> dict:
+    provider = get_teacher_ai_provider(request.user)
+    api_key = decrypt_secret(provider.api_key_encrypted)
+    if not provider.is_enabled:
+        raise ServiceError("教师 AI 辅助尚未启用，请先在 AI 接入中启用。", errors={"ai": ["教师 AI 辅助尚未启用。"]}, status=400)
+    if not api_key:
+        raise ServiceError("尚未配置可用的 DeepSeek API Key。", errors={"api_key": ["请先在 AI 接入中填写 API Key。"]}, status=400)
+    if not _valid_base_url(provider.base_url):
+        raise ServiceError("AI 接口地址格式不正确。", errors={"base_url": ["请检查 AI 接入中的接口地址。"]}, status=400)
+
+    endpoint = f"{provider.base_url.rstrip('/')}/chat/completions"
+    body = json.dumps(
+        {
+            "model": provider.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.4,
+            "max_tokens": max_tokens,
+            "stream": False,
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        endpoint,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as response:
+            raw = response.read(1024 * 256)
+            payload = json.loads(raw.decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(1024).decode("utf-8", errors="ignore")
+        provider.last_error = f"DeepSeek 返回 {exc.code}：{detail[:240]}"
+        provider.save(update_fields=["last_error", "updated_at"])
+        raise ServiceError("AI 生成失败，请检查 Key、模型或接口地址。", errors={"ai": [provider.last_error]}, status=400)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
+        provider.last_error = f"连接或解析失败：{exc}"
+        provider.save(update_fields=["last_error", "updated_at"])
+        raise ServiceError("AI 生成失败，请检查网络和接口配置。", errors={"ai": [provider.last_error]}, status=400)
+
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not choices:
+        provider.last_error = "接口已响应，但没有返回有效内容。"
+        provider.save(update_fields=["last_error", "updated_at"])
+        raise ServiceError("AI 生成失败。", errors={"ai": [provider.last_error]}, status=400)
+    content = choices[0].get("message", {}).get("content", "") if isinstance(choices[0], dict) else ""
+    try:
+        result = json.loads(content)
+    except json.JSONDecodeError as exc:
+        provider.last_error = f"AI 未返回合法 JSON：{exc}"
+        provider.save(update_fields=["last_error", "updated_at"])
+        raise ServiceError("AI 生成结果格式不正确，请重试。", errors={"ai": [provider.last_error]}, status=400)
+    if not isinstance(result, dict):
+        raise ServiceError("AI 生成结果格式不正确，请重试。", errors={"ai": ["返回值不是 JSON 对象。"]}, status=400)
+    provider.last_error = ""
+    provider.save(update_fields=["last_error", "updated_at"])
+    return result
+
+
+def _lesson_question_base_score(question_type: str) -> float:
+    if question_type == "text":
+        return 5.0
+    if question_type == "blank":
+        return 3.0
+    return 2.0
+
+
+def _initial_layer_scores(base_score: float, target_layer: str, *, difficulty: str = "normal") -> dict[str, float]:
+    scores = {"A": base_score, "B": base_score, "C": base_score}
+    if difficulty == "extension":
+        scores["A"] = min(base_score + 1, 100)
+    elif difficulty == "support":
+        scores["C"] = max(base_score - 0.5, 0)
+    if target_layer == "A":
+        scores["A"] = min(base_score + 1, 100)
+    elif target_layer == "C":
+        scores["C"] = max(base_score - 0.5, 0)
+    elif target_layer == "A/B":
+        scores["A"] = min(base_score + 0.5, 100)
+    elif target_layer == "B/C":
+        scores["C"] = max(base_score - 0.5, 0)
+    return scores
+
+
+def _clean_ai_generated_questions(raw_questions, *, requested_count: int, fallback_type: str, fallback_layer: str) -> list[dict]:
+    if not isinstance(raw_questions, list):
+        return []
+    cleaned: list[dict] = []
+    for index, raw_item in enumerate(raw_questions[: min(requested_count, 10)]):
+        if not isinstance(raw_item, dict):
+            continue
+        question_type = str(raw_item.get("question_type") or fallback_type or "single").strip()
+        if question_type not in LESSON_QUESTION_TYPES:
+            question_type = fallback_type if fallback_type in LESSON_QUESTION_TYPES else "single"
+        stem = normalize_text(str(raw_item.get("stem") or ""))
+        if len(stem) < 2:
+            continue
+        stem = stem[:1000]
+        target_layer = str(raw_item.get("target_layer") or fallback_layer or "all").strip()
+        if target_layer not in LESSON_TARGET_LAYER_VALUES:
+            target_layer = fallback_layer if fallback_layer in LESSON_TARGET_LAYER_VALUES else "all"
+        use_layer_scores = _clean_bool(raw_item.get("use_layer_scores", target_layer == "A/B/C"))
+
+        options: list[str] = []
+        if question_type == "judge":
+            options = ["正确", "错误"]
+        elif question_type in {"single", "multiple"}:
+            raw_options = raw_item.get("options")
+            if isinstance(raw_options, list):
+                for option in raw_options:
+                    text = normalize_text(str(option))[:200]
+                    if text and text not in options:
+                        options.append(text)
+            if len(options) < 2:
+                continue
+            options = options[:8]
+
+        raw_answer = raw_item.get("answer", [])
+        if isinstance(raw_answer, list):
+            answer = [normalize_text(str(value)) for value in raw_answer if normalize_text(str(value))]
+        elif raw_answer:
+            answer = [normalize_text(str(raw_answer))]
+        else:
+            answer = []
+        if question_type == "single" and answer:
+            answer = answer[:1]
+        if question_type == "judge":
+            answer = answer[:1] if answer and answer[0] in {"正确", "错误"} else []
+        if question_type in {"single", "multiple"} and answer:
+            answer = [value for value in answer if value in options]
+
+        try:
+            base_score = float(raw_item.get("score") or _lesson_question_base_score(question_type))
+        except (TypeError, ValueError):
+            base_score = _lesson_question_base_score(question_type)
+        base_score = min(max(base_score, 0), 100)
+
+        raw_layer_scores = raw_item.get("layer_scores") if isinstance(raw_item.get("layer_scores"), dict) else {}
+        initial_scores = _initial_layer_scores(base_score, target_layer, difficulty=str(raw_item.get("difficulty") or "normal"))
+        layer_scores = {}
+        for layer in ("A", "B", "C"):
+            try:
+                value = float(raw_layer_scores.get(layer, initial_scores[layer]))
+            except (TypeError, ValueError):
+                value = initial_scores[layer]
+            layer_scores[layer] = min(max(value, 0), 100)
+
+        cleaned.append(
+            {
+                "id": f"q_{uuid4().hex[:12]}",
+                "question_type": question_type,
+                "stem": stem,
+                "options": options,
+                "answer": answer,
+                "score": base_score,
+                "target_layer": target_layer,
+                "use_layer_scores": use_layer_scores and target_layer != "all",
+                "layer_scores": layer_scores,
+                "analysis": normalize_text(str(raw_item.get("analysis") or ""))[:1000],
+                "is_required": _clean_bool(raw_item.get("is_required", True)),
+                "sort_order": (index + 1) * 10,
+                "ai_generated": True,
+                "ai_score_note": normalize_text(str(raw_item.get("score_note") or "AI 建议分值，教师确认后才写入环节。"))[:300],
+            }
+        )
+    return cleaned
+
+
+def generate_lesson_step_questions_with_ai(request, data) -> dict:
+    direction = normalize_text(str(data.get("direction") or ""))
+    question_type = str(data.get("question_type") or "single").strip()
+    target_layer = str(data.get("target_layer") or "B/C").strip()
+    raw_count = data.get("count", 3)
+    try:
+        count = int(raw_count)
+    except (TypeError, ValueError):
+        count = 0
+    lesson_title = normalize_text(str(data.get("lesson_title") or ""))
+    step_title = normalize_text(str(data.get("step_title") or ""))
+    subject_name = normalize_text(str(data.get("subject_name") or ""))
+    student_instruction = normalize_text(str(data.get("student_instruction") or ""))
+    requirement = normalize_text(str(data.get("requirement") or ""))
+
+    errors: dict[str, list[str]] = {}
+    if question_type not in LESSON_QUESTION_TYPES:
+        errors["question_type"] = ["题型不正确。"]
+    if target_layer not in LESSON_TARGET_LAYER_VALUES or target_layer == "all":
+        errors["target_layer"] = ["分层专属题需选择 A、B、C、A/B、B/C 或 A/B/C。"]
+    if count < 1 or count > 10:
+        errors["count"] = ["生成数量需为 1-10。"]
+    if len(direction) < 4 or len(direction) > 1000:
+        errors["direction"] = ["出题方向需为 4-1000 个字符。"]
+    if len(requirement) > 1000:
+        errors["requirement"] = ["补充要求不能超过 1000 个字符。"]
+    if errors:
+        raise ServiceError("AI 出题参数校验失败。", errors=errors, status=400)
+
+    base_score = _lesson_question_base_score(question_type)
+    initial_scores = _initial_layer_scores(base_score, target_layer)
+    system_prompt = (
+        "你是 STRATA 数智教学系统的教师备课助手。"
+        "你只能生成结构化课堂题草稿，不能生成代码、网页脚本或外链。"
+        "输出必须是严格 JSON 对象，不能包含 Markdown。"
+    )
+    user_prompt = f"""
+请生成 {count} 道课堂题草稿，用于分层教学。请严格返回 JSON：
+{{
+  "questions": [
+    {{
+      "question_type": "{question_type}",
+      "stem": "题干",
+      "options": ["选项1", "选项2"],
+      "answer": ["参考答案"],
+      "score": {base_score},
+      "target_layer": "{target_layer}",
+      "use_layer_scores": true,
+      "layer_scores": {json.dumps(initial_scores, ensure_ascii=False)},
+      "analysis": "解析或评分说明",
+      "is_required": true,
+      "difficulty": "support|normal|extension",
+      "score_note": "分值建议理由"
+    }}
+  ]
+}}
+
+课程/学科信息：
+- 学科：{subject_name or "未提供"}
+- 课时：{lesson_title or "未提供"}
+- 当前环节：{step_title or "未提供"}
+- 学生可见说明：{student_instruction or "未提供"}
+
+出题方向：
+{direction}
+
+补充要求：
+{requirement or "无"}
+
+规则：
+1. 题型只能是 {question_type}。
+2. 适用层级只能是 {target_layer}。
+3. 单选/多选至少 4 个选项；判断题 options 固定为 ["正确","错误"]；填空和简答不需要 options。
+4. answer 必须是数组；单选和判断只给 1 个答案。
+5. 分值先给建议值，教师会确认或修改。若不能判断，基础分用 {base_score}，layer_scores 用 {json.dumps(initial_scores, ensure_ascii=False)}。
+6. 语言简洁，贴近高中课堂，避免空泛 AI 味表述。
+""".strip()
+    payload = _call_teacher_chat_json(request, system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=2200)
+    questions = _clean_ai_generated_questions(
+        payload.get("questions"),
+        requested_count=count,
+        fallback_type=question_type,
+        fallback_layer=target_layer,
+    )
+    if not questions:
+        raise ServiceError("AI 没有生成可用题目，请调整出题方向后重试。", errors={"ai": ["未得到可用题目。"]}, status=400)
+
+    write_audit(
+        request,
+        "teacher.ai_generate_questions",
+        school=request.user.school,
+        target_type="lesson_step_question",
+        detail={
+            "question_type": question_type,
+            "target_layer": target_layer,
+            "count": len(questions),
+            "subject": subject_name,
+            "lesson_title": lesson_title,
+            "step_title": step_title,
+        },
+    )
+    return {
+        "questions": questions,
+        "score_defaults": {
+            "base_score": base_score,
+            "layer_scores": initial_scores,
+            "note": "系统先给基础分和 A/B/C 建议分值；后续接入分层模型后，只作为建议，必须由教师确认。",
+        },
+    }
 
 
 def _clean_id_list(data) -> list[int]:

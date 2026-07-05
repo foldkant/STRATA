@@ -139,6 +139,11 @@ urlpatterns = [
         name="api_teacher_lesson_steps_reorder",
     ),
     path("teacher/lesson-steps/<int:pk>/", views.teacher_lesson_step_detail, name="api_teacher_lesson_step_detail"),
+    path(
+        "teacher/lesson-steps/ai-generate-questions/",
+        views.teacher_lesson_step_ai_generate_questions,
+        name="api_teacher_lesson_step_ai_generate_questions",
+    ),
     path("teacher/classroom/sessions/", views.teacher_classroom_sessions, name="api_teacher_classroom_sessions"),
     path("teacher/classroom/sessions/<int:pk>/", views.teacher_classroom_session_detail, name="api_teacher_classroom_session_detail"),
     path("teacher/classroom/sessions/<int:pk>/start/", views.teacher_classroom_session_start, name="api_teacher_classroom_start"),

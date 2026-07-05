@@ -493,8 +493,9 @@ DELETE /api/v1/teacher/lesson-steps/{id}/
 - 课堂未启用分层模式时，学生端返回当前环节全部题目。
 - 课堂启用分层模式时，学生端按学生 `StudentProfile.current_layer` 过滤 `question_items`；`target_layer=all` 对所有学生可见；启用 `use_layer_scores` 时学生端 `score` 返回该学生层级分值。
 - `A/B` 和 `B/C` 是正式支持的相邻层级组合；第一版不开放 `A/C`。
-- 新建题目开启分层分值时，前端应默认将 `layer_scores.A/B/C` 填为基础分 `score`，教师可修改。
-- 后续 AI 分值建议接口只能返回建议值，不能直接覆盖教师已保存的 `layer_scores`。
+- 新建题目基础分按题型给初始值：选择/判断 2 分，填空 3 分，简答 5 分。
+- 新建题目开启分层分值时，前端先按 `target_layer` 给 `layer_scores.A/B/C` 初始建议值；无法判断时三层都等于基础分。
+- AI 分值建议只能返回建议值，不能直接覆盖教师已保存的 `layer_scores`。
 - 学生提交课堂题仍走 `POST /api/v1/student/lesson-steps/{id}/answer/`，提交内容写入 `LearningEvent.answer_submit`；后续可升级为正式 `LessonStepSubmission`。
 
 ### 教师 AI 接入
@@ -504,6 +505,66 @@ GET /api/v1/teacher/ai-provider/
 PATCH /api/v1/teacher/ai-provider/
 POST /api/v1/teacher/ai-provider/test/
 ```
+
+### AI 生成分层题草稿
+
+```text
+POST /api/v1/teacher/lesson-steps/ai-generate-questions/
+```
+
+请求：
+
+```json
+{
+  "direction": "围绕数据采集流程，给 B/C 层生成基础巩固题。",
+  "question_type": "single",
+  "target_layer": "B/C",
+  "count": 3,
+  "subject_name": "信息科技",
+  "lesson_title": "数据采集",
+  "step_title": "任务分析",
+  "student_instruction": "阅读材料并完成问题。",
+  "requirement": "选项要包含常见误区。"
+}
+```
+
+响应：
+
+```json
+{
+  "questions": [
+    {
+      "id": "q_xxx",
+      "question_type": "single",
+      "stem": "题干",
+      "options": ["A", "B", "C", "D"],
+      "answer": ["A"],
+      "score": 2,
+      "target_layer": "B/C",
+      "use_layer_scores": true,
+      "layer_scores": {"A": 2, "B": 2, "C": 1.5},
+      "analysis": "解析",
+      "is_required": true,
+      "sort_order": 10,
+      "ai_generated": true,
+      "ai_score_note": "AI 建议分值，教师确认后才写入环节。"
+    }
+  ],
+  "score_defaults": {
+    "base_score": 2,
+    "layer_scores": {"A": 2, "B": 2, "C": 1.5},
+    "note": "系统先给基础分和 A/B/C 建议分值；后续接入分层模型后，只作为建议，必须由教师确认。"
+  }
+}
+```
+
+规则：
+
+- 仅教师可用，且只使用该教师在 `AI 接入` 中保存的 DeepSeek API Key。
+- 后端要求模型返回 JSON，并二次校验题型、层级、选项、答案和分值。
+- 接口只返回草稿，不直接写入 `LessonStep.question_items`。
+- 教师端必须经过“直接加入”或“编辑后加入”才会写入当前环节。
+- 无外网或未配置 Key 时，返回可恢复错误，不影响手动出题。
 
 规则：
 
