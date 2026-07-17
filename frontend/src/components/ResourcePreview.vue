@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { ApiError } from '@/api/client'
+import { getLearningPage, submitLearningPageForm, type LearningPage } from '@/api/learningPages'
+import LearningPageFrame from './LearningPageFrame.vue'
 import OnlyOfficeEditor from './OnlyOfficeEditor.vue'
 
 type PreviewResource = {
@@ -9,17 +13,29 @@ type PreviewResource = {
   attachment_url?: string
   attachment_name?: string
   file_ext?: string
+  kind?: string
+  learning_page_id?: number | string
+  revision_no?: number
 }
 
 const props = defineProps<{
   resource: PreviewResource | null
   officeMode?: 'view' | 'edit'
   closable?: boolean
+  contentOnly?: boolean
+  learningPageInteractive?: boolean
 }>()
 
 const emit = defineEmits<{
   close: []
 }>()
+
+const router = useRouter()
+const learningPage = shallowRef<LearningPage | null>(null)
+const learningPageLoading = ref(false)
+const learningPageError = ref('')
+const learningPageFrame = ref<InstanceType<typeof LearningPageFrame> | null>(null)
+let learningPageLoadToken = 0
 
 const knownExts = new Set([
   'png',
@@ -73,6 +89,7 @@ const url = computed(() => props.resource?.attachment_url || '')
 const ext = computed(detectExt)
 
 const kind = computed(() => {
+  if (props.resource?.kind === 'learning_page') return 'learning_page'
   if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(ext.value)) return 'image'
   if (['mp4', 'webm', 'ogg', 'mov'].includes(ext.value)) return 'video'
   if (['mp3', 'wav', 'm4a'].includes(ext.value)) return 'audio'
@@ -84,11 +101,61 @@ const kind = computed(() => {
 
 const canEmbed = computed(() => Boolean(url.value && (url.value.startsWith('/') || /^https?:\/\//.test(url.value))))
 const canUseOnlyOffice = computed(() => kind.value === 'office' && Boolean(props.resource?.id))
+const learningPageId = computed(() => Number(props.resource?.learning_page_id || 0))
+const learningPageRevision = computed(() => Number(props.resource?.revision_no || 0))
+const learningPageKey = computed(() => {
+  if (kind.value !== 'learning_page' || !learningPageId.value) return ''
+  return `${learningPageId.value}:${learningPageRevision.value}`
+})
+
+async function loadLearningPage() {
+  const loadToken = ++learningPageLoadToken
+  learningPageError.value = ''
+  if (!learningPageKey.value) {
+    learningPage.value = null
+    learningPageLoading.value = false
+    return
+  }
+  learningPageLoading.value = true
+  try {
+    const page = await getLearningPage(learningPageId.value)
+    if (loadToken === learningPageLoadToken) {
+      learningPage.value = page
+    }
+  } catch (error) {
+    if (loadToken === learningPageLoadToken) {
+      learningPageError.value = error instanceof ApiError ? error.message : '学习网页加载失败。'
+    }
+  } finally {
+    if (loadToken === learningPageLoadToken) {
+      learningPageLoading.value = false
+    }
+  }
+}
+
+async function submitLearningPage(payload: { formId: string; answers: Record<string, unknown> }) {
+  if (!learningPage.value || !props.learningPageInteractive) return
+  try {
+    await submitLearningPageForm(learningPage.value.id, payload.formId, payload.answers)
+    learningPageFrame.value?.notifyResult(payload.formId, true, '提交成功')
+  } catch (error) {
+    const message = error instanceof ApiError ? error.message : '提交失败，请重试。'
+    learningPageFrame.value?.notifyResult(payload.formId, false, message)
+  }
+}
+
+function openLearningPageTab() {
+  if (!learningPage.value) return
+  const href = router.resolve(`/learning-pages/${learningPage.value.id}`).href
+  window.open(href, '_blank', 'noopener,noreferrer')
+}
+
+watch(learningPageKey, loadLearningPage, { immediate: true })
 </script>
 
 <template>
-  <section class="resource-preview-panel" :class="`resource-preview-${kind}`">
-    <header>
+  <section class="resource-preview-panel" :class="[`resource-preview-${kind}`, { 'resource-preview-content-only': contentOnly }]">
+    <header v-if="!contentOnly">
       <div>
         <span>{{ kind.toUpperCase() }}</span>
         <h3>{{ title }}</h3>
@@ -101,7 +168,28 @@ const canUseOnlyOffice = computed(() => kind.value === 'office' && Boolean(props
     </header>
 
     <div class="resource-preview-body" :class="`resource-preview-body-${kind}`">
-      <img v-if="kind === 'image' && canEmbed" :src="url" :alt="title" />
+      <div v-if="kind === 'learning_page'" class="learning-page-preview-shell">
+        <button
+          v-if="learningPage"
+          class="learning-page-popout-button"
+          type="button"
+          title="在新标签页打开"
+          aria-label="在新标签页打开学习网页"
+          @click="openLearningPageTab"
+        >
+          新标签页打开
+        </button>
+        <p v-if="learningPageLoading && !learningPage" class="resource-preview-loading">正在加载学习网页...</p>
+        <p v-else-if="learningPageError && !learningPage" class="resource-preview-error">{{ learningPageError }}</p>
+        <LearningPageFrame
+          v-else-if="learningPage"
+          ref="learningPageFrame"
+          :page="learningPage"
+          :interactive="Boolean(learningPageInteractive)"
+          @submit="submitLearningPage"
+        />
+      </div>
+      <img v-else-if="kind === 'image' && canEmbed" :src="url" :alt="title" />
       <video v-else-if="kind === 'video' && canEmbed" :src="url" controls />
       <audio v-else-if="kind === 'audio' && canEmbed" :src="url" controls />
       <iframe v-else-if="kind === 'pdf' && canEmbed" :src="url" title="PDF 预览"></iframe>
@@ -118,5 +206,6 @@ const canUseOnlyOffice = computed(() => kind.value === 'office' && Boolean(props
         <p v-else-if="resource">{{ resource.content || '该资源暂不支持网页内预览。' }}</p>
       </div>
     </div>
+
   </section>
 </template>

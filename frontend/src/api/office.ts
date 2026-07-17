@@ -10,3 +10,7 @@ export type OnlyOfficePayload = {
 export function getResourceOfficeConfig(resourceId: number | string, mode: 'view' | 'edit' = 'view') {
   return apiRequest<OnlyOfficePayload>(`/api/v1/resources/${resourceId}/office-config/?mode=${mode}`)
 }
+
+export function getGroupOfficeConfig(groupId: number | string, mode: 'view' | 'edit' = 'view') {
+  return apiRequest<OnlyOfficePayload>(`/api/v1/classroom/groups/${groupId}/office-config/?mode=${mode}`)
+}

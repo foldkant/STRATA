@@ -66,8 +66,7 @@ const sessionForm = reactive<ClassroomSessionPayload>({
   course: '',
   lesson: '',
   class_group: '',
-  title: '',
-  is_layered: false
+  title: ''
 })
 
 const activityForm = reactive<ClassroomActivityPayload>({
@@ -139,7 +138,6 @@ function resetSessionForm() {
   sessionForm.lesson = courseOptions.value[0]?.lessons?.[0]?.id || ''
   sessionForm.class_group = courseOptions.value[0]?.target_classes?.[0]?.id || ''
   sessionForm.title = ''
-  sessionForm.is_layered = false
 }
 
 function openCreateSession() {
@@ -154,7 +152,6 @@ function openEditSession(row: ClassroomSessionRow) {
   sessionForm.lesson = row.lesson?.id || ''
   sessionForm.class_group = row.class_group?.id || ''
   sessionForm.title = row.title
-  sessionForm.is_layered = row.is_layered
   sessionModalOpen.value = true
 }
 
@@ -192,8 +189,7 @@ async function saveSession() {
       course: sessionForm.course,
       lesson: sessionForm.lesson,
       class_group: sessionForm.class_group,
-      title: sessionForm.title.trim(),
-      is_layered: sessionForm.is_layered
+      title: sessionForm.title.trim()
     }
     const saved = editingSession.value
       ? await updateClassroomSession(editingSession.value.id, payload)
@@ -465,7 +461,6 @@ onMounted(async () => {
             <th>课时</th>
             <th>班级</th>
             <th>状态</th>
-            <th>模式</th>
             <th>活动</th>
             <th>创建时间</th>
             <th class="actions-col">操作</th>
@@ -480,12 +475,11 @@ onMounted(async () => {
           <td>{{ lessonLabel(item.lesson) }}</td>
           <td>{{ classLabel(item.class_group) }}</td>
           <td><span class="status-pill" :class="`status-${item.status}`">{{ item.status_label }}</span></td>
-          <td><span class="status-pill" :class="item.is_layered ? 'status-running' : 'status-draft'">{{ item.is_layered ? '分层' : '普通' }}</span></td>
           <td>{{ item.activity_count }} 个 / {{ item.open_activity_count }} 进行中</td>
           <td>{{ new Date(item.created_at).toLocaleString() }}</td>
           <td>
             <div class="row-actions">
-              <RouterLink :to="`/teacher/classroom/${item.id}`">进入课堂</RouterLink>
+              <RouterLink :to="`/teacher/classroom/${item.id}`" target="_blank" rel="noopener">进入课堂</RouterLink>
               <button type="button" @click="openSession(item)">活动</button>
               <button type="button" :disabled="item.status !== 'draft'" @click="openEditSession(item)">编辑</button>
               <button v-if="item.status === 'draft'" type="button" @click="askSession('start', item)">开始</button>
@@ -538,10 +532,7 @@ onMounted(async () => {
               <input v-model.trim="sessionForm.title" maxlength="128" placeholder="不填时按课程和班级自动生成" />
               <small v-if="sessionErrors.title" class="field-error">{{ sessionErrors.title[0] }}</small>
             </label>
-            <label class="settings-check-row span-2">
-              <input v-model="sessionForm.is_layered" type="checkbox" />
-              <span>启用分层教学模式，学生端按 A/B/C 层级接收适用题目和分值。</span>
-            </label>
+            <p class="form-helper span-2">课堂不再单独设置分层模式。教师在课时设计中设置 A/B/C、A/B、B/C 题目后，学生端会按当前投放环节自动匹配。</p>
           </div>
           <footer class="modal-actions">
             <button class="secondary-button" type="button" :disabled="saving" @click="sessionModalOpen = false">取消</button>

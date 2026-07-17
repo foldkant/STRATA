@@ -490,8 +490,8 @@ DELETE /api/v1/teacher/lesson-steps/{id}/
 - 课时设计页面左侧上下文只显示学科、课程和当前课时，不展示课程绑定的所有任教班级；班级发布范围在课程管理中维护。
 - 当前第一版已接入教师资源库上传，上传资源后可把资源显示名加入 `resource_items`；后续再升级为 `LessonStepResource` 关系表。
 - 教师端保存 `question_items` 时包含参考答案和解析；学生端读取课时工作台时只返回题干、题型、选项、分值和必答状态，不返回答案。
-- 课堂未启用分层模式时，学生端返回当前环节全部题目。
-- 课堂启用分层模式时，学生端按学生 `StudentProfile.current_layer` 过滤 `question_items`；`target_layer=all` 对所有学生可见；启用 `use_layer_scores` 时学生端 `score` 返回该学生层级分值。
+- 当前投放环节没有分层题时，学生端返回当前环节全部题目。
+- 当前投放环节存在 `target_layer != all` 或 `use_layer_scores=true` 的题目时，学生端按学生 `StudentProfile.current_layer` 自动过滤 `question_items`；`target_layer=all` 对所有学生可见；启用 `use_layer_scores` 时学生端 `score` 返回该学生层级分值。
 - `A/B` 和 `B/C` 是正式支持的相邻层级组合；第一版不开放 `A/C`。
 - 新建题目基础分按题型给初始值：选择/判断 2 分，填空 3 分，简答 5 分。
 - 新建题目开启分层分值时，前端先按 `target_layer` 给 `layer_scores.A/B/C` 初始建议值；无法判断时三层都等于基础分。
@@ -603,6 +603,7 @@ POST /api/v1/teacher/classroom/sessions/{id}/finish/
 POST /api/v1/teacher/classroom/sessions/{id}/step/open/
 POST /api/v1/teacher/classroom/sessions/{id}/step/lock/
 POST /api/v1/teacher/classroom/sessions/{id}/step/close/
+GET /api/v1/teacher/classroom/sessions/{id}/step-progress/
 GET /api/v1/teacher/classroom/sessions/{id}/activities/
 POST /api/v1/teacher/classroom/sessions/{id}/activities/
 GET /api/v1/teacher/classroom/activities/{id}/
@@ -621,12 +622,73 @@ POST /api/v1/teacher/classroom/activities/{id}/close/
 - 开始和结束课堂会写入 `LearningEvent.teacher_intervention`。
 - 结束课堂会自动关闭进行中的课堂活动。
 - `ClassroomSession` 记录当前投放环节：`current_step`、`current_step_status`、`submission_locked`、`current_step_started_at`、`current_step_closed_at`。
-- `ClassroomSession.is_layered` 表示本次课堂是否启用分层教学模式。创建/编辑课堂时可传入 `is_layered: true/false`。
+- `ClassroomSession.is_layered` 不再作为创建/编辑课堂参数。接口保留该字段用于兼容，含义为“当前投放环节是否含分层题”，由后端按当前环节题目自动计算。
 - `step/open` 只允许投放当前课堂绑定课时下已配置的 `LessonStep`，课堂未开始时前端会先调用开始课堂。
 - `step/lock` 锁定当前环节提交，`step/close` 关闭当前环节并保持提交锁定。
+- `step-progress` 返回当前投放环节的学生完成情况，按本次环节投放时间之后的 `LearningEvent.answer_submit` 统计。
+- `step-progress.rows` 每个学生一行，包含提交状态、提交时间、已答题数、客观题自动得分、每题作答摘要和未提交名单。
+- 单选、多选、判断和设置了参考答案的填空题可以自动判分；简答和无参考答案题目返回“待批阅”，不做假自动得分。
 - 课堂活动状态为 `draft`、`open`、`closed`。
 - 开启和关闭课堂活动会写入 `LearningEvent.teacher_intervention`。
-- 当前第一版已完成课堂场次、当前环节投放、锁定提交、关闭环节和活动开关；学生端实时 WebSocket 推送和 submissions 后续实现。
+- 当前第一版已完成课堂场次、当前环节投放、锁定提交、关闭环节、活动开关、学生课堂作答和教师端完成情况汇总。正式批阅表、文件作品提交和 WebSocket 推送后续实现。
+
+### 课堂小组合作
+
+教师端：
+
+```text
+GET /api/v1/teacher/classroom/sessions/{id}/group-collaboration/
+POST /api/v1/teacher/classroom/sessions/{id}/group-collaboration/setup/
+POST /api/v1/teacher/classroom/sessions/{id}/group-collaboration/close/
+GET /api/v1/teacher/classroom/sessions/{id}/groups/{group_id}/files/
+POST /api/v1/teacher/classroom/sessions/{id}/groups/{group_id}/files/
+```
+
+学生端：
+
+```text
+GET /api/v1/student/classroom/{session_id}/group-collaboration/
+POST /api/v1/student/classroom/{session_id}/group-collaboration/files/
+```
+
+协作文档：
+
+```text
+GET /api/v1/classroom/groups/{group_id}/office-config/?mode=view
+GET /api/v1/classroom/groups/{group_id}/office-config/?mode=edit
+POST /api/v1/classroom/groups/{group_id}/office-callback/
+```
+
+`setup` 请求：
+
+```json
+{
+  "group_size": 4,
+  "grouping_strategy": "balanced_layer",
+  "document_type": "docx",
+  "storage_quota_mb": 100,
+  "allow_student_upload": true,
+  "allow_onlyoffice_edit": true,
+  "regenerate": false
+}
+```
+
+规则：
+
+- 小组合作属于某次 `ClassroomSession` 的课堂运行能力，不写入课时设计环节。
+- 教师只能为自己的课堂开启、关闭或重新分组。
+- 学生只有在课堂 `running`、小组合作 `open`、且自己属于该组时才能看到小组合作入口。
+- 默认分组策略支持 `balanced_layer`、`same_layer`、`random`、`ai_layer`；`ai_layer` 第一版按同层优先规则执行，后续接分层模型。
+- `group_size` 范围为 2-12，`storage_quota_mb` 范围为 10-2048。
+- 每组自动生成一份协作文档，类型为 `docx`、`pptx` 或 `xlsx`。
+- 有 ONLYOFFICE 时，同组学生打开同一个文档 `key` 协作编辑；教师可以打开任意小组文档。
+- 无 ONLYOFFICE 或服务不可用时，平台仍保留小组成员、文件上传、文件下载和课堂其他功能，只禁用在线协作编辑体验。
+- 学生只能上传到自己所在小组共享区；共享区按教师设置的容量配额校验。
+- 教师端可查看所有小组成员、层级提示、组长、空间使用和共享文件。
+- 学生端只返回自己的 `my_group`，不返回其他小组成员和文件。
+- 打开小组协作文档写入 `LearningEvent.resource_view`，`metadata.action=group_document_open`。
+- 上传小组共享文件写入 `LearningEvent.task_submit`，`metadata.action=group_file_upload`。
+- 后续 AI 分组应使用学生当前层级、近期学习行为、协作贡献、教师调整记录和小组任务完成质量作为特征，但模型建议必须可被教师确认或覆盖。
 
 ### 测试、任务、项目
 
@@ -871,7 +933,7 @@ POST /api/v1/student/lessons/{lesson_id}/enter/
 POST /api/v1/student/lesson-steps/{step_id}/enter/
 POST /api/v1/student/lesson-steps/{step_id}/complete/
 POST /api/v1/student/lesson-steps/{step_id}/answer/
-POST /api/v1/student/lesson-steps/{step_id}/upload/
+POST /api/v1/student/lesson-steps/{step_id}/attachments/
 POST /api/v1/student/lesson-steps/{step_id}/reflection/
 ```
 
@@ -881,7 +943,10 @@ POST /api/v1/student/lesson-steps/{step_id}/reflection/
 - 课时必须属于学生可见课程。
 - 课时学习工作台读取教师端 `LessonStep` 学习过程。
 - 学生端会读取 `question_items` 并按题型渲染作答控件；参考答案不会下发给学生端。
+- `question_items` 支持 `single`、`multiple`、`judge`、`blank`、`text`、`file`。
+- `file` 附件提交题下发 `file_config.allowed_extensions` 和 `file_config.max_size_mb`，学生上传接口仍会在后端二次校验格式和大小。
 - 进入课程、课时、环节、查看资源、提交答案和上传作品都要写入 `LearningEvent`。
+- 学生上传附件写入 `StudentWorkAttachment` 和 `LearningEvent.task_submit`；学生提交当前环节作答时，`LearningEvent.answer_submit.metadata.answer.questions` 会记录该题对应的附件信息。
 
 ### 资源
 
@@ -914,8 +979,14 @@ POST /api/v1/student/classroom/activities/{activity_id}/confusion/
 - 未开始、已结束或非本班课堂，`GET /student/classroom/{session_id}/` 不返回课堂内容。
 - 课堂进行中但教师尚未投放环节时，接口可返回课堂基础状态，但 `current_step` 为空，学生端显示等待。
 - 只有教师投放当前环节后，学生端才展示该环节资源、题目和任务。
-- 如果课堂 `is_layered=true`，学生端 `current_step.question_items` 已由后端按学生当前层级过滤；学生端不能自行请求其他层级题目。
+- 如果接口返回 `is_layered=true`，表示当前投放环节含分层题，学生端 `current_step.question_items` 已由后端按学生当前层级过滤；学生端不能自行请求其他层级题目。
 - 如果题目启用分层分值，学生端收到的 `score` 已是该学生层级对应分值。
+- 教师课堂控制统一使用 `POST /api/v1/teacher/classroom/sessions/{id}/command/`。`command` 当前支持 `sign_in`、`random_pick`、`quick_answer`、`timer`、`broadcast`。
+- 教师查看当前环节完成情况使用 `GET /api/v1/teacher/classroom/sessions/{id}/step-progress/`，前端按题目 ID 展开对应题目的学生完成情况。
+- 教师给学生附件提交评分使用 `POST /api/v1/teacher/classroom/sessions/{id}/attachments/{attachment_id}/score/`，请求体为 `{score, feedback}`。
+- 课堂指令写入 `ClassroomActivity`，结构化参数写入 `metadata`。学生课堂接口返回进行中的 `activities`，学生端据此展示签到、点名、抢答、倒计时和课堂广播。
+- 课堂广播由教师输入文本内容，学生端收到后必须以弹窗展示，学生点击“知道了”后写入已读响应。
+- `open_resource` 和 `collect_answers` 暂不开放按钮和接口，后续确有课堂流程需要时再重新设计。
 - 默认所有课时由课堂教学启用控制。未给学生所在班级创建课堂场次、未开始课堂、已结束课堂，普通课时工作台 `/student/lessons/{lesson_id}/workspace/` 都不返回课时内容。
 - 学生必须等待教师创建课堂、开始课堂并投放环节后，才能从课堂入口查看该环节资源和题目。
 - 教师开启活动后，学生端通过 WebSocket 收到状态。
@@ -960,6 +1031,10 @@ GET /api/v1/student/feedback/{id}/
 规则：
 
 - 学习档案只展示学生自己的学习记录、提交记录、教师反馈和学习日志。
+- 当前第一版使用 `GET /api/v1/student/profile/?subject={subject_id}` 聚合返回当前学生的基础档案、课程进度、学科前测、测试成绩、作品提交、评价记录、学习行为分布和最近学习轨迹。
+- 档案接口不接受学生 ID，始终按当前会话学生查询；不返回当前分层、模型置信度、风险标签、班级排名、总积分或教师内部干预详情。
+- `subject` 可选，只能使用本校启用学科；筛选后课程、测试、前测、作品、评价和事件统计使用同一学科范围。
+- `profile/events`、`profile/submissions`、`profile/logs` 保留为后续分页扩展；当前聚合接口返回最近 60 条轨迹和最近 50 条业务记录。
 - 学生公告只显示自己班级可见的已发布公告。
 - 学生留言默认只能发给自己的任课教师。
 
@@ -1003,3 +1078,150 @@ WebSocket 路径：
 - `control:{class_id}` 教师控制指令。
 
 WebSocket 必须校验登录态和班级权限。
+
+## 课程评价与课堂评价 API
+
+评价项配置属于 `Course`，不属于单次 `ClassroomSession`，也不写入课时模板。自评、互评、师评均由教师在课程/课时设计阶段选择性开启，评价方式固定为 1-5 星，不使用分数、权重或百分制。单次课堂是否对学生开放评价属于 `ClassroomSession.evaluation_enabled` 运行状态，新建课堂默认关闭，重新开始课堂也重置为关闭。
+
+课程端：
+
+```text
+GET /api/v1/teacher/courses/{id}/evaluation/?class_group={class_group_id}
+PATCH /api/v1/teacher/courses/{id}/evaluation/
+POST /api/v1/teacher/courses/{id}/evaluation/ai-generate/
+POST /api/v1/teacher/courses/{id}/evaluation/teacher-submit/
+```
+
+教师端：
+
+```text
+GET /api/v1/teacher/classroom/sessions/{id}/evaluation/
+PATCH /api/v1/teacher/classroom/sessions/{id}/evaluation/
+POST /api/v1/teacher/classroom/sessions/{id}/evaluation/ai-generate/
+POST /api/v1/teacher/classroom/sessions/{id}/evaluation/teacher-submit/
+```
+
+学生端：
+
+```text
+GET /api/v1/student/classroom/{id}/evaluation/
+POST /api/v1/student/classroom/{id}/evaluation/submit/
+```
+
+规则：
+
+- 课程端 `PATCH evaluation` 保存课程级 `enable_self`、`enable_peer`、`enable_teacher` 和三类 `criteria`。
+- 课堂端 `PATCH evaluation` 只接受 `evaluation_enabled`，用于开启或关闭本课堂评价可见性，不修改课程评价项配置；只有进行中课堂允许开启评价。
+- 评价内容设置入口放在教师课时设计页；课堂控制台只调用已保存配置，不提供评价项编辑和 AI 生成。
+- 学生端只有在 `ClassroomSession.evaluation_enabled=true` 时才显示课堂评价入口；课堂默认关闭评价，适合教师在课堂收尾时手动开启。
+- 每类评价项最多 20 个；某类评价只要已有评价项，就视为该类可用于课堂开启。
+- 互评项可以先在课程中设计；学生端只有在课堂开启小组分组合作并生成小组后才显示互评，且只允许评价同组成员，不能评价自己。
+- 师评可在课程中按班级填写，也可在课堂控制台填写。课程师评不绑定具体课堂，课堂师评绑定当前 `ClassroomSession`。
+- 学生提交自评/互评后写入 `LearningEvent.event_type=answer_submit`，`object_type=classroom_evaluation`。
+- 教师在课堂提交师评后写入 `LearningEvent.event_type=teacher_intervention`，`object_type=classroom_evaluation`。
+- 教师在课程提交师评后写入 `LearningEvent.event_type=teacher_intervention`，`object_type=course_evaluation`。
+- `ai-generate` 使用教师自己的 DeepSeek 配置生成评价项草稿；草稿必须由教师确认保存后才对学生生效。课程端生成基于课程上下文，课堂端生成会额外参考当前课堂环节。
+
+## AI 学习网页 API
+
+教师端：
+
+```text
+GET  /api/v1/teacher/lessons/{lesson_id}/learning-pages/
+POST /api/v1/teacher/lessons/{lesson_id}/learning-pages/
+GET/PATCH/DELETE /api/v1/teacher/learning-pages/{id}/
+POST /api/v1/teacher/learning-pages/{id}/revise/
+GET  /api/v1/teacher/learning-pages/{id}/responses/
+GET  /api/v1/teacher/learning-pages/{id}/responses/?classroom_session={session_id}
+```
+
+师生预览与学生提交：
+
+```text
+GET  /api/v1/learning-pages/{id}/
+POST /api/v1/student/learning-pages/{id}/submit/
+```
+
+规则：
+
+- DeepSeek 只返回平台定义的 JSON schema，不接收或保存 AI 生成的 HTML、CSS、JavaScript、外链和 iframe。
+- 页面区块白名单为 `content`、`callout`、`list`、`steps`、`cards`、`table`、`code`、`visualization`、`interactive`、`form`。
+- `visualization` 是受控动画区块，`visualization_type` 只能是 `process`、`timeline`、`bars`、`binary`；动画项只接受 `label`、`detail`、`code`、`value`、`tone`。
+- 动画时长限制为 1500-15000ms，可设置 `autoplay` 和 `loop`；AI 返回的 `animation`、`animated_visualization`、`visual` 会映射为 `visualization`，其余未知动画结构会被清洗。
+- `interactive` 用于自由布局、Canvas、内联 SVG 和自定义 JavaScript 动画，字段为 `html/css/javascript/height`，单字段最多 30000 字符、每页最多 4 个、高度限制为 280-900px。
+- `interactive` 在第二层 opaque-origin iframe 中执行，不开放 `allow-same-origin`、表单、弹窗、下载或顶层导航；CSP 禁止网络、外部资源、第三方库、嵌套 iframe 和对象。
+- `interactive.javascript` 由平台附加 nonce 后执行；事件必须使用 `addEventListener`，HTML 中的 `onclick` 等内联事件会被 CSP 拒绝。
+- 学习网页生成与修改接口接受 `generation_mode`：`auto`、`interactive`、`structured`。`auto` 在要求中识别到动画、交互、模拟、Canvas、SVG 或可视化时使用自由交互模式；`structured` 只使用平台受控区块。
+- `interactive` 模式必须返回至少一个同时包含 `html/css/javascript` 的可执行区块。第一次结果不合格时后端自动纠正一次；第二次仍无有效脚本则返回 `400`，不会保存静态伪动画。
+- 自定义交互块不能直接提交学习数据；需要采集学生回答时仍必须使用平台 `form` 区块，由固定消息桥写入 API。
+- 表单字段白名单为 `single`、`multiple`、`select`、`short_text`、`long_text`、`number`、`scale`。
+- 学生只能访问当前课堂、当前已投放环节中实际绑定的学习网页；锁定提交后不能继续提交网页表单。
+- 每次表单提交写入 `LearningWebPageResponse` 和 `LearningEvent(metadata.action=learning_web_page_form_submit)`。
+- 教师统计接口返回表单提交人数、提交次数、选项分布、数值摘要和近期文本回答。
+- 传入 `classroom_session` 时只统计该教师、该班级、该课堂场次的回答，并返回班级人数、已完成/进行中/未开始人数、完成率及逐学生进度；网页必须属于该课堂绑定的课程和课时。
+## 测试与共享题库 API
+
+### 教师
+
+- `GET /api/v1/teacher/assessment-options/`：本校学科、本人任教班级、本人课程、题型和难度选项。
+- `GET|POST /api/v1/teacher/question-bank/`：查询学校共享题库或新增本人题目。查询支持 `scope=shared|mine`、`q`、`subject`、`question_type`、`difficulty`。
+- `PATCH|DELETE /api/v1/teacher/question-bank/{id}/`：维护本人题目。删除前必须先设置 `status=disabled`。
+- `GET /api/v1/teacher/question-bank/template/`：下载离线 XLSX 导入模板。
+- `GET /api/v1/teacher/question-bank/export/`：导出学校共享题库 XLSX。
+- `POST /api/v1/teacher/question-bank/import/`：上传 XLSX 批量导入本人题目，单次最多 1000 道。
+- `POST /api/v1/teacher/question-bank/ai-generate/`：使用当前教师 DeepSeek 配置生成 1-20 道题目草稿。请求包含 `subject/direction/knowledge_point/question_type/difficulty/count/requirement`，不写数据库。
+- `POST /api/v1/teacher/question-bank/ai-confirm/`：提交教师选择并修改后的草稿，整批校验通过后写入学校共享题库。
+- `GET|POST /api/v1/teacher/assessments/`：测试列表与创建。
+- `GET|PATCH|DELETE /api/v1/teacher/assessments/{id}/`：测试详情与草稿维护。
+- `PUT /api/v1/teacher/assessments/{id}/questions/`：保存题目顺序、分值、`randomize_question_order` 和 `randomize_option_order`，同时建立试卷快照。
+- `POST /api/v1/teacher/assessments/{id}/publish/`：发布并锁定试卷。
+- `POST /api/v1/teacher/assessments/{id}/open/`：开启学生作答。
+- `POST /api/v1/teacher/assessments/{id}/close/`：结束测试并自动收交未提交答卷。
+- `GET /api/v1/teacher/assessments/{id}/results/`：完成情况、成绩和逐题统计。
+- `GET /api/v1/teacher/assessments/{id}/results/export/`：导出测试汇总、学生成绩和逐题统计 XLSX。
+- `GET|PATCH /api/v1/teacher/test-attempts/{id}/grade/`：读取完整答卷或保存主观题评分；存在未评分简答题时拒绝结束批阅，整次评分事务回滚。
+- `GET|PATCH /api/v1/teacher/test-attempts/{id}/grade/`：查看答卷和保存人工评分。
+
+### 学生
+
+- `GET /api/v1/student/assessments/`：当前班级测试列表。
+- `GET /api/v1/student/assessments/{id}/`：测试状态、题目、已存答案和截止时间。
+- `POST /api/v1/student/assessments/{id}/start/`：创建或继续唯一答卷；首次开始时按测试设置固化该学生的题目和选项顺序。
+- `PATCH /api/v1/student/assessments/{id}/answer/`：逐题暂存答案。
+- `POST /api/v1/student/assessments/{id}/submit/`：交卷、自动判分并写入学习事件。
+
+测试详细设计见 `docs/assessment_module_design.md`。
+
+## 课堂实名文字聊天 API
+
+教师端：
+
+```text
+GET   /api/v1/teacher/classroom/sessions/{id}/chat/
+PATCH /api/v1/teacher/classroom/sessions/{id}/chat/settings/
+GET   /api/v1/teacher/classroom/sessions/{id}/chat/messages/?room_type=&target_id=
+POST  /api/v1/teacher/classroom/sessions/{id}/chat/messages/
+POST  /api/v1/teacher/classroom/sessions/{id}/chat/read/
+GET   /api/v1/teacher/classroom/sessions/{id}/chat/moderation/?status=pending|reviewed|all
+POST  /api/v1/teacher/classroom/sessions/{id}/chat/messages/{message_id}/moderate/
+```
+
+学生端：
+
+```text
+GET  /api/v1/student/classroom/{id}/chat/
+GET  /api/v1/student/classroom/{id}/chat/messages/?room_type=&target_id=
+POST /api/v1/student/classroom/{id}/chat/messages/
+POST /api/v1/student/classroom/{id}/chat/read/
+POST /api/v1/student/classroom/{id}/chat/moderation-feedback/{message_id}/ack/
+```
+
+`room_type` 只允许 `whole_class`、`teacher_private`、`group`。发送体包含 `room_type`、可选 `target_id` 和最多 500 字的 `content`。
+
+教师审核的 `action` 只允许 `allow`、`warn`、`remove`、`deduct`；扣分时另传正数 `points`，系统不自动扣分。
+
+学生消息接口不返回 `removed` 消息，包括该消息的原发送学生。`warn`、`remove`、`deduct` 通过聊天上下文中的 `moderation_feedbacks` 返回一次性反馈；学生确认后调用 `ack` 接口，刷新不再重复提示。
+
+WebSocket 使用 `/ws/classrooms/{session_id}/chat/`。客户端只能发送 `ping`，聊天消息必须走 REST API。服务器推送 `chat.settings.updated`、`chat.message.created`、`chat.moderation.pending` 和 `chat.message.reviewed` 等变化事件，客户端收到后重新读取有权限的数据。
+
+完整规则见 `docs/classroom_chat_design.md`。

@@ -133,3 +133,22 @@ Celery beat：
 ```powershell
 .\.venv\Scripts\celery.exe -A config beat -l info
 ```
+
+## 课堂聊天部署补充
+
+课堂实时聊天要求正式环境使用 Redis channel layer：
+
+```env
+CHANNEL_LAYER_BACKEND=redis
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+开发机未安装 Redis 时可使用 `CHANNEL_LAYER_BACKEND=memory`，但只支持单个 ASGI 进程，不能用于学校正式多进程部署。
+
+必须使用 ASGI 启动：
+
+```powershell
+.\scripts\run_asgi.ps1 -Port 8010
+```
+
+`run_dev.ps1`、`run_lan.ps1` 和 `start_lan_background.ps1` 已统一使用 Uvicorn。Waitress/WSGI 不支持 WebSocket，`run_waitress_lan.ps1` 现会转交 ASGI 启动脚本。

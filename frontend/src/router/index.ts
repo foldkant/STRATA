@@ -21,6 +21,8 @@ import TeacherStudentsView from '@/views/teacher/StudentsView.vue'
 import TeacherNoticesView from '@/views/teacher/NoticesView.vue'
 import TeacherFeedbackView from '@/views/teacher/FeedbackView.vue'
 import TeacherResourcesView from '@/views/teacher/ResourcesView.vue'
+import TeacherQuestionBankView from '@/views/teacher/QuestionBankView.vue'
+import TeacherAssessmentsView from '@/views/teacher/AssessmentsView.vue'
 import TeacherModulePlaceholder from '@/views/teacher/ModulePlaceholderView.vue'
 import StudentDashboard from '@/views/student/DashboardView.vue'
 import StudentCoursesView from '@/views/student/CoursesView.vue'
@@ -31,12 +33,17 @@ import StudentOnboardingView from '@/views/student/OnboardingView.vue'
 import StudentPretestsView from '@/views/student/PretestsView.vue'
 import StudentNoticesView from '@/views/student/NoticesView.vue'
 import StudentFeedbackView from '@/views/student/FeedbackView.vue'
+import StudentAssessmentsView from '@/views/student/AssessmentsView.vue'
+import StudentAssessmentWorkspaceView from '@/views/student/AssessmentWorkspaceView.vue'
+import StudentProfileView from '@/views/student/ProfileView.vue'
 import StudentModulePlaceholder from '@/views/student/ModulePlaceholderView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
+import LearningPageView from '@/views/LearningPageView.vue'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/login' },
   { path: '/login', component: LoginView, meta: { public: true } },
+  { path: '/learning-pages/:pageId', component: LearningPageView, meta: { roles: ['teacher', 'student'] } },
   { path: '/super-admin', component: SuperAdminDashboard, meta: { role: 'super_admin' } },
   { path: '/super-admin/schools', component: SchoolsView, meta: { role: 'super_admin' } },
   { path: '/super-admin/school-admins', component: SchoolAdminsView, meta: { role: 'super_admin' } },
@@ -55,22 +62,15 @@ const routes: RouteRecordRaw[] = [
   { path: '/teacher/lessons/:lessonId/design', component: TeacherLessonDesignerView, meta: { role: 'teacher' } },
   { path: '/teacher/classroom', component: TeacherClassroomView, meta: { role: 'teacher' } },
   { path: '/teacher/classroom/:sessionId', component: TeacherClassroomConsoleView, meta: { role: 'teacher' } },
-  {
-    path: '/teacher/tasks',
-    component: TeacherModulePlaceholder,
-    meta: { role: 'teacher', title: '任务与测试', description: '维护课堂任务、随堂测试、作业批改和学习过程反馈。' }
-  },
+  { path: '/teacher/assessments', component: TeacherAssessmentsView, meta: { role: 'teacher' } },
+  { path: '/teacher/tasks', redirect: '/teacher/assessments' },
   {
     path: '/teacher/projects',
     component: TeacherModulePlaceholder,
     meta: { role: 'teacher', title: '项目学习', description: '管理项目任务、作品提交、自评互评和教师评价。' }
   },
   { path: '/teacher/students', component: TeacherStudentsView, meta: { role: 'teacher' } },
-  {
-    path: '/teacher/question-bank',
-    component: TeacherModulePlaceholder,
-    meta: { role: 'teacher', title: '题库资源', description: '教师可维护个人题库，并使用学校公共题库组卷。' }
-  },
+  { path: '/teacher/question-bank', component: TeacherQuestionBankView, meta: { role: 'teacher' } },
   {
     path: '/teacher/documents',
     component: TeacherDocumentsView,
@@ -108,6 +108,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/student/courses/:courseId', component: StudentCourseDetailView, meta: { role: 'student' } },
   { path: '/student/lessons/:lessonId/workspace', component: StudentLessonWorkspaceView, meta: { role: 'student' } },
   { path: '/student/classroom/:sessionId', component: StudentClassroomView, meta: { role: 'student' } },
+  { path: '/student/assessments', component: StudentAssessmentsView, meta: { role: 'student' } },
+  { path: '/student/assessments/:assessmentId', component: StudentAssessmentWorkspaceView, meta: { role: 'student' } },
   {
     path: '/student/tasks',
     component: StudentModulePlaceholder,
@@ -120,8 +122,8 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/student/profile',
-    component: StudentModulePlaceholder,
-    meta: { role: 'student', title: '学习档案', description: '查看课程进度、提交记录、前测结果和教师反馈。' }
+    component: StudentProfileView,
+    meta: { role: 'student', title: '学习档案' }
   },
   { path: '/student/notices', component: StudentNoticesView, meta: { role: 'student' } },
   { path: '/student/feedback', component: StudentFeedbackView, meta: { role: 'student' } }
@@ -145,6 +147,11 @@ router.beforeEach(async (to) => {
   }
   const requiredRole = to.meta.role
   if (requiredRole && auth.user?.role !== requiredRole) {
+    return auth.homePath
+  }
+  const requiredRoles = Array.isArray(to.meta.roles) ? to.meta.roles.filter((role): role is string => typeof role === 'string') : []
+  const currentRole = auth.user?.role
+  if (requiredRoles.length && (!currentRole || !requiredRoles.includes(currentRole))) {
     return auth.homePath
   }
   return true

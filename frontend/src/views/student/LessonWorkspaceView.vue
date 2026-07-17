@@ -256,7 +256,7 @@ onMounted(loadWorkspace)
         </div>
 
         <div class="student-preview-stage">
-          <ResourcePreview :resource="selectedResource" office-mode="view" />
+          <ResourcePreview :resource="selectedResource" office-mode="view" learning-page-interactive />
         </div>
       </article>
 

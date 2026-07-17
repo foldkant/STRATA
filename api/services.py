@@ -1,9 +1,11 @@
 ﻿from __future__ import annotations
 
 import json
+import math
 import re
 import urllib.error
 import urllib.request
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -22,6 +24,7 @@ from courses.models import (
     ClassroomSession,
     Course,
     CourseClass,
+    LearningWebPage,
     Lesson,
     LessonStep,
     Resource,
@@ -75,16 +78,33 @@ RESOURCE_ALLOWED_EXTENSIONS = {
     ".rar",
     ".7z",
 }
-LESSON_QUESTION_TYPES = {"single", "multiple", "judge", "blank", "text"}
+CLASSROOM_COMMANDS = {
+    "sign_in": {"activity_type": ClassroomActivity.ActivityType.SIGN_IN, "title": "课堂签到"},
+    "random_pick": {"activity_type": ClassroomActivity.ActivityType.QUESTION, "title": "随机点名"},
+    "quick_answer": {"activity_type": ClassroomActivity.ActivityType.QUICK_ANSWER, "title": "抢答"},
+    "timer": {"activity_type": ClassroomActivity.ActivityType.TASK, "title": "课堂倒计时"},
+    "broadcast": {"activity_type": ClassroomActivity.ActivityType.BROADCAST, "title": "课堂广播"},
+}
+LESSON_QUESTION_TYPES = {"single", "multiple", "judge", "blank", "text", "file"}
 LESSON_QUESTION_TYPE_LABELS = {
     "single": "单选",
     "multiple": "多选",
     "judge": "判断",
     "blank": "填空",
     "text": "简答",
+    "file": "附件提交",
 }
 LESSON_TARGET_LAYER_VALUES = {item.value for item in LessonStep.TargetLayer}
+LESSON_FILE_DEFAULT_EXTENSIONS = ["doc", "docx", "ppt", "pptx", "xls", "xlsx", "pdf", "zip", "rar", "7z", "png", "jpg", "jpeg"]
+LESSON_FILE_ALLOWED_EXTENSIONS = set(LESSON_FILE_DEFAULT_EXTENSIONS + ["webp", "gif", "mp4", "webm", "mov", "mp3", "wav", "csv", "txt", "md"])
 AI_LAYER_TARGETS = ("A", "B", "C", "A/B", "B/C")
+CLASSROOM_EVALUATION_TYPES = ("self", "peer", "teacher")
+LEARNING_PAGE_BLOCK_TYPES = {"content", "callout", "list", "steps", "cards", "table", "code", "visualization", "interactive", "form"}
+LEARNING_PAGE_FIELD_TYPES = {"single", "multiple", "select", "short_text", "long_text", "number", "scale"}
+LEARNING_PAGE_ACCENTS = {"blue", "green", "cyan", "amber", "red", "indigo"}
+LEARNING_PAGE_VISUALIZATION_TYPES = {"process", "timeline", "bars", "binary"}
+LEARNING_PAGE_VISUALIZATION_TONES = {"blue", "green", "cyan", "amber", "red", "indigo"}
+LEARNING_PAGE_GENERATION_MODES = {"auto", "interactive", "structured"}
 TEACHER_IMPORT_HEADERS = ["登录账号", "姓名", "联系电话", "初始密码", "状态"]
 STUDENT_IMPORT_HEADERS = ["登录账号", "姓名", "学号", "班级", "联系电话", "初始密码", "层级", "小组号", "积分", "状态"]
 DEFAULT_AI_BASE_URL = "https://api.deepseek.com"
@@ -306,8 +326,9 @@ def _call_teacher_chat_json(request, *, system_prompt: str, user_prompt: str, ma
             "Accept": "application/json",
         },
     )
+    request_timeout = 90 if max_tokens > 4000 else 45
     try:
-        with urllib.request.urlopen(req, timeout=45) as response:
+        with urllib.request.urlopen(req, timeout=request_timeout) as response:
             raw = response.read(1024 * 256)
             payload = json.loads(raw.decode("utf-8") or "{}")
     except urllib.error.HTTPError as exc:
@@ -339,7 +360,388 @@ def _call_teacher_chat_json(request, *, system_prompt: str, user_prompt: str, ma
     return result
 
 
+def _learning_page_text(value, max_length: int) -> str:
+    return normalize_text(str(value or ""))[:max_length]
+
+
+def _learning_page_identifier(value, *, prefix: str, index: int, seen: set[str]) -> str:
+    identifier = re.sub(r"[^A-Za-z0-9_-]+", "_", str(value or "").strip())[:64].strip("_")
+    if not identifier or identifier in seen:
+        identifier = f"{prefix}_{index}"
+    suffix = 2
+    candidate = identifier
+    while candidate in seen:
+        candidate = f"{identifier}_{suffix}"[:64]
+        suffix += 1
+    seen.add(candidate)
+    return candidate
+
+
+def clean_learning_web_page_schema(raw_schema, *, fallback_title: str = "学习任务单") -> dict:
+    if not isinstance(raw_schema, dict):
+        raise ServiceError("AI 学习网页格式不正确，请重试。", errors={"schema": ["返回值不是 JSON 对象。"]}, status=400)
+
+    title = _learning_page_text(raw_schema.get("title") or fallback_title, 128) or fallback_title
+    subtitle = _learning_page_text(raw_schema.get("subtitle"), 240)
+    accent = str(raw_schema.get("accent") or "blue").strip().lower()
+    if accent not in LEARNING_PAGE_ACCENTS:
+        accent = "blue"
+    raw_blocks = raw_schema.get("blocks")
+    if not isinstance(raw_blocks, list):
+        raw_blocks = []
+
+    blocks: list[dict] = []
+    block_ids: set[str] = set()
+    form_ids: set[str] = set()
+    total_fields = 0
+    interactive_blocks = 0
+    for index, raw_block in enumerate(raw_blocks[:30], start=1):
+        if not isinstance(raw_block, dict):
+            continue
+        block_type = str(raw_block.get("type") or "content").strip().lower()
+        if block_type in {"animation", "animated_visualization", "visual"}:
+            block_type = "visualization"
+        if block_type in {"html_animation", "web_animation", "interactive_animation", "simulation"}:
+            block_type = "interactive"
+        if block_type not in LEARNING_PAGE_BLOCK_TYPES:
+            continue
+        block = {
+            "id": _learning_page_identifier(raw_block.get("id"), prefix="block", index=index, seen=block_ids),
+            "type": block_type,
+            "title": _learning_page_text(raw_block.get("title"), 120),
+        }
+        if block_type in {"content", "callout"}:
+            block["body"] = _learning_page_text(raw_block.get("body") or raw_block.get("content"), 5000)
+            if block_type == "callout":
+                tone = str(raw_block.get("tone") or "info").strip().lower()
+                block["tone"] = tone if tone in {"info", "success", "warning", "danger"} else "info"
+        elif block_type == "list":
+            raw_items = raw_block.get("items") if isinstance(raw_block.get("items"), list) else []
+            block["items"] = [_learning_page_text(item, 500) for item in raw_items[:30] if _learning_page_text(item, 500)]
+        elif block_type in {"steps", "cards"}:
+            raw_items = raw_block.get("items") if isinstance(raw_block.get("items"), list) else []
+            item_rows = []
+            for raw_item in raw_items[:20]:
+                if not isinstance(raw_item, dict):
+                    continue
+                item_title = _learning_page_text(raw_item.get("title"), 120)
+                item_body = _learning_page_text(raw_item.get("body") or raw_item.get("description"), 1200)
+                if item_title or item_body:
+                    item_rows.append({"title": item_title, "body": item_body})
+            block["items"] = item_rows
+        elif block_type == "table":
+            raw_headers = raw_block.get("headers") if isinstance(raw_block.get("headers"), list) else []
+            headers = [_learning_page_text(item, 100) for item in raw_headers[:8]]
+            raw_rows = raw_block.get("rows") if isinstance(raw_block.get("rows"), list) else []
+            rows = []
+            for raw_row in raw_rows[:30]:
+                if not isinstance(raw_row, list):
+                    continue
+                rows.append([_learning_page_text(item, 500) for item in raw_row[: len(headers) or 8]])
+            block["headers"] = headers
+            block["rows"] = rows
+        elif block_type == "code":
+            block["language"] = re.sub(r"[^A-Za-z0-9_+.#-]", "", str(raw_block.get("language") or "text"))[:24]
+            block["code"] = str(raw_block.get("code") or "")[:12000]
+        elif block_type == "visualization":
+            visualization_type = str(raw_block.get("visualization_type") or raw_block.get("kind") or "process").strip().lower()
+            visualization_aliases = {
+                "flow": "process",
+                "flowchart": "process",
+                "sequence": "timeline",
+                "bar": "bars",
+                "bar_chart": "bars",
+                "chart": "bars",
+                "binary_stream": "binary",
+                "encoding": "binary",
+            }
+            visualization_type = visualization_aliases.get(visualization_type, visualization_type)
+            if visualization_type not in LEARNING_PAGE_VISUALIZATION_TYPES:
+                visualization_type = "process"
+            raw_items = raw_block.get("items") if isinstance(raw_block.get("items"), list) else []
+            item_rows = []
+            for raw_item in raw_items[:16]:
+                if not isinstance(raw_item, dict):
+                    continue
+                label = _learning_page_text(raw_item.get("label") or raw_item.get("title"), 100)
+                detail = _learning_page_text(raw_item.get("detail") or raw_item.get("body") or raw_item.get("description"), 500)
+                code = _learning_page_text(raw_item.get("code") or raw_item.get("token"), 64)
+                try:
+                    value = float(raw_item.get("value")) if raw_item.get("value") not in {None, ""} else None
+                except (TypeError, ValueError):
+                    value = None
+                if value is not None:
+                    value = min(max(value, 0), 1000000)
+                tone = str(raw_item.get("tone") or "blue").strip().lower()
+                if tone not in LEARNING_PAGE_VISUALIZATION_TONES:
+                    tone = "blue"
+                if label or detail or code or value is not None:
+                    item_rows.append({"label": label, "detail": detail, "code": code, "value": value, "tone": tone})
+            if len(item_rows) < 2:
+                continue
+            try:
+                duration_ms = int(raw_block.get("duration_ms") or 5000)
+            except (TypeError, ValueError):
+                duration_ms = 5000
+            block["visualization_type"] = visualization_type
+            block["description"] = _learning_page_text(raw_block.get("description") or raw_block.get("body"), 600)
+            block["duration_ms"] = min(max(duration_ms, 1500), 15000)
+            block["autoplay"] = _clean_bool(raw_block.get("autoplay", True))
+            block["loop"] = _clean_bool(raw_block.get("loop", False))
+            block["items"] = item_rows
+        elif block_type == "interactive":
+            if interactive_blocks >= 4:
+                continue
+            html = str(raw_block.get("html") or "")[:30000]
+            css = str(raw_block.get("css") or "")[:30000]
+            javascript = str(raw_block.get("javascript") or raw_block.get("js") or "")[:30000]
+            if not html.strip() and not javascript.strip():
+                continue
+            try:
+                height = int(raw_block.get("height") or 520)
+            except (TypeError, ValueError):
+                height = 520
+            block["description"] = _learning_page_text(raw_block.get("description"), 600)
+            block["html"] = html
+            block["css"] = css
+            block["javascript"] = javascript
+            block["height"] = min(max(height, 280), 900)
+            interactive_blocks += 1
+        elif block_type == "form":
+            form_id = _learning_page_identifier(raw_block.get("form_id"), prefix="form", index=index, seen=form_ids)
+            raw_fields = raw_block.get("fields") if isinstance(raw_block.get("fields"), list) else []
+            fields = []
+            field_ids: set[str] = set()
+            for field_index, raw_field in enumerate(raw_fields[:30], start=1):
+                if not isinstance(raw_field, dict) or total_fields >= 120:
+                    continue
+                field_type = str(raw_field.get("type") or "short_text").strip().lower()
+                if field_type not in LEARNING_PAGE_FIELD_TYPES:
+                    continue
+                field_id = _learning_page_identifier(raw_field.get("id"), prefix="field", index=field_index, seen=field_ids)
+                label = _learning_page_text(raw_field.get("label"), 160)
+                if not label:
+                    continue
+                field = {
+                    "id": field_id,
+                    "type": field_type,
+                    "label": label,
+                    "required": bool(raw_field.get("required", True)),
+                    "placeholder": _learning_page_text(raw_field.get("placeholder"), 200),
+                }
+                if field_type in {"single", "multiple", "select", "scale"}:
+                    raw_options = raw_field.get("options") if isinstance(raw_field.get("options"), list) else []
+                    options = []
+                    for option in raw_options[:12]:
+                        value = _learning_page_text(option, 120)
+                        if value and value not in options:
+                            options.append(value)
+                    if field_type == "scale" and len(options) < 2:
+                        options = ["1", "2", "3", "4", "5"]
+                    if field_type != "scale" and len(options) < 2:
+                        continue
+                    field["options"] = options
+                if field_type == "number":
+                    try:
+                        field["min"] = float(raw_field.get("min")) if raw_field.get("min") not in {None, ""} else None
+                        field["max"] = float(raw_field.get("max")) if raw_field.get("max") not in {None, ""} else None
+                    except (TypeError, ValueError):
+                        field["min"] = None
+                        field["max"] = None
+                fields.append(field)
+                total_fields += 1
+            if not fields:
+                continue
+            block["form_id"] = form_id
+            block["description"] = _learning_page_text(raw_block.get("description"), 600)
+            block["submit_label"] = _learning_page_text(raw_block.get("submit_label") or "提交", 32) or "提交"
+            block["fields"] = fields
+        blocks.append(block)
+
+    if not blocks:
+        raise ServiceError("AI 没有生成有效网页内容，请调整要求后重试。", errors={"schema": ["页面至少需要一个有效内容区块。"]}, status=400)
+    return {
+        "schema_version": 1,
+        "title": title,
+        "subtitle": subtitle,
+        "accent": accent,
+        "blocks": blocks,
+    }
+
+
+def _learning_page_generation_mode(direction: str, requested_mode: str) -> str:
+    mode = str(requested_mode or "auto").strip().lower()
+    if mode not in LEARNING_PAGE_GENERATION_MODES:
+        raise ServiceError(
+            "学习网页生成模式不正确。",
+            errors={"generation_mode": ["只能选择智能、自由交互动画或受控演示。"]},
+            status=400,
+        )
+    if mode != "auto":
+        return mode
+    animation_terms = ("动画", "交互", "模拟", "仿真", "canvas", "svg", "可视化", "演示过程", "动态展示")
+    normalized_direction = direction.lower()
+    return "interactive" if any(term in normalized_direction for term in animation_terms) else "structured"
+
+
+def _has_executable_interactive_block(schema: dict) -> bool:
+    blocks = schema.get("blocks") if isinstance(schema, dict) else []
+    if not isinstance(blocks, list):
+        return False
+    return any(
+        isinstance(block, dict)
+        and block.get("type") == "interactive"
+        and bool(str(block.get("html") or "").strip())
+        and len(str(block.get("javascript") or "").strip()) >= 20
+        for block in blocks
+    )
+
+
+def generate_learning_web_page_schema(
+    request,
+    lesson: Lesson,
+    direction: str,
+    *,
+    current_page: LearningWebPage | None = None,
+    generation_mode: str = "auto",
+) -> dict:
+    direction = normalize_text(str(direction or ""))
+    if len(direction) < 4 or len(direction) > 3000:
+        raise ServiceError("网页生成要求需为 4-3000 个字符。", errors={"direction": ["请填写清晰的学习网页要求。"]}, status=400)
+
+    effective_mode = _learning_page_generation_mode(direction, generation_mode)
+    system_prompt = (
+        "你是 STRATA 数智教学系统的学习网页设计助手。"
+        "你只能输出平台定义的 JSON 页面结构，禁止输出 Markdown、外链、iframe、图片 URL 或网络请求。"
+        "只有 type=interactive 区块的 html、css、javascript 字段允许包含自包含网页代码；其他区块严禁包含 HTML、CSS、JavaScript。"
+        "页面面向中学生课堂学习，内容要具体、简洁、可操作。只返回严格 JSON 对象。"
+    )
+    schema_example = {
+        "title": "页面标题",
+        "subtitle": "一句话学习目标",
+        "accent": "blue",
+        "blocks": [
+            {"id": "intro", "type": "content", "title": "任务情境", "body": "学习内容"},
+            {"id": "tips", "type": "callout", "tone": "info", "title": "提示", "body": "注意事项"},
+            {"id": "steps", "type": "steps", "title": "操作步骤", "items": [{"title": "步骤一", "body": "说明"}]},
+            {
+                "id": "visual",
+                "type": "visualization",
+                "visualization_type": "process",
+                "title": "过程可视化",
+                "description": "按顺序演示关键变化",
+                "duration_ms": 5000,
+                "autoplay": True,
+                "loop": False,
+                "items": [
+                    {"label": "输入", "detail": "接收原始数据", "code": "A", "tone": "blue"},
+                    {"label": "转换", "detail": "转换为编码", "code": "01000001", "tone": "cyan"},
+                    {"label": "输出", "detail": "完成存储或传输", "tone": "green"},
+                ],
+            },
+            {
+                "id": "custom_animation",
+                "type": "interactive",
+                "title": "自定义交互动画",
+                "description": "需要自由布局或 Canvas/SVG 时使用",
+                "height": 520,
+                "html": "<div id=\"stage\"><button id=\"play\">播放</button><canvas id=\"canvas\"></canvas></div>",
+                "css": "#stage{padding:16px}canvas{display:block;width:100%;height:360px}",
+                "javascript": "document.getElementById('play').addEventListener('click',()=>{/* 绘制动画 */});",
+            },
+            {
+                "id": "form_block",
+                "type": "form",
+                "form_id": "learning_form",
+                "title": "学习记录",
+                "description": "完成后提交",
+                "submit_label": "提交学习记录",
+                "fields": [
+                    {"id": "choice", "type": "single", "label": "请选择", "required": True, "options": ["A", "B", "C"]},
+                    {"id": "reflection", "type": "long_text", "label": "学习反思", "required": True, "placeholder": "写下你的思考"},
+                ],
+            },
+        ],
+    }
+    payload = {
+        "task": "修改学习网页" if current_page else "创建学习网页",
+        "course": lesson.course.title,
+        "subject": lesson.course.subject.name if lesson.course.subject_id else "",
+        "lesson": lesson.title,
+        "teacher_requirement": direction,
+        "generation_mode": effective_mode,
+        "allowed_block_types": sorted(LEARNING_PAGE_BLOCK_TYPES),
+        "allowed_field_types": sorted(LEARNING_PAGE_FIELD_TYPES),
+        "rules": [
+            "可生成多个 form 区块，每个表单必须有唯一 form_id。",
+            "表单字段 id 在所属表单内唯一；选择类字段必须提供 2-12 个 options。",
+            "scale 默认使用 1-5 五级量表。",
+            "content/callout 使用纯文本，不写 HTML 标签。",
+            "需要表格时使用 table 的 headers 和 rows，需要代码时使用 code 区块。",
+            "需要动态演示时必须使用 visualization 区块；visualization_type 只能是 process、timeline、bars、binary。",
+            "visualization 的 items 使用 label、detail、code、value、tone；至少 2 项，最多 16 项。bars 必须提供 value，binary 建议提供 code。",
+            "visualization 动画由平台固定渲染器执行，不输出 HTML、CSS、JavaScript。duration_ms 为 1500-15000，可设置 autoplay 和 loop。",
+            "固定 visualization 无法表达的自由动画或交互模拟可使用 interactive 区块，字段为 html、css、javascript、height。",
+            "interactive 必须完全自包含，可使用原生 DOM、CSS 动画、Canvas、内联 SVG 和 JavaScript；禁止外链、fetch、WebSocket、import、iframe、第三方库和资源 URL。",
+            "interactive 的事件必须在 javascript 中使用 addEventListener 绑定，不能在 html 中使用 onclick 等内联事件属性。",
+            "interactive 只用于动画或交互模拟；需要收集学生答案时必须另外生成平台 form 区块。",
+            "教师要求把现有静态步骤改成动画时，应替换同主题 steps/cards 区块，不能保留静态副本后再追加重复动画。",
+            "除 interactive 的 html/css/javascript 字段外，不输出任何链接、脚本、样式代码或未经平台定义的字段。",
+        ],
+        "schema_example": schema_example,
+    }
+    if effective_mode == "interactive":
+        payload["mode_requirement"] = (
+            "必须生成至少一个 type=interactive 的自由交互动画区块。该区块必须同时提供非空 html、css、javascript；"
+            "javascript 必须真正驱动画面变化，使用 requestAnimationFrame、Web Animations API、定时器或 Canvas/SVG 重绘，"
+            "并提供可点击的开始或重新播放控件。不能只返回 visualization、steps、cards 或静态图文来冒充动画。"
+        )
+    else:
+        payload["mode_requirement"] = "使用平台受控区块；动态演示使用 visualization，不生成 interactive 自定义代码。"
+    if current_page is not None:
+        payload["current_page"] = current_page.schema
+        payload["revision_rule"] = "保留教师未要求修改的内容、表单 ID 和字段 ID，避免已有统计失去对应关系；若教师要求把某内容改成动画，替换同主题静态区块，不追加重复副本。"
+    raw_schema = _call_teacher_chat_json(
+        request,
+        system_prompt=system_prompt,
+        user_prompt=json.dumps(payload, ensure_ascii=False),
+        max_tokens=12000,
+    )
+    cleaned_schema = clean_learning_web_page_schema(raw_schema, fallback_title=current_page.title if current_page else lesson.title)
+    if effective_mode != "interactive" or _has_executable_interactive_block(cleaned_schema):
+        return cleaned_schema
+
+    repair_payload = {
+        **payload,
+        "task": "纠正未生成成功的自由交互动画网页",
+        "invalid_result": raw_schema,
+        "repair_requirement": (
+            "上一次结果没有可执行的 interactive 区块。请重新返回完整页面 JSON，并确保至少一个 interactive 区块包含 html、css 和不少于 20 字符的 javascript。"
+            "脚本必须通过 addEventListener 绑定控件并真实播放动画；不要仅增加 visualization 区块。"
+        ),
+    }
+    repaired_raw_schema = _call_teacher_chat_json(
+        request,
+        system_prompt=system_prompt,
+        user_prompt=json.dumps(repair_payload, ensure_ascii=False),
+        max_tokens=12000,
+    )
+    repaired_schema = clean_learning_web_page_schema(
+        repaired_raw_schema,
+        fallback_title=current_page.title if current_page else lesson.title,
+    )
+    if not _has_executable_interactive_block(repaired_schema):
+        raise ServiceError(
+            "AI 未生成可执行动画，请补充动画对象、变化过程和交互方式后重试。",
+            errors={"animation": ["自由动画必须包含可执行的 HTML、CSS 和 JavaScript。"]},
+            status=400,
+        )
+    return repaired_schema
+
+
 def _lesson_question_base_score(question_type: str) -> float:
+    if question_type == "file":
+        return 10.0
     if question_type == "text":
         return 5.0
     if question_type == "blank":
@@ -446,6 +848,128 @@ def _clean_ai_generated_questions(raw_questions, *, requested_count: int, fallba
             }
         )
     return cleaned
+
+
+def _clean_ai_generated_evaluation_criteria(raw_items, *, fallback_prefix: str) -> list[dict]:
+    if not isinstance(raw_items, list):
+        return []
+    cleaned: list[dict] = []
+    seen_titles = set()
+    for index, raw_item in enumerate(raw_items[:8], start=1):
+        if not isinstance(raw_item, dict):
+            continue
+        title = normalize_text(str(raw_item.get("title") or raw_item.get("name") or ""))
+        description = normalize_text(str(raw_item.get("description") or raw_item.get("detail") or ""))
+        if not title:
+            title = f"{fallback_prefix}{index}"
+        title = title[:80]
+        if title in seen_titles:
+            continue
+        seen_titles.add(title)
+        cleaned.append(
+            {
+                "id": f"crit_{uuid4().hex[:10]}",
+                "title": title,
+                "description": description[:300],
+                "sort_order": index * 10,
+            }
+        )
+    return cleaned
+
+
+def generate_classroom_evaluation_criteria_with_ai(request, session: ClassroomSession | None, data, *, course: Course | None = None) -> dict:
+    raw_types = data.get("types") if isinstance(data, dict) else None
+    if not isinstance(raw_types, list) or not raw_types:
+        raw_types = list(CLASSROOM_EVALUATION_TYPES)
+    types = [str(item).strip() for item in raw_types if str(item).strip() in CLASSROOM_EVALUATION_TYPES]
+    if not types:
+        raise ServiceError("请选择要生成的评价类型。", errors={"types": ["请选择自评、互评或师评。"]}, status=400)
+
+    direction = str(data.get("direction") or "").strip() if isinstance(data, dict) else ""
+    if len(direction) > 1000:
+        raise ServiceError("评价生成方向不能超过 1000 个字符。", errors={"direction": ["评价生成方向不能超过 1000 个字符。"]}, status=400)
+
+    course = course or (session.course if session is not None else None)
+    if course is None:
+        raise ServiceError("课程不存在，无法生成评价项。", status=404)
+
+    step = session.current_step if session is not None and session.current_step_id else None
+    questions = []
+    if step and isinstance(step.question_items, list):
+        for item in step.question_items[:8]:
+            if isinstance(item, dict):
+                questions.append(
+                    {
+                        "type": item.get("question_type"),
+                        "stem": str(item.get("stem") or "")[:160],
+                        "target_layer": item.get("target_layer", "all"),
+                    }
+                )
+    resources = []
+    if step and isinstance(step.resource_items, list):
+        for item in step.resource_items[:8]:
+            if isinstance(item, dict):
+                resources.append(str(item.get("title") or item.get("attachment_name") or "")[:120])
+            else:
+                resources.append(str(item)[:120])
+
+    type_labels = {"self": "学生自评", "peer": "小组互评", "teacher": "教师评价"}
+    system_prompt = (
+        "你是 STRATA 数智教学系统的课堂评价设计助手。"
+        "请根据课堂内容设计 5 星评价项，不能使用分数、权重或百分制。"
+        "只返回 JSON 对象，不要 Markdown。"
+    )
+    user_prompt = json.dumps(
+        {
+            "任务": "生成课堂评价项",
+            "要求": [
+                "每种评价类型生成 3-5 个评价项。",
+                "每个评价项包含 title 和 description。",
+                "评价方式固定为 1-5 星，不要出现分数、满分、扣分、权重等表达。",
+                "自评关注个人投入、理解、完成情况和反思。",
+                "互评关注小组协作、贡献、沟通和支持，只有小组活动时使用。",
+                "师评关注任务达成、学习过程、作品质量和课堂表现。",
+                "语言简洁，适合高中课堂即时评价。",
+            ],
+            "需要生成": [{"type": item, "label": type_labels[item]} for item in types],
+            "教师补充方向": direction,
+            "课堂": {
+                "title": session.title if session is not None else course.title,
+                "course": course.title,
+                "lesson": session.lesson.title if session is not None and session.lesson_id else "",
+                "class": session.class_group.name if session is not None and session.class_group_id else "",
+                "current_step": step.title if step else "",
+                "student_instruction": step.student_instruction[:800] if step else "",
+                "step_type": step.get_step_type_display() if step else "",
+                "resources": resources,
+                "questions": questions,
+                "activities": step.activity_items[:8] if step and isinstance(step.activity_items, list) else [],
+            },
+            "返回格式": {
+                "self": [{"title": "自评项", "description": "5星观察说明"}],
+                "peer": [{"title": "互评项", "description": "5星观察说明"}],
+                "teacher": [{"title": "师评项", "description": "5星观察说明"}],
+            },
+        },
+        ensure_ascii=False,
+    )
+    result = _call_teacher_chat_json(request, system_prompt=system_prompt, user_prompt=user_prompt, max_tokens=2200)
+    payload = {}
+    fallback_prefix = {"self": "自评维度", "peer": "互评维度", "teacher": "师评维度"}
+    for item in types:
+        payload[item] = _clean_ai_generated_evaluation_criteria(result.get(item), fallback_prefix=fallback_prefix[item])
+    if not any(payload.values()):
+        raise ServiceError("AI 没有返回有效评价项，请调整方向后重试。", errors={"ai": ["未生成有效评价项。"]}, status=400)
+
+    write_audit(
+        request,
+        "teacher.ai_generate_classroom_evaluation" if session is not None else "teacher.ai_generate_course_evaluation",
+        school=request.user.school,
+        target_type="classroom_session" if session is not None else "course",
+        target_id=session.id if session is not None else course.id,
+        detail={"types": types, "has_direction": bool(direction)},
+    )
+    return payload
 
 
 def generate_lesson_step_questions_with_ai(request, data) -> dict:
@@ -597,6 +1121,192 @@ def generate_lesson_step_questions_with_ai(request, data) -> dict:
             "note": "系统按 A、B、C、A/B、B/C 同时给题目和分值建议；后续接入分层模型后，只作为建议，必须由教师确认。",
         },
     }
+
+
+QUESTION_BANK_AI_TYPES = {"single", "multiple", "judge", "blank", "text"}
+QUESTION_BANK_AI_DIFFICULTIES = {"easy", "normal", "hard"}
+
+
+def _clean_question_bank_ai_drafts(raw_questions, *, count: int, fallback_type: str, fallback_difficulty: str) -> list[dict]:
+    if not isinstance(raw_questions, list):
+        return []
+    drafts = []
+    for raw in raw_questions[:count]:
+        if not isinstance(raw, dict):
+            continue
+        question_type = str(raw.get("question_type") or fallback_type).strip().lower()
+        if question_type not in QUESTION_BANK_AI_TYPES:
+            question_type = fallback_type if fallback_type in QUESTION_BANK_AI_TYPES else "single"
+        difficulty = str(raw.get("difficulty") or fallback_difficulty).strip().lower()
+        if difficulty not in QUESTION_BANK_AI_DIFFICULTIES:
+            difficulty = fallback_difficulty
+        stem = normalize_text(str(raw.get("stem") or ""))[:2000]
+        if len(stem) < 2:
+            continue
+
+        options = []
+        if question_type == "judge":
+            options = ["正确", "错误"]
+        elif question_type in {"single", "multiple"}:
+            raw_options = raw.get("options") if isinstance(raw.get("options"), list) else []
+            for value in raw_options[:10]:
+                text = normalize_text(str(value))[:300]
+                if text and text not in options:
+                    options.append(text)
+            if len(options) < 2:
+                continue
+
+        raw_answer = raw.get("answer")
+        if isinstance(raw_answer, list):
+            answer = [normalize_text(str(value))[:500] for value in raw_answer if normalize_text(str(value))]
+        elif isinstance(raw_answer, (str, int, float, bool)) and raw_answer not in {None, ""}:
+            answer = [normalize_text(str(raw_answer))[:500]]
+        else:
+            answer = []
+        if question_type in {"single", "judge"}:
+            answer = answer[:1]
+        if question_type in {"single", "multiple", "judge"}:
+            answer = [value for value in answer if value in options]
+            if not answer:
+                continue
+        if question_type == "blank" and not answer:
+            continue
+        if question_type == "text":
+            answer = []
+
+        default_score = _lesson_question_base_score(question_type)
+        try:
+            default_score = float(raw.get("default_score") or raw.get("score") or default_score)
+        except (TypeError, ValueError):
+            pass
+        if not math.isfinite(default_score):
+            default_score = _lesson_question_base_score(question_type)
+        default_score = min(max(default_score, 0.5), 100)
+        drafts.append(
+            {
+                "draft_id": f"ai_{uuid4().hex[:12]}",
+                "stem": stem,
+                "question_type": question_type,
+                "options": options,
+                "answer": answer,
+                "analysis": normalize_text(str(raw.get("analysis") or ""))[:4000],
+                "difficulty": difficulty,
+                "knowledge_point": normalize_text(str(raw.get("knowledge_point") or ""))[:128],
+                "default_score": default_score,
+                "selected": True,
+            }
+        )
+    return drafts
+
+
+def generate_question_bank_drafts_with_ai(request, data, *, subject_name: str) -> dict:
+    direction = normalize_text(str(data.get("direction") or ""))
+    knowledge_point = normalize_text(str(data.get("knowledge_point") or ""))
+    question_type = str(data.get("question_type") or "mixed").strip().lower()
+    difficulty = str(data.get("difficulty") or "normal").strip().lower()
+    requirement = normalize_text(str(data.get("requirement") or ""))
+    try:
+        count = int(data.get("count") or 5)
+    except (TypeError, ValueError):
+        count = 0
+
+    errors: dict[str, list[str]] = {}
+    if len(direction) < 4 or len(direction) > 1500:
+        errors["direction"] = ["出题方向需为 4-1500 个字符。"]
+    if len(knowledge_point) > 128:
+        errors["knowledge_point"] = ["知识点不能超过 128 个字符。"]
+    if question_type != "mixed" and question_type not in QUESTION_BANK_AI_TYPES:
+        errors["question_type"] = ["题型不正确。"]
+    if difficulty not in QUESTION_BANK_AI_DIFFICULTIES:
+        errors["difficulty"] = ["难度不正确。"]
+    if count < 1 or count > 20:
+        errors["count"] = ["单次生成数量需为 1-20 道。"]
+    if len(requirement) > 1000:
+        errors["requirement"] = ["补充要求不能超过 1000 个字符。"]
+    if errors:
+        raise ServiceError("AI 题库出题参数校验失败。", errors=errors, status=400)
+
+    allowed_types = [question_type] if question_type != "mixed" else ["single", "multiple", "judge", "blank", "text"]
+    type_rule = (
+        f"所有题目必须使用 {question_type} 题型。"
+        if question_type != "mixed"
+        else "在单选、多选、判断、填空、简答中合理混合题型；优先包含可自动判分的客观题。"
+    )
+    system_prompt = (
+        "你是 STRATA 数智教学系统的学校共享题库出题助手。"
+        "你只能生成结构化题目草稿，不能输出代码、Markdown、网页、外链或教学说明。"
+        "内容必须事实准确、表述清晰、无歧义，并严格返回 JSON 对象。"
+    )
+    user_prompt = json.dumps(
+        {
+            "task": f"为{subject_name}共享题库生成 {count} 道题目草稿",
+            "subject": subject_name,
+            "direction": direction,
+            "knowledge_point": knowledge_point,
+            "question_type": question_type,
+            "difficulty": difficulty,
+            "requirement": requirement,
+            "allowed_question_types": allowed_types,
+            "rules": [
+                type_rule,
+                "single 和 multiple 必须提供 4 个互不重复的 options；judge 的 options 固定为正确、错误。",
+                "answer 必须是数组，内容必须与 options 的完整文本一致；single 和 judge 只能有一个答案。",
+                "blank 至少提供一个参考答案；text 的 answer 必须为空数组，并在 analysis 中给出评分要点。",
+                "difficulty 只能是 easy、normal、hard；默认使用请求难度，但可在混合题中作少量合理变化。",
+                "default_score 为 0.5-100 的数字；客观题建议 2 分、填空题 3 分、简答题 5-10 分。",
+                "knowledge_point 应具体，analysis 必须解释答案或提供评分要点。",
+                f"必须返回恰好 {count} 道题，不得重复题干或仅替换数字形成低质量重复题。",
+            ],
+            "response_schema": {
+                "questions": [
+                    {
+                        "question_type": "single",
+                        "stem": "题干",
+                        "options": ["选项1", "选项2", "选项3", "选项4"],
+                        "answer": ["选项1"],
+                        "analysis": "答案解析",
+                        "difficulty": difficulty,
+                        "knowledge_point": knowledge_point or "具体知识点",
+                        "default_score": 2,
+                    }
+                ]
+            },
+        },
+        ensure_ascii=False,
+    )
+    raw = _call_teacher_chat_json(
+        request,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        max_tokens=min(max(2800, count * 650), 12000),
+    )
+    fallback_type = question_type if question_type != "mixed" else "single"
+    drafts = _clean_question_bank_ai_drafts(
+        raw.get("questions"),
+        count=count,
+        fallback_type=fallback_type,
+        fallback_difficulty=difficulty,
+    )
+    if not drafts:
+        raise ServiceError(
+            "AI 没有生成可用题目，请调整出题方向后重试。",
+            errors={"ai": ["生成结果未通过题型、选项和答案校验。"]},
+            status=400,
+        )
+    write_audit(
+        request,
+        "teacher.question_bank.ai_generate",
+        school=request.user.school,
+        target_type="question_bank_draft",
+        detail={
+            "subject": subject_name,
+            "question_type": question_type,
+            "difficulty": difficulty,
+            "requested_count": count,
+            "valid_count": len(drafts),
+        },
+    )
+    return {"questions": drafts, "requested_count": count, "valid_count": len(drafts)}
 
 
 def _clean_id_list(data) -> list[int]:
@@ -3008,7 +3718,7 @@ def _resource_binding(resource: Resource) -> dict:
     }
 
 
-def _clean_resource_items(request, data, field: str, errors: dict, *, max_items: int = 30) -> list[dict]:
+def _clean_resource_items(request, data, field: str, errors: dict, *, lesson: Lesson | None = None, max_items: int = 30) -> list[dict]:
     raw_items = data.get(field, [])
     if raw_items is None or raw_items == "":
         return []
@@ -3020,6 +3730,37 @@ def _clean_resource_items(request, data, field: str, errors: dict, *, max_items:
     seen = set()
     for raw_item in raw_items:
         if isinstance(raw_item, dict):
+            kind = str(raw_item.get("kind") or "resource").strip()
+            if kind == "learning_page":
+                try:
+                    page_id = int(raw_item.get("learning_page_id") or 0)
+                except (TypeError, ValueError):
+                    page_id = 0
+                page = LearningWebPage.objects.filter(
+                    pk=page_id,
+                    teacher=request.user,
+                    school=request.user.school,
+                    is_active=True,
+                ).first()
+                if page is None or (lesson is not None and page.lesson_id != lesson.id):
+                    errors[field] = ["AI 学习网页不存在、无权绑定或不属于当前课时。"]
+                    continue
+                key = f"learning_page:{page.id}"
+                if key not in seen:
+                    seen.add(key)
+                    items.append(
+                        {
+                            "id": f"learning-page-{page.id}",
+                            "learning_page_id": page.id,
+                            "title": page.title,
+                            "attachment_url": "",
+                            "attachment_name": "",
+                            "file_ext": "",
+                            "kind": "learning_page",
+                            "revision_no": page.revision_no,
+                        }
+                    )
+                continue
             raw_id = raw_item.get("id") or raw_item.get("resource_id")
             if raw_id:
                 try:
@@ -3064,6 +3805,28 @@ def _clean_resource_items(request, data, field: str, errors: dict, *, max_items:
         errors[field] = [f"最多绑定 {max_items} 个资源。"]
         return items[:max_items]
     return items
+
+
+def _clean_lesson_file_config(raw_config) -> dict:
+    config = raw_config if isinstance(raw_config, dict) else {}
+    raw_extensions = config.get("allowed_extensions")
+    if not isinstance(raw_extensions, list):
+        raw_extensions = LESSON_FILE_DEFAULT_EXTENSIONS
+    extensions: list[str] = []
+    for raw_extension in raw_extensions:
+        ext = clean_resource_ext(str(raw_extension))
+        if ext in LESSON_FILE_ALLOWED_EXTENSIONS and ext not in extensions:
+            extensions.append(ext)
+    if not extensions:
+        extensions = list(LESSON_FILE_DEFAULT_EXTENSIONS)
+    try:
+        max_size_mb = int(config.get("max_size_mb", 100) or 100)
+    except (TypeError, ValueError):
+        max_size_mb = 100
+    return {
+        "allowed_extensions": extensions[:24],
+        "max_size_mb": min(max(max_size_mb, 1), 512),
+    }
 
 
 def _clean_lesson_question_items(data, field: str, errors: dict, *, max_items: int = 30) -> list[dict]:
@@ -3134,9 +3897,11 @@ def _clean_lesson_question_items(data, field: str, errors: dict, *, max_items: i
             answer = []
         if question_type in {"single", "multiple"} and answer:
             answer = [value for value in answer if value in options]
+        if question_type == "file":
+            answer = []
 
         try:
-            score = float(raw_item.get("score", 1) or 0)
+            score = float(raw_item.get("score", _lesson_question_base_score(question_type)) or 0)
         except (TypeError, ValueError):
             errors[field] = ["题目分值必须是数字。"]
             score = 0
@@ -3185,6 +3950,7 @@ def _clean_lesson_question_items(data, field: str, errors: dict, *, max_items: i
                 "analysis": analysis,
                 "is_required": _clean_bool(raw_item.get("is_required", True)),
                 "sort_order": sort_order if sort_order is not None else (index + 1) * 10,
+                "file_config": _clean_lesson_file_config(raw_item.get("file_config")) if question_type == "file" else {},
             }
         )
 
@@ -3205,7 +3971,7 @@ def save_lesson_step(request, lesson: Lesson, data, *, step: LessonStep | None =
     estimated_minutes = _clean_optional_int(data.get("estimated_minutes"), "estimated_minutes", errors, min_value=1, max_value=240)
     target_layer = str(data.get("target_layer", LessonStep.TargetLayer.ALL)).strip() or LessonStep.TargetLayer.ALL
     status = str(data.get("status", LessonStep.Status.DRAFT)).strip() or LessonStep.Status.DRAFT
-    resource_items = _clean_resource_items(request, data, "resource_items", errors, max_items=30)
+    resource_items = _clean_resource_items(request, data, "resource_items", errors, lesson=lesson, max_items=30)
     activity_items = _clean_string_items(data, "activity_items", errors, max_items=30, max_length=128)
     question_items = _clean_lesson_question_items(data, "question_items", errors, max_items=30)
 
@@ -3345,7 +4111,15 @@ def _write_classroom_event(
             "step": step.id if step else None,
             "step_status": session.current_step_status,
             "submission_locked": session.submission_locked,
-            "is_layered": session.is_layered,
+            "has_layered_questions": bool(
+                step
+                and isinstance(step.question_items, list)
+                and any(
+                    isinstance(item, dict)
+                    and (str(item.get("target_layer") or "all") not in {"", "all"} or bool(item.get("use_layer_scores")))
+                    for item in step.question_items
+                )
+            ),
         },
         occurred_at=timezone.now(),
     )
@@ -3436,6 +4210,116 @@ def close_classroom_current_step(request, session: ClassroomSession) -> Classroo
     return session
 
 
+def _latest_open_activity(session: ClassroomSession, command: str) -> ClassroomActivity | None:
+    return (
+        session.activities.filter(status=ClassroomActivity.Status.OPEN, metadata__command=command)
+        .order_by("-opened_at", "-created_at")
+        .first()
+    )
+
+
+def _command_random_pick_payload(session: ClassroomSession, picked_user_id=None) -> dict:
+    profiles = (
+        StudentProfile.objects.select_related("user")
+        .filter(class_group=session.class_group, user__is_active=True)
+        .order_by("user__display_name", "user__username")
+    )
+    rows = list(profiles)
+    if not rows:
+        raise ServiceError("当前班级没有可点名学生。", status=400)
+    profile = None
+    try:
+        picked_user_id = int(picked_user_id)
+    except (TypeError, ValueError):
+        picked_user_id = 0
+    if picked_user_id:
+        profile = next((item for item in rows if item.user_id == picked_user_id), None)
+        if profile is None:
+            raise ServiceError("被点名学生不属于当前班级。", status=400)
+    if profile is None:
+        seed = timezone.now().timestamp()
+        index = int(seed * 1000) % len(rows)
+        profile = rows[index]
+    return {
+        "picked_student": {
+            "id": profile.id,
+            "user_id": profile.user_id,
+            "username": profile.user.username,
+            "display_name": profile.user.display_name or profile.user.username,
+            "student_no": profile.student_no,
+            "current_layer": profile.current_layer or "",
+        }
+    }
+
+
+def run_classroom_command(request, session: ClassroomSession, data) -> ClassroomActivity:
+    command = str(data.get("command") or "").strip()
+    config = CLASSROOM_COMMANDS.get(command)
+    if not config:
+        raise ServiceError("课堂指令不正确。", errors={"command": ["请选择有效的课堂指令。"]}, status=400)
+    if session.status != ClassroomSession.Status.RUNNING:
+        raise ServiceError("请先开始课堂，再使用课堂控制。", status=400)
+
+    metadata = {"command": command}
+    content = str(data.get("content") or "").strip()
+    title = str(data.get("title") or config["title"]).strip() or config["title"]
+
+    if command == "timer":
+        try:
+            duration_seconds = int(data.get("duration_seconds") or 300)
+        except (TypeError, ValueError):
+            duration_seconds = 300
+        duration_seconds = min(max(duration_seconds, 1), 7200)
+        metadata["duration_seconds"] = duration_seconds
+        metadata["deadline_at"] = (timezone.now() + timedelta(seconds=duration_seconds)).isoformat()
+        content = content or f"倒计时 {duration_seconds // 60} 分 {duration_seconds % 60} 秒。"
+    elif command == "broadcast":
+        if len(content) < 1 or len(content) > 1000:
+            raise ServiceError("广播内容需为 1-1000 个字符。", errors={"content": ["请填写广播内容。"]}, status=400)
+    elif command == "random_pick":
+        metadata.update(_command_random_pick_payload(session, data.get("picked_user_id")))
+        metadata["score_defaults"] = {"plus": 2, "minus": -1}
+        metadata["ai_feature"] = "random_pick_score"
+        picked = metadata["picked_student"]["display_name"]
+        content = content or f"随机点名：{picked}"
+    elif command == "sign_in":
+        content = content or "请完成课堂签到。"
+    elif command == "quick_answer":
+        metadata["score_defaults"] = {"plus": 2, "minus": -1}
+        metadata["ai_feature"] = "quick_answer_score"
+        content = content or "抢答已开启。"
+
+    reusable = command in {"sign_in", "quick_answer", "timer"}
+    activity = _latest_open_activity(session, command) if reusable else None
+    if activity is None:
+        activity = ClassroomActivity(session=session, activity_type=config["activity_type"])
+    if command in {"random_pick", "broadcast"}:
+        now = timezone.now()
+        session.activities.filter(status=ClassroomActivity.Status.OPEN, metadata__command=command).update(
+            status=ClassroomActivity.Status.CLOSED,
+            closed_at=now,
+            updated_at=now,
+        )
+    activity.activity_type = config["activity_type"]
+    activity.title = title[:128]
+    activity.content = content[:5000]
+    activity.metadata = metadata
+    activity.status = ClassroomActivity.Status.OPEN
+    activity.opened_at = timezone.now()
+    activity.closed_at = None
+    activity.save()
+    _write_classroom_event(request, session, action=f"command_{command}", activity=activity)
+    write_audit(
+        request,
+        "classroom.command",
+        school=request.user.school,
+        target_type="classroom_activity",
+        target_id=activity.id,
+        detail={"session": session.id, "command": command, "title": activity.title},
+    )
+    return activity
+
+
 def save_classroom_session(request, data, *, session: ClassroomSession | None = None) -> ClassroomSession:
     errors: dict[str, list[str]] = {}
     course = _teacher_course(request, data.get("course"))
@@ -3468,7 +4352,6 @@ def save_classroom_session(request, data, *, session: ClassroomSession | None = 
     session.lesson = lesson
     session.class_group = class_group
     session.title = title
-    session.is_layered = _clean_bool(data.get("is_layered", session.is_layered))
     if session.current_step_id and (lesson is None or session.current_step.lesson_id != lesson.id):
         session.current_step = None
         session.current_step_status = ClassroomSession.StepStatus.IDLE
@@ -3482,7 +4365,7 @@ def save_classroom_session(request, data, *, session: ClassroomSession | None = 
         school=request.user.school,
         target_type="classroom_session",
         target_id=session.id,
-        detail={"title": session.title, "course": course.id, "class_group": class_group.id, "is_layered": session.is_layered},
+        detail={"title": session.title, "course": course.id, "class_group": class_group.id},
     )
     return session
 
@@ -3490,13 +4373,28 @@ def save_classroom_session(request, data, *, session: ClassroomSession | None = 
 def start_classroom_session(request, session: ClassroomSession) -> ClassroomSession:
     if session.status == ClassroomSession.Status.FINISHED:
         raise ServiceError("已结束课堂不能重新开始。", status=400)
+    was_running = session.status == ClassroomSession.Status.RUNNING
     session.status = ClassroomSession.Status.RUNNING
     if not session.current_step_id:
         session.current_step_status = ClassroomSession.StepStatus.IDLE
         session.submission_locked = False
+    if not was_running:
+        session.evaluation_enabled = False
+        session.evaluation_opened_at = None
     session.started_at = session.started_at or timezone.now()
     session.finished_at = None
-    session.save(update_fields=["status", "current_step_status", "submission_locked", "started_at", "finished_at", "updated_at"])
+    session.save(
+        update_fields=[
+            "status",
+            "current_step_status",
+            "submission_locked",
+            "evaluation_enabled",
+            "evaluation_opened_at",
+            "started_at",
+            "finished_at",
+            "updated_at",
+        ]
+    )
     _write_classroom_event(request, session, action="session_started")
     write_audit(
         request,
@@ -3519,6 +4417,8 @@ def restart_classroom_session(request, session: ClassroomSession) -> ClassroomSe
     session.submission_locked = False
     session.current_step_started_at = None
     session.current_step_closed_at = None
+    session.evaluation_enabled = False
+    session.evaluation_opened_at = None
     session.started_at = now
     session.finished_at = None
     session.save(
@@ -3529,6 +4429,8 @@ def restart_classroom_session(request, session: ClassroomSession) -> ClassroomSe
             "submission_locked",
             "current_step_started_at",
             "current_step_closed_at",
+            "evaluation_enabled",
+            "evaluation_opened_at",
             "started_at",
             "finished_at",
             "updated_at",
@@ -3628,6 +4530,8 @@ def save_classroom_activity(
     activity.activity_type = activity_type
     activity.title = title
     activity.content = content
+    if not isinstance(activity.metadata, dict):
+        activity.metadata = {}
     activity.save()
     write_audit(
         request,

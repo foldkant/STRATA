@@ -20,6 +20,17 @@ function courseInitial(course: StudentCourse) {
   return course.title.slice(0, 6)
 }
 
+function formatDate(value: string | null) {
+  if (!value) return ''
+  return new Date(value).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
+}
+
 onMounted(async () => {
   try {
     data.value = await getStudentDashboard()
@@ -35,6 +46,21 @@ onMounted(async () => {
     <section v-if="!data" class="student-panel"><p class="empty">正在加载学习空间</p></section>
 
     <template v-else>
+      <section class="student-home-announcements">
+        <header>
+          <div><span>公告通知</span><strong>班级与课程动态</strong></div>
+          <RouterLink to="/student/notices">全部公告</RouterLink>
+        </header>
+        <div v-if="data.notice_rows.length" class="student-home-announcement-list">
+          <article v-for="item in data.notice_rows.slice(0, 3)" :key="item.id">
+            <div><b v-if="item.is_pinned">置顶</b><strong>{{ item.title }}</strong></div>
+            <p>{{ item.content }}</p>
+            <small>{{ item.teacher.display_name }} · {{ formatDate(item.published_at || item.created_at) }}</small>
+          </article>
+        </div>
+        <p v-else class="empty">暂无新公告。</p>
+      </section>
+
       <section class="student-hero-grid">
         <article class="student-live-card" :class="{ active: data.current_classroom }">
           <span>{{ data.current_classroom ? '课堂进行中' : '当前没有进行中的课堂' }}</span>
@@ -47,6 +73,8 @@ onMounted(async () => {
             v-if="data.current_classroom"
             class="student-primary-action"
             :to="`/student/classroom/${data.current_classroom.id}`"
+            target="_blank"
+            rel="noopener"
           >
             进入课堂
           </RouterLink>
@@ -100,23 +128,6 @@ onMounted(async () => {
         </div>
       </section>
 
-      <section class="student-section">
-        <header>
-          <div>
-            <h2>近期公告</h2>
-            <p>来自任课教师的班级通知。</p>
-          </div>
-          <RouterLink to="/student/notices">全部公告</RouterLink>
-        </header>
-        <div class="student-notice-list">
-          <article v-for="item in data.notice_rows" :key="item.id">
-            <strong>{{ item.title }}</strong>
-            <p>{{ item.content }}</p>
-            <span>{{ item.teacher.display_name }}</span>
-          </article>
-          <p v-if="!data.notice_rows.length" class="empty">暂无公告。</p>
-        </div>
-      </section>
     </template>
   </StudentShell>
 </template>

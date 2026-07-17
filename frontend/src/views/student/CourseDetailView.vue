@@ -99,6 +99,8 @@ onMounted(async () => {
             :key="lesson.id"
             class="student-lesson-row"
             :to="lessonTarget(lesson)"
+            :target="lesson.classroom_session?.status === 'running' ? '_blank' : undefined"
+            :rel="lesson.classroom_session?.status === 'running' ? 'noopener' : undefined"
           >
             <em>{{ lesson.sort_order || lesson.id }}</em>
             <span>

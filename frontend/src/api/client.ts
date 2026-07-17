@@ -17,33 +17,82 @@ export class ApiError extends Error {
   }
 }
 
+const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+let csrfRequest: Promise<string> | null = null
+
 function getCookie(name: string): string {
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
   return match ? decodeURIComponent(match[1]) : ''
 }
 
+async function refreshCsrfToken(): Promise<string> {
+  if (!csrfRequest) {
+    csrfRequest = fetch('/api/v1/auth/csrf/', {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' }
+    })
+      .then(async (response) => {
+        if (!response.ok) return ''
+        await response.json().catch(() => null)
+        return getCookie('csrftoken')
+      })
+      .finally(() => {
+        csrfRequest = null
+      })
+  }
+  return csrfRequest
+}
+
+async function applyCsrfHeader(headers: Headers, method: string) {
+  if (!unsafeMethods.has(method) || headers.has('X-CSRFToken')) return
+  const csrf = getCookie('csrftoken') || await refreshCsrfToken()
+  if (csrf) {
+    headers.set('X-CSRFToken', csrf)
+  }
+}
+
+function errorMessage(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === 'object') {
+    const row = payload as Record<string, unknown>
+    if (typeof row.message === 'string' && row.message) return row.message
+    if (typeof row.detail === 'string' && row.detail) return row.detail
+  }
+  return fallback
+}
+
 export async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
+  const method = String(options.method || 'GET').toUpperCase()
   const hasBody = options.body !== undefined
   if (hasBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
-  const csrf = getCookie('csrftoken')
-  if (csrf) {
-    headers.set('X-CSRFToken', csrf)
-  }
+  await applyCsrfHeader(headers, method)
 
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     ...options,
     headers,
     credentials: 'include'
   })
 
+  if (response.status === 403 && unsafeMethods.has(method)) {
+    const csrf = await refreshCsrfToken()
+    if (csrf) {
+      headers.set('X-CSRFToken', csrf)
+      response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: 'include'
+      })
+    }
+  }
+
   const contentType = response.headers.get('Content-Type') || ''
   const payload = contentType.includes('application/json') ? await response.json() : null
 
   if (!response.ok) {
-    throw new ApiError(payload?.message || '请求失败', response.status, payload?.errors || {})
+    throw new ApiError(errorMessage(payload, '请求失败'), response.status, payload?.errors || {})
   }
 
   return (payload as ApiEnvelope<T>).data
@@ -51,23 +100,33 @@ export async function apiRequest<T>(url: string, options: RequestInit = {}): Pro
 
 export async function uploadRequest<T>(url: string, formData: FormData): Promise<T> {
   const headers = new Headers()
-  const csrf = getCookie('csrftoken')
-  if (csrf) {
-    headers.set('X-CSRFToken', csrf)
-  }
+  await applyCsrfHeader(headers, 'POST')
 
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     method: 'POST',
     headers,
     credentials: 'include',
     body: formData
   })
 
+  if (response.status === 403) {
+    const csrf = await refreshCsrfToken()
+    if (csrf) {
+      headers.set('X-CSRFToken', csrf)
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: formData
+      })
+    }
+  }
+
   const contentType = response.headers.get('Content-Type') || ''
   const payload = contentType.includes('application/json') ? await response.json() : null
 
   if (!response.ok) {
-    throw new ApiError(payload?.message || '上传失败', response.status, payload?.errors || {})
+    throw new ApiError(errorMessage(payload, '上传失败'), response.status, payload?.errors || {})
   }
 
   return (payload as ApiEnvelope<T>).data

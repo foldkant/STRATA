@@ -1,4 +1,4 @@
-import { apiRequest, queryString, toJsonBody } from './client'
+import { apiRequest, queryString, toJsonBody, uploadRequest } from './client'
 import type { CurrentUser } from './auth'
 import type { ClassGroupRow, PageQuery, PageResult, SubjectRow } from './management'
 
@@ -97,6 +97,8 @@ export type StudentClassroom = {
   current_step_status_label: string
   submission_locked: boolean
   is_layered: boolean
+  evaluation_enabled: boolean
+  evaluation_opened_at: string | null
   current_step_started_at: string | null
   current_step_closed_at: string | null
   teacher: StudentTeacher
@@ -105,8 +107,224 @@ export type StudentClassroom = {
   class_group: ClassGroupRow
   started_at: string | null
   finished_at: string | null
+  activities: StudentClassroomActivity[]
   created_at: string
   updated_at: string
+}
+
+export type StudentClassroomActivity = {
+  id: number
+  session: number
+  activity_type: string
+  activity_type_label: string
+  title: string
+  content: string
+  metadata: Record<string, unknown> & {
+    my_score_feedback?: StudentClassroomScoreFeedback
+  }
+  status: 'draft' | 'open' | 'closed'
+  status_label: string
+  opened_at: string | null
+  closed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type StudentClassroomScoreFeedback = {
+  event_id: number
+  score: number
+  score_action: 'plus' | 'minus' | ''
+  score_note: string
+  command?: string
+  activity_title: string
+  occurred_at: string
+}
+
+export type StudentClassroomActivityResponsePayload = {
+  response_type?: string
+  content?: string
+}
+
+export type StudentStepAnswerResult = {
+  answered_count: number
+  question_count: number
+  auto_score: number
+  auto_score_max: number
+}
+
+export type StudentWorkAttachment = {
+  id: number
+  student: number
+  lesson_step: number
+  classroom_session: number | null
+  question_id: string
+  question_stem: string
+  title: string
+  attachment_url: string
+  attachment_name: string
+  file_ext: string
+  attachment_size: number
+  score: number | null
+  feedback: string
+  evaluated_by: number | null
+  evaluated_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type StudentGroupMember = {
+  id: number
+  student_id: number
+  profile_id: number | null
+  username: string
+  display_name: string
+  student_no: string
+  current_layer: string
+  current_layer_label: string
+  role: 'leader' | 'member'
+  role_label: string
+  joined_at: string
+}
+
+export type StudentGroupFile = {
+  id: number
+  group: number
+  uploader: {
+    id: number
+    username: string
+    display_name: string
+    role: string
+  } | null
+  title: string
+  description: string
+  attachment_url: string
+  attachment_name: string
+  file_ext: string
+  file_size: number
+  created_at: string
+}
+
+export type StudentGroupDocument = {
+  attachment_url: string
+  attachment_name: string
+  file_ext: string
+  file_size: number
+  document_version: number
+}
+
+export type StudentGroup = {
+  id: number
+  collaboration: number
+  group_no: number
+  name: string
+  layer_hint: string
+  leader: number | null
+  document: StudentGroupDocument
+  used_storage_bytes: number
+  used_storage_mb: number
+  members: StudentGroupMember[]
+  files: StudentGroupFile[]
+  file_count: number
+  created_at: string
+  updated_at: string
+}
+
+export type StudentGroupCollaboration = {
+  id: number
+  session: number
+  is_enabled: boolean
+  status: 'draft' | 'open' | 'closed'
+  status_label: string
+  group_size: number
+  grouping_strategy: string
+  grouping_strategy_label: string
+  document_type: 'docx' | 'pptx' | 'xlsx'
+  document_type_label: string
+  storage_quota_mb: number
+  allow_student_upload: boolean
+  allow_onlyoffice_edit: boolean
+  group_count: number
+  my_group_id: number | null
+  my_group: StudentGroup | null
+  groups: StudentGroup[]
+  opened_at: string | null
+  closed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type StudentEvaluationType = 'self' | 'peer'
+
+export type StudentEvaluationCriterion = {
+  id: string
+  title: string
+  description: string
+  sort_order: number
+}
+
+export type StudentEvaluationSubmission = {
+  id: number
+  course: number
+  class_group: number | null
+  session: number | null
+  evaluation_type: 'self' | 'peer' | 'teacher'
+  evaluation_type_label: string
+  evaluator: {
+    id: number
+    username: string
+    display_name: string
+  }
+  target: {
+    id: number
+    username: string
+    display_name: string
+  }
+  group: number | null
+  ratings: Record<string, number>
+  comment: string
+  created_at: string
+  updated_at: string
+}
+
+export type StudentEvaluationConfig = {
+  id: number | null
+  course: number | null
+  session: number | null
+  enable_self: boolean
+  enable_peer: boolean
+  enable_teacher: false
+  self_criteria: StudentEvaluationCriterion[]
+  peer_criteria: StudentEvaluationCriterion[]
+  teacher_criteria: []
+  opened_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type StudentPeerEvaluationTarget = {
+  student_id: number
+  username: string
+  display_name: string
+  student_no: string
+  current_layer: string
+  current_layer_label: string
+  submission: StudentEvaluationSubmission | null
+}
+
+export type StudentEvaluationContext = {
+  runtime_enabled: boolean
+  runtime_opened_at: string | null
+  config: StudentEvaluationConfig
+  self_submission: StudentEvaluationSubmission | null
+  peer_targets: StudentPeerEvaluationTarget[]
+  my_group: StudentGroup | null
+}
+
+export type StudentEvaluationSubmitPayload = {
+  evaluation_type: StudentEvaluationType
+  target?: number
+  ratings: Record<string, number>
+  comment?: string
 }
 
 export type StudentDashboard = {
@@ -117,6 +335,101 @@ export type StudentDashboard = {
   course_rows: StudentCourse[]
   notice_rows: StudentNotice[]
   teachers: StudentTeacher[]
+}
+
+export type StudentArchiveSubject = { id: number; name: string; code: string }
+
+export type StudentArchive = {
+  student: {
+    id: number
+    username: string
+    display_name: string
+    student_no: string
+    school: { id: number; name: string } | null
+    class_group: ClassGroupRow | null
+  }
+  subjects: StudentArchiveSubject[]
+  selected_subject: number | null
+  metrics: {
+    course_count: number
+    active_day_count: number
+    learning_event_count: number
+    completed_test_count: number
+    work_count: number
+    last_activity_at: string | null
+  }
+  courses: Array<{
+    id: number
+    title: string
+    subject: StudentArchiveSubject | null
+    teacher: StudentTeacher
+    lesson_count: number
+    visited_lesson_count: number
+    step_count: number
+    completed_step_count: number
+    progress_percent: number
+    event_count: number
+    last_activity_at: string | null
+  }>
+  pretests: Array<{
+    id: number
+    subject: StudentArchiveSubject
+    paper_title: string
+    kind: 'literacy' | 'attitude'
+    kind_label: string
+    score: number
+    submitted_at: string
+  }>
+  tests: Array<{
+    id: number
+    assessment_id: number
+    title: string
+    subject: StudentArchiveSubject
+    course: { id: number; title: string } | null
+    status: 'in_progress' | 'submitted' | 'graded'
+    status_label: string
+    objective_score: number
+    subjective_score: number
+    total_score: number
+    total_possible: number
+    started_at: string
+    submitted_at: string | null
+    graded_at: string | null
+  }>
+  works: Array<StudentWorkAttachment & {
+    course_title: string
+    subject: StudentArchiveSubject | null
+    lesson_title: string
+    step_title: string
+    status: 'submitted' | 'evaluated'
+    status_label: string
+  }>
+  evaluations: Array<{
+    id: number
+    course: { id: number; title: string }
+    subject: StudentArchiveSubject | null
+    evaluation_type: 'self' | 'peer' | 'teacher'
+    evaluation_type_label: string
+    average_rating: number | null
+    comment: string
+    evaluator_label: string
+    updated_at: string
+  }>
+  event_distribution: Array<{
+    event_type: string
+    label: string
+    value: number
+    percent: number
+  }>
+  recent_events: Array<{
+    id: number
+    event_type: string
+    label: string
+    course: { id: number; title: string } | null
+    lesson: { id: number; title: string } | null
+    duration_ms: number
+    occurred_at: string
+  }>
 }
 
 export type StudentMe = {
@@ -150,11 +463,15 @@ export type StudentLessonStep = {
 
 export type StudentLessonQuestion = {
   id: string
-  question_type: 'single' | 'multiple' | 'judge' | 'blank' | 'text'
+  question_type: 'single' | 'multiple' | 'judge' | 'blank' | 'text' | 'file'
   question_type_label: string
   stem: string
   options: string[]
   score: number
+  file_config?: {
+    allowed_extensions: string[]
+    max_size_mb: number
+  }
   target_layer?: string
   target_layer_label?: string
   use_layer_scores?: boolean
@@ -170,6 +487,8 @@ export type StudentResourceBinding = {
   attachment_name: string
   file_ext: string
   kind: string
+  learning_page_id?: number
+  revision_no?: number
 }
 
 export type StudentLessonWorkspace = {
@@ -263,6 +582,10 @@ export function getStudentDashboard() {
   return apiRequest<StudentDashboard>('/api/v1/student/dashboard/')
 }
 
+export function getStudentArchive(subject?: number | string) {
+  return apiRequest<StudentArchive>(`/api/v1/student/profile/${queryString({ subject })}`)
+}
+
 export function getStudentOnboarding() {
   return apiRequest<StudentDashboard>('/api/v1/student/onboarding/')
 }
@@ -301,6 +624,42 @@ export function getStudentClassroom(id: number) {
   return apiRequest<StudentClassroom>(`/api/v1/student/classroom/${id}/`)
 }
 
+export function getStudentGroupCollaboration(classroomId: number) {
+  return apiRequest<StudentGroupCollaboration | null>(`/api/v1/student/classroom/${classroomId}/group-collaboration/`)
+}
+
+export function getStudentClassroomEvaluation(classroomId: number) {
+  return apiRequest<StudentEvaluationContext>(`/api/v1/student/classroom/${classroomId}/evaluation/`)
+}
+
+export function submitStudentClassroomEvaluation(classroomId: number, payload: StudentEvaluationSubmitPayload) {
+  return apiRequest<StudentEvaluationContext>(`/api/v1/student/classroom/${classroomId}/evaluation/submit/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function uploadStudentGroupFile(classroomId: number, file: File, description = '') {
+  const formData = new FormData()
+  formData.append('attachment', file)
+  formData.append('description', description)
+  return uploadRequest<StudentGroupFile>(`/api/v1/student/classroom/${classroomId}/group-collaboration/files/`, formData)
+}
+
+export function respondClassroomActivity(classroomId: number, activityId: number, payload: StudentClassroomActivityResponsePayload = {}) {
+  return apiRequest<StudentClassroomActivity>(`/api/v1/student/classroom/${classroomId}/activities/${activityId}/response/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function acknowledgeClassroomScoreFeedback(classroomId: number, activityId: number, scoreEventId: number) {
+  return apiRequest<{ score_event_id: number }>(`/api/v1/student/classroom/${classroomId}/activities/${activityId}/score-feedback/ack/`, {
+    method: 'POST',
+    body: toJsonBody({ score_event_id: scoreEventId })
+  })
+}
+
 export function getStudentCurrentClassroom() {
   return apiRequest<StudentClassroom | null>('/api/v1/student/classroom/current/')
 }
@@ -321,10 +680,17 @@ export function completeStudentLessonStep(id: number, durationMs = 0) {
 }
 
 export function submitStudentStepAnswer(id: number, answer: unknown) {
-  return apiRequest<Record<string, never>>(`/api/v1/student/lesson-steps/${id}/answer/`, {
+  return apiRequest<StudentStepAnswerResult>(`/api/v1/student/lesson-steps/${id}/answer/`, {
     method: 'POST',
     body: toJsonBody({ answer })
   })
+}
+
+export function uploadStudentStepAttachment(stepId: number, questionId: string, file: File) {
+  const formData = new FormData()
+  formData.append('question_id', questionId)
+  formData.append('attachment', file)
+  return uploadRequest<StudentWorkAttachment>(`/api/v1/student/lesson-steps/${stepId}/attachments/`, formData)
 }
 
 export function getStudentNotices(params: PageQuery = {}) {

@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+import random
 import urllib.request
+import zipfile
+from io import BytesIO
 from datetime import timedelta
+from pathlib import Path
+from xml.sax.saxutils import escape
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout, update_session_auth_hash
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
 from django.core.paginator import Paginator
 from django.db import connection, transaction
 from django.http import JsonResponse
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, Max, Prefetch, Q, Sum
 from django.db.models.functions import TruncDate
 from django.middleware.csrf import get_token
 from django.utils import timezone
@@ -23,15 +29,24 @@ from config.onlyoffice import sign_editor_config
 from aiops.models import ModelVersion, TrainingJob
 from courses.models import (
     ClassroomActivity,
+    ClassroomEvaluationConfig,
+    ClassroomEvaluationSubmission,
+    ClassroomGroup,
+    ClassroomGroupCollaboration,
+    ClassroomGroupFile,
+    ClassroomGroupMember,
     ClassroomSession,
     Course,
     CourseClass,
+    LearningWebPage,
+    LearningWebPageResponse,
+    LearningWebPageVersion,
     Lesson,
     LessonStep,
     Resource,
     Subject,
 )
-from learning.models import Feedback, LearningEvent, Notice, PretestPaper, PretestQuestion, PretestSubmission, StratificationDecision
+from learning.models import Feedback, LearningEvent, Notice, PretestPaper, PretestQuestion, PretestSubmission, StratificationDecision, StudentWorkAttachment, TestAssessment, TestAttempt
 from ops.models import AuditLog, ExportBatch, ImportBatch
 from ops.xlsx import export_rows, template_response
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
@@ -41,13 +56,24 @@ from .responses import fail, ok, page_data
 from .serializers import (
     account_row,
     classroom_activity_row,
+    classroom_evaluation_config_row,
+    classroom_evaluation_submission_row,
+    classroom_group_collaboration_row,
+    classroom_group_file_row,
+    classroom_group_row,
     classroom_session_row,
+    classroom_attendance_row,
     class_group_row,
     clean_resource_ext,
     course_row,
     feedback_row,
     lesson_row,
+    learning_web_page_response_row,
+    learning_web_page_row,
+    learning_web_page_version_row,
+    lesson_step_has_layered_questions,
     lesson_step_row,
+    normalize_lesson_question_items,
     notice_row,
     pretest_paper_row,
     pretest_question_row,
@@ -62,6 +88,7 @@ from .serializers import (
     student_pretest_paper_row,
     student_profile_summary,
     student_teacher_row,
+    student_work_attachment_row,
     subject_row,
     teacher_ai_provider_row,
     teaching_assignment_row,
@@ -98,7 +125,9 @@ from .services import (
     import_students_from_xlsx,
     import_teachers_from_xlsx,
     get_teacher_ai_provider,
+    generate_classroom_evaluation_criteria_with_ai,
     generate_lesson_step_questions_with_ai,
+    generate_learning_web_page_schema,
     publish_pretest_paper,
     promote_class_groups,
     reset_school_admin_password,
@@ -146,6 +175,7 @@ from .services import (
     start_classroom_session,
     test_teacher_ai_provider,
     reorder_lesson_steps,
+    run_classroom_command,
     _teacher_classroom_activity,
     _teacher_classroom_session,
     _teacher_course,
@@ -2249,6 +2279,334 @@ def teacher_lesson_step_ai_generate_questions(request):
     return ok(payload, "AI 题目草稿已生成")
 
 
+def _teacher_learning_web_page(request, pk) -> LearningWebPage:
+    try:
+        page_id = int(pk)
+    except (TypeError, ValueError):
+        page_id = 0
+    page = (
+        LearningWebPage.objects.select_related("school", "teacher", "course", "lesson", "lesson__course")
+        .filter(pk=page_id, school=_school(request), teacher=request.user)
+        .first()
+    )
+    if page is None:
+        raise ServiceError("学习网页不存在或无权操作。", status=404)
+    return page
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsTeacher])
+def teacher_lesson_learning_web_pages(request, lesson_id):
+    try:
+        lesson = _teacher_lesson(request, lesson_id)
+        if request.method == "POST":
+            direction = str(request.data.get("direction") or "").strip()
+            generation_mode = str(request.data.get("generation_mode") or "auto").strip()
+            schema = generate_learning_web_page_schema(request, lesson, direction, generation_mode=generation_mode)
+            with transaction.atomic():
+                page = LearningWebPage.objects.create(
+                    school=_school(request),
+                    teacher=request.user,
+                    course=lesson.course,
+                    lesson=lesson,
+                    title=str(schema.get("title") or lesson.title)[:128],
+                    schema=schema,
+                    generation_prompt=direction,
+                    revision_no=1,
+                    status=LearningWebPage.Status.READY,
+                )
+                LearningWebPageVersion.objects.create(
+                    page=page,
+                    version_no=1,
+                    prompt=direction,
+                    schema=schema,
+                    created_by=request.user,
+                )
+            write_audit(
+                request,
+                "teacher.learning_web_page.create",
+                school=_school(request),
+                target_type="learning_web_page",
+                target_id=page.id,
+                detail={"lesson": lesson.id, "course": lesson.course_id, "form_count": learning_web_page_row(page)["form_count"]},
+            )
+            return ok(learning_web_page_row(page), "AI 学习网页已生成。", status=201)
+    except ServiceError as exc:
+        return _service_fail(exc)
+
+    pages = (
+        LearningWebPage.objects.filter(lesson=lesson, teacher=request.user, school=_school(request), is_active=True)
+        .select_related("school", "teacher", "course", "lesson")
+        .annotate(response_count=Count("responses", distinct=True))
+        .order_by("-updated_at", "-id")
+    )
+    return ok([learning_web_page_row(page) for page in pages])
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+@permission_classes([IsTeacher])
+def teacher_learning_web_page_detail(request, pk):
+    try:
+        page = _teacher_learning_web_page(request, pk)
+        if request.method == "GET":
+            row = learning_web_page_row(page)
+            row["versions"] = [learning_web_page_version_row(item) for item in page.versions.select_related("created_by").all()[:20]]
+            return ok(row)
+        if request.method == "PATCH":
+            title = str(request.data.get("title") or page.title).strip()
+            if len(title) < 2 or len(title) > 128:
+                raise ServiceError("网页标题需为 2-128 个字符。", errors={"title": ["请填写网页标题。"]}, status=400)
+            page.title = title
+            page.status = LearningWebPage.Status.READY
+            page.save(update_fields=["title", "status", "updated_at"])
+            return ok(learning_web_page_row(page), "学习网页已保存。")
+        page.is_active = False
+        page.save(update_fields=["is_active", "updated_at"])
+        write_audit(
+            request,
+            "teacher.learning_web_page.disable",
+            school=page.school,
+            target_type="learning_web_page",
+            target_id=page.id,
+            detail={"lesson": page.lesson_id},
+        )
+        return ok({}, "学习网页已停用，历史提交保留。")
+    except ServiceError as exc:
+        return _service_fail(exc)
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_learning_web_page_revise(request, pk):
+    try:
+        page = _teacher_learning_web_page(request, pk)
+        if not page.is_active:
+            raise ServiceError("该学习网页已停用。", status=400)
+        direction = str(request.data.get("direction") or "").strip()
+        generation_mode = str(request.data.get("generation_mode") or "auto").strip()
+        schema = generate_learning_web_page_schema(
+            request,
+            page.lesson,
+            direction,
+            current_page=page,
+            generation_mode=generation_mode,
+        )
+        with transaction.atomic():
+            page = LearningWebPage.objects.select_for_update().get(pk=page.pk)
+            page.revision_no += 1
+            page.title = str(schema.get("title") or page.title)[:128]
+            page.schema = schema
+            page.generation_prompt = direction
+            page.status = LearningWebPage.Status.READY
+            page.save(update_fields=["revision_no", "title", "schema", "generation_prompt", "status", "updated_at"])
+            for step in LessonStep.objects.select_for_update().filter(lesson=page.lesson):
+                items = step.resource_items if isinstance(step.resource_items, list) else []
+                changed = False
+                updated_items = []
+                for item in items:
+                    if isinstance(item, dict) and item.get("kind") == "learning_page":
+                        try:
+                            bound_page_id = int(item.get("learning_page_id") or 0)
+                        except (TypeError, ValueError):
+                            bound_page_id = 0
+                        if bound_page_id == page.id:
+                            item = {**item, "title": page.title, "revision_no": page.revision_no}
+                            changed = True
+                    updated_items.append(item)
+                if changed:
+                    step.resource_items = updated_items
+                    step.save(update_fields=["resource_items", "updated_at"])
+            LearningWebPageVersion.objects.create(
+                page=page,
+                version_no=page.revision_no,
+                prompt=direction,
+                schema=schema,
+                created_by=request.user,
+            )
+        write_audit(
+            request,
+            "teacher.learning_web_page.revise",
+            school=page.school,
+            target_type="learning_web_page",
+            target_id=page.id,
+            detail={"lesson": page.lesson_id, "revision_no": page.revision_no},
+        )
+        return ok(learning_web_page_row(page), f"学习网页已更新至 v{page.revision_no}。")
+    except ServiceError as exc:
+        return _service_fail(exc)
+
+
+def _learning_web_page_response_summary(page: LearningWebPage, responses: list[LearningWebPageResponse]) -> dict:
+    schema = page.schema if isinstance(page.schema, dict) else {}
+    blocks = schema.get("blocks") if isinstance(schema.get("blocks"), list) else []
+    forms = [item for item in blocks if isinstance(item, dict) and item.get("type") == "form"]
+    form_rows = []
+    for form in forms:
+        form_id = str(form.get("form_id") or "")
+        form_responses = [item for item in responses if item.form_id == form_id]
+        fields = []
+        raw_fields = form.get("fields") if isinstance(form.get("fields"), list) else []
+        for field in raw_fields:
+            if not isinstance(field, dict):
+                continue
+            field_id = str(field.get("id") or "")
+            field_type = str(field.get("type") or "short_text")
+            values = [item.answers.get(field_id) for item in form_responses if isinstance(item.answers, dict) and field_id in item.answers]
+            stats = {"answered": len(values)}
+            if field_type in {"single", "multiple", "select", "scale"}:
+                options = [str(item) for item in field.get("options", [])]
+                counts = {option: 0 for option in options}
+                for value in values:
+                    selected = value if isinstance(value, list) else [value]
+                    for selected_value in selected:
+                        key = str(selected_value)
+                        if key in counts:
+                            counts[key] += 1
+                stats["options"] = [{"label": option, "count": counts[option]} for option in options]
+            elif field_type == "number":
+                numbers = [float(value) for value in values if isinstance(value, (int, float))]
+                stats.update(
+                    {
+                        "average": round(sum(numbers) / len(numbers), 2) if numbers else None,
+                        "min": min(numbers) if numbers else None,
+                        "max": max(numbers) if numbers else None,
+                    }
+                )
+            else:
+                recent = []
+                for response in form_responses[:20]:
+                    value = response.answers.get(field_id) if isinstance(response.answers, dict) else None
+                    if value is not None and value != "":
+                        recent.append(
+                            {
+                                "student": response.student.display_name or response.student.username,
+                                "value": str(value)[:2000],
+                                "submitted_at": response.submitted_at,
+                            }
+                        )
+                stats["recent"] = recent
+            fields.append({"id": field_id, "label": field.get("label") or field_id, "type": field_type, "stats": stats})
+        form_rows.append(
+            {
+                "form_id": form_id,
+                "title": form.get("title") or form_id,
+                "submission_count": len(form_responses),
+                "student_count": len({item.student_id for item in form_responses}),
+                "fields": fields,
+            }
+        )
+    return {
+        "page": learning_web_page_row(page),
+        "summary": {
+            "submission_count": len(responses),
+            "student_count": len({item.student_id for item in responses}),
+            "form_count": len(forms),
+        },
+        "forms": form_rows,
+        "responses": [learning_web_page_response_row(item) for item in responses[:100]],
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_learning_web_page_responses(request, pk):
+    try:
+        page = _teacher_learning_web_page(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    responses_query = LearningWebPageResponse.objects.filter(page=page)
+    classroom_session = None
+    classroom_session_id = str(request.GET.get("classroom_session") or "").strip()
+    if classroom_session_id:
+        try:
+            classroom_session_pk = int(classroom_session_id)
+        except (TypeError, ValueError):
+            return fail("课堂场次参数不正确。", errors={"classroom_session": ["请输入有效的课堂场次编号。"]}, status=400)
+        classroom_session = (
+            ClassroomSession.objects.select_related("class_group", "course", "lesson")
+            .filter(pk=classroom_session_pk, school=_school(request), teacher=request.user)
+            .first()
+        )
+        if classroom_session is None:
+            return fail("课堂场次不存在或无权查看。", status=404)
+        if classroom_session.course_id != page.course_id or classroom_session.lesson_id != page.lesson_id:
+            return fail("该学习网页不属于当前课堂课时。", status=400)
+        responses_query = responses_query.filter(classroom_session=classroom_session)
+
+    responses = list(
+        responses_query
+        .select_related("student", "class_group", "classroom_session")
+        .order_by("-submitted_at", "-id")
+    )
+    payload = _learning_web_page_response_summary(page, responses)
+    if classroom_session is not None:
+        schema = page.schema if isinstance(page.schema, dict) else {}
+        form_ids = {
+            str(item.get("form_id") or "")
+            for item in schema.get("blocks", [])
+            if isinstance(item, dict) and item.get("type") == "form" and str(item.get("form_id") or "")
+        }
+        responses_by_student: dict[int, list[LearningWebPageResponse]] = {}
+        for response in responses:
+            responses_by_student.setdefault(response.student_id, []).append(response)
+        profiles = list(
+            StudentProfile.objects.filter(
+                class_group=classroom_session.class_group,
+                user__school=_school(request),
+                user__role="student",
+                user__is_active=True,
+            )
+            .select_related("user")
+            .order_by("user__display_name", "user__username")
+        )
+        student_rows = []
+        completed_count = 0
+        started_count = 0
+        for profile in profiles:
+            student_responses = responses_by_student.get(profile.user_id, [])
+            submitted_form_ids = {item.form_id for item in student_responses if item.form_id}
+            completed = bool(form_ids) and form_ids.issubset(submitted_form_ids)
+            started = bool(student_responses)
+            if completed:
+                completed_count += 1
+            elif started:
+                started_count += 1
+            student_rows.append(
+                {
+                    "student": user_summary(profile.user),
+                    "student_no": profile.student_no,
+                    "current_layer": profile.current_layer or "",
+                    "status": "completed" if completed else "started" if started else "pending",
+                    "status_label": "已完成" if completed else "进行中" if started else "未开始",
+                    "submitted_form_count": len(submitted_form_ids & form_ids),
+                    "form_count": len(form_ids),
+                    "submission_count": len(student_responses),
+                    "last_submitted_at": student_responses[0].submitted_at if student_responses else None,
+                }
+            )
+        total_count = len(profiles)
+        payload["summary"].update(
+            {
+                "class_student_count": total_count,
+                "completed_student_count": completed_count,
+                "started_student_count": started_count,
+                "pending_student_count": max(total_count - completed_count - started_count, 0),
+                "completion_rate": round(completed_count * 100 / total_count, 1) if total_count else 0,
+            }
+        )
+        payload["scope"] = {
+            "classroom_session": {
+                "id": classroom_session.id,
+                "title": classroom_session.title,
+                "status": classroom_session.status,
+                "status_label": classroom_session.get_status_display(),
+            },
+            "class_group": class_group_row(classroom_session.class_group),
+        }
+        payload["students"] = student_rows
+    return ok(payload)
+
+
 def _teacher_classroom_sessions(request):
     query = request.GET.get("q", "").strip()
     status = request.GET.get("status", "").strip()
@@ -2391,6 +2749,2249 @@ def teacher_classroom_step_close(request, pk):
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(classroom_session_row(session), "当前环节已关闭")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_command(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        activity = run_classroom_command(request, session, request.data)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(classroom_activity_row(activity), "课堂指令已执行")
+
+
+GROUP_FILE_ALLOWED_EXTENSIONS = {
+    "doc",
+    "docx",
+    "ppt",
+    "pptx",
+    "xls",
+    "xlsx",
+    "pdf",
+    "zip",
+    "rar",
+    "7z",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "gif",
+    "bmp",
+    "mp4",
+    "webm",
+    "mov",
+    "mp3",
+    "wav",
+    "m4a",
+    "txt",
+    "md",
+    "csv",
+}
+
+
+def _int_in_range(value, default: int, min_value: int, max_value: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return min(max(number, min_value), max_value)
+
+
+def _zip_content(files: dict[str, str | bytes]) -> bytes:
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    return buffer.getvalue()
+
+
+def _blank_docx_bytes(title: str) -> bytes:
+    safe_title = escape(title or "小组协作文档")
+    return _zip_content(
+        {
+            "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>""",
+            "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>""",
+            "word/document.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>{safe_title}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>请在这里完成小组协作内容。</w:t></w:r></w:p>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/>
+    </w:sectPr>
+  </w:body>
+</w:document>""",
+        }
+    )
+
+
+def _blank_xlsx_bytes(title: str) -> bytes:
+    from openpyxl import Workbook
+
+    buffer = BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "小组协作"
+    sheet["A1"] = title or "小组协作表格"
+    sheet["A2"] = "请在这里完成小组协作内容。"
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _blank_pptx_bytes(title: str) -> bytes:
+    safe_title = escape(title or "小组协作演示")
+    return _zip_content(
+        {
+            "[Content_Types].xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+  <Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
+  <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
+  <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
+  <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+</Types>""",
+            "_rels/.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>""",
+            "ppt/presentation.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
+  <p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst>
+  <p:sldSz cx="12192000" cy="6858000" type="wideScreen"/>
+  <p:notesSz cx="6858000" cy="9144000"/>
+</p:presentation>""",
+            "ppt/_rels/presentation.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide1.xml"/>
+</Relationships>""",
+            "ppt/slides/slide1.xml": f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree>
+    <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+    <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+    <p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+      <p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="10363200" cy="1000000"/></a:xfrm></p:spPr>
+      <p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{safe_title}</a:t></a:r></a:p></p:txBody>
+    </p:sp>
+  </p:spTree></p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sld>""",
+            "ppt/slides/_rels/slide1.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+</Relationships>""",
+            "ppt/slideLayouts/slideLayout1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" type="blank">
+  <p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:sldLayout>""",
+            "ppt/slideLayouts/_rels/slideLayout1.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
+</Relationships>""",
+            "ppt/slideMasters/slideMaster1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+  <p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>
+</p:sldMaster>""",
+            "ppt/slideMasters/_rels/slideMaster1.xml.rels": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>""",
+            "ppt/theme/theme1.xml": """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="STRATA">
+  <a:themeElements><a:clrScheme name="STRATA"><a:dk1><a:srgbClr val="0F172A"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:accent1><a:srgbClr val="1F6FEB"/></a:accent1><a:accent2><a:srgbClr val="14B8A6"/></a:accent2><a:accent3><a:srgbClr val="F59E0B"/></a:accent3><a:accent4><a:srgbClr val="22C55E"/></a:accent4><a:accent5><a:srgbClr val="64748B"/></a:accent5><a:accent6><a:srgbClr val="94A3B8"/></a:accent6><a:hlink><a:srgbClr val="1F6FEB"/></a:hlink><a:folHlink><a:srgbClr val="64748B"/></a:folHlink></a:clrScheme><a:fontScheme name="STRATA"><a:majorFont><a:latin typeface="Microsoft YaHei"/></a:majorFont><a:minorFont><a:latin typeface="Microsoft YaHei"/></a:minorFont></a:fontScheme><a:fmtScheme name="STRATA"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="9525"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements>
+</a:theme>""",
+        }
+    )
+
+
+def _blank_office_bytes(file_ext: str, title: str) -> bytes:
+    if file_ext == "xlsx":
+        return _blank_xlsx_bytes(title)
+    if file_ext == "pptx":
+        return _blank_pptx_bytes(title)
+    return _blank_docx_bytes(title)
+
+
+def _ensure_group_document(group: ClassroomGroup) -> ClassroomGroup:
+    file_ext = group.collaboration.document_type
+    if group.collaboration_document and group.document_file_ext == file_ext:
+        return group
+    has_existing_document = bool(group.collaboration_document)
+    if group.collaboration_document:
+        group.collaboration_document.delete(save=False)
+    filename = f"{group.name}.{file_ext}"
+    group.collaboration_document.save(filename, ContentFile(_blank_office_bytes(file_ext, group.name)), save=False)
+    group.document_original_name = filename
+    group.document_file_ext = file_ext
+    group.document_version = (group.document_version + 1) if has_existing_document else 1
+    group.save(update_fields=["collaboration_document", "document_original_name", "document_file_ext", "document_version", "updated_at"])
+    return group
+
+
+def _classroom_group_queryset(collaboration: ClassroomGroupCollaboration):
+    return (
+        collaboration.groups.annotate(used_storage_bytes=Sum("files__file_size"), file_count=Count("files", distinct=True))
+        .prefetch_related(
+            Prefetch("members", queryset=ClassroomGroupMember.objects.select_related("student", "student_profile"), to_attr="prefetched_members"),
+            Prefetch("files", queryset=ClassroomGroupFile.objects.select_related("uploader"), to_attr="prefetched_files"),
+        )
+        .select_related("leader", "collaboration", "collaboration__session")
+        .order_by("group_no", "id")
+    )
+
+
+def _with_prefetched_groups(collaboration: ClassroomGroupCollaboration) -> ClassroomGroupCollaboration:
+    collaboration.prefetched_groups = list(_classroom_group_queryset(collaboration))
+    return collaboration
+
+
+def _student_profiles_for_grouping(session: ClassroomSession) -> list[StudentProfile]:
+    return list(
+        StudentProfile.objects.select_related("user")
+        .filter(class_group=session.class_group, user__is_active=True)
+        .order_by("current_layer", "student_no", "user__display_name", "user__username", "id")
+    )
+
+
+def _profile_chunks(profiles: list[StudentProfile], group_size: int) -> list[list[StudentProfile]]:
+    return [profiles[index : index + group_size] for index in range(0, len(profiles), group_size)]
+
+
+def _default_group_chunks(
+    profiles: list[StudentProfile],
+    *,
+    group_size: int,
+    strategy: str,
+    seed: int,
+) -> list[tuple[str, list[StudentProfile]]]:
+    rows = list(profiles)
+    if strategy == ClassroomGroupCollaboration.GroupingStrategy.RANDOM:
+        rng = random.Random(seed)
+        rng.shuffle(rows)
+        return [("", chunk) for chunk in _profile_chunks(rows, group_size)]
+
+    buckets = {"A": [], "B": [], "C": [], "": []}
+    for profile in rows:
+        layer = profile.current_layer if profile.current_layer in {"A", "B", "C"} else ""
+        buckets[layer].append(profile)
+
+    chunks: list[tuple[str, list[StudentProfile]]] = []
+    for layer in ["A", "B", "C"]:
+        chunks.extend((layer, chunk) for chunk in _profile_chunks(buckets[layer], group_size))
+
+    unlayered = buckets[""]
+    if strategy in {
+        ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER,
+        ClassroomGroupCollaboration.GroupingStrategy.AI_LAYER,
+    } and chunks:
+        index = 0
+        for profile in unlayered:
+            placed = False
+            for _ in range(len(chunks)):
+                layer, chunk = chunks[index % len(chunks)]
+                index += 1
+                if len(chunk) < group_size:
+                    chunk.append(profile)
+                    placed = True
+                    break
+            if not placed:
+                chunks.append(("", [profile]))
+        return chunks
+
+    chunks.extend(("", chunk) for chunk in _profile_chunks(unlayered, group_size))
+    return chunks
+
+
+def _delete_existing_group_files(collaboration: ClassroomGroupCollaboration) -> None:
+    for file in ClassroomGroupFile.objects.filter(group__collaboration=collaboration):
+        if file.attachment:
+            file.attachment.delete(save=False)
+    for group in collaboration.groups.all():
+        if group.collaboration_document:
+            group.collaboration_document.delete(save=False)
+    collaboration.groups.all().delete()
+
+
+def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> None:
+    profiles = _student_profiles_for_grouping(collaboration.session)
+    if not profiles:
+        raise ServiceError("当前班级没有可分组的启用学生。", status=400)
+
+    _delete_existing_group_files(collaboration)
+    chunks = _default_group_chunks(
+        profiles,
+        group_size=collaboration.group_size,
+        strategy=collaboration.grouping_strategy,
+        seed=collaboration.session_id,
+    )
+    layer_counts: dict[str, int] = {}
+    for group_no, (layer_hint, members) in enumerate(chunks, start=1):
+        if not members:
+            continue
+        if layer_hint:
+            layer_counts[layer_hint] = layer_counts.get(layer_hint, 0) + 1
+            group_name = f"{layer_hint}层第{layer_counts[layer_hint]}组"
+        else:
+            group_name = f"第{group_no}组"
+        leader = members[0].user
+        group = ClassroomGroup.objects.create(
+            collaboration=collaboration,
+            group_no=group_no,
+            name=group_name,
+            layer_hint=layer_hint,
+            leader=leader,
+        )
+        ClassroomGroupMember.objects.bulk_create(
+            [
+                ClassroomGroupMember(
+                    collaboration=collaboration,
+                    group=group,
+                    student=profile.user,
+                    student_profile=profile,
+                    role=ClassroomGroupMember.Role.LEADER if index == 0 else ClassroomGroupMember.Role.MEMBER,
+                )
+                for index, profile in enumerate(members)
+            ]
+        )
+        _ensure_group_document(group)
+
+
+def _setup_classroom_group_collaboration(request, session: ClassroomSession, data) -> ClassroomGroupCollaboration:
+    group_size = _int_in_range(data.get("group_size"), 4, 2, 12)
+    storage_quota_mb = _int_in_range(data.get("storage_quota_mb"), 100, 10, 2048)
+    strategy = str(data.get("grouping_strategy") or ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER).strip()
+    if strategy not in {item.value for item in ClassroomGroupCollaboration.GroupingStrategy}:
+        raise ServiceError("分组策略不正确。", errors={"grouping_strategy": ["分组策略不正确。"]}, status=400)
+    document_type = str(data.get("document_type") or ClassroomGroupCollaboration.DocumentType.DOCX).strip().lower()
+    if document_type not in {item.value for item in ClassroomGroupCollaboration.DocumentType}:
+        raise ServiceError("协作文档类型不正确。", errors={"document_type": ["协作文档类型不正确。"]}, status=400)
+    allow_student_upload = str(data.get("allow_student_upload", "true")).lower() not in {"0", "false", "no"}
+    allow_onlyoffice_edit = str(data.get("allow_onlyoffice_edit", "true")).lower() not in {"0", "false", "no"}
+    regenerate = str(data.get("regenerate", "")).lower() in {"1", "true", "yes"}
+
+    with transaction.atomic():
+        collaboration, created = ClassroomGroupCollaboration.objects.select_for_update().get_or_create(
+            session=session,
+            defaults={
+                "created_by": request.user,
+                "group_size": group_size,
+                "grouping_strategy": strategy,
+                "document_type": document_type,
+                "storage_quota_mb": storage_quota_mb,
+                "allow_student_upload": allow_student_upload,
+                "allow_onlyoffice_edit": allow_onlyoffice_edit,
+            },
+        )
+        has_groups = collaboration.groups.exists()
+        if has_groups and collaboration.document_type != document_type and not regenerate:
+            raise ServiceError("已有小组文档，如需切换 Word/PPT/Excel 类型，请勾选重新分组。", status=400)
+        collaboration.group_size = group_size
+        collaboration.grouping_strategy = strategy
+        collaboration.document_type = document_type
+        collaboration.storage_quota_mb = storage_quota_mb
+        collaboration.allow_student_upload = allow_student_upload
+        collaboration.allow_onlyoffice_edit = allow_onlyoffice_edit
+        collaboration.is_enabled = True
+        collaboration.status = ClassroomGroupCollaboration.Status.OPEN
+        collaboration.opened_at = collaboration.opened_at or timezone.now()
+        collaboration.closed_at = None
+        collaboration.save()
+
+        if created or regenerate or not has_groups:
+            _generate_classroom_groups(collaboration)
+        else:
+            for group in collaboration.groups.all():
+                _ensure_group_document(group)
+
+    write_audit(
+        request,
+        "teacher.classroom.group_collaboration.setup",
+        school=session.school,
+        target_type="classroom_session",
+        target_id=session.id,
+        detail={
+            "group_size": group_size,
+            "grouping_strategy": strategy,
+            "document_type": document_type,
+            "storage_quota_mb": storage_quota_mb,
+            "regenerate": regenerate,
+        },
+    )
+    return _with_prefetched_groups(collaboration)
+
+
+def _teacher_classroom_group(request, session: ClassroomSession, group_id) -> ClassroomGroup:
+    try:
+        group = (
+            ClassroomGroup.objects.select_related("collaboration", "collaboration__session", "leader")
+            .filter(pk=int(group_id), collaboration__session=session)
+            .first()
+        )
+    except (TypeError, ValueError):
+        group = None
+    if group is None:
+        raise ServiceError("小组不存在或不属于当前课堂。", status=404)
+    return group
+
+
+def _group_storage_used(group: ClassroomGroup) -> int:
+    return group.files.aggregate(total=Sum("file_size")).get("total") or 0
+
+
+def _validate_group_file_upload(collaboration: ClassroomGroupCollaboration, group: ClassroomGroup, uploaded_file) -> tuple[str, int]:
+    if uploaded_file is None:
+        raise ServiceError("请选择要上传的小组文件。", errors={"attachment": ["请选择要上传的小组文件。"]}, status=400)
+    file_size = int(getattr(uploaded_file, "size", 0) or 0)
+    if file_size <= 0:
+        raise ServiceError("上传文件为空。", errors={"attachment": ["上传文件为空。"]}, status=400)
+    ext = clean_resource_ext(Path(getattr(uploaded_file, "name", "")).suffix)
+    if ext not in GROUP_FILE_ALLOWED_EXTENSIONS:
+        raise ServiceError(
+            "文件格式不在小组共享区允许范围内。",
+            errors={"attachment": ["支持 Office、PDF、压缩包、图片、音视频和常见文本文件。"]},
+            status=400,
+        )
+    quota_bytes = collaboration.storage_quota_mb * 1024 * 1024
+    used_bytes = _group_storage_used(group)
+    if used_bytes + file_size > quota_bytes:
+        remaining_mb = max((quota_bytes - used_bytes) / 1024 / 1024, 0)
+        raise ServiceError(
+            f"小组共享空间不足，剩余约 {remaining_mb:.1f}MB。",
+            errors={"attachment": [f"小组共享空间不足，剩余约 {remaining_mb:.1f}MB。"]},
+            status=400,
+        )
+    return ext, file_size
+
+
+def _save_group_file(request, group: ClassroomGroup, uploaded_file, description: str = "") -> ClassroomGroupFile:
+    collaboration = group.collaboration
+    file_ext, file_size = _validate_group_file_upload(collaboration, group, uploaded_file)
+    return ClassroomGroupFile.objects.create(
+        group=group,
+        uploader=request.user,
+        attachment=uploaded_file,
+        original_name=Path(getattr(uploaded_file, "name", "") or "attachment").name[:255],
+        file_ext=file_ext,
+        file_size=file_size,
+        description=description[:255],
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_classroom_group_collaboration(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    collaboration = (
+        ClassroomGroupCollaboration.objects.select_related("session", "session__school", "session__course", "session__lesson", "session__class_group")
+        .filter(session=session)
+        .first()
+    )
+    return ok(classroom_group_collaboration_row(_with_prefetched_groups(collaboration)) if collaboration else None)
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_group_collaboration_setup(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        collaboration = _setup_classroom_group_collaboration(request, session, request.data)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(classroom_group_collaboration_row(collaboration), "小组合作已开启")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_group_collaboration_close(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        collaboration = ClassroomGroupCollaboration.objects.filter(session=session).first()
+        if collaboration is None:
+            raise ServiceError("当前课堂尚未开启小组合作。", status=404)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    collaboration.is_enabled = False
+    collaboration.status = ClassroomGroupCollaboration.Status.CLOSED
+    collaboration.closed_at = timezone.now()
+    collaboration.save(update_fields=["is_enabled", "status", "closed_at", "updated_at"])
+    write_audit(
+        request,
+        "teacher.classroom.group_collaboration.close",
+        school=session.school,
+        target_type="classroom_session",
+        target_id=session.id,
+    )
+    return ok(classroom_group_collaboration_row(_with_prefetched_groups(collaboration)), "小组合作已关闭")
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsTeacher])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def teacher_classroom_group_files(request, pk, group_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        group = _teacher_classroom_group(request, session, group_id)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if request.method == "GET":
+        return ok([classroom_group_file_row(file) for file in group.files.select_related("uploader").all()])
+    try:
+        file = _save_group_file(request, group, request.FILES.get("attachment"), str(request.data.get("description") or "").strip())
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(classroom_group_file_row(file), "小组文件已上传", status=201)
+
+
+EVALUATION_TYPE_LABELS = {
+    ClassroomEvaluationSubmission.EvaluationType.SELF: "自评",
+    ClassroomEvaluationSubmission.EvaluationType.PEER: "互评",
+    ClassroomEvaluationSubmission.EvaluationType.TEACHER: "师评",
+}
+
+
+def _bool_value(value) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _evaluation_criteria_field(evaluation_type: str) -> str:
+    return {
+        ClassroomEvaluationSubmission.EvaluationType.SELF: "self_criteria",
+        ClassroomEvaluationSubmission.EvaluationType.PEER: "peer_criteria",
+        ClassroomEvaluationSubmission.EvaluationType.TEACHER: "teacher_criteria",
+    }[evaluation_type]
+
+
+def _evaluation_enabled_field(evaluation_type: str) -> str:
+    return {
+        ClassroomEvaluationSubmission.EvaluationType.SELF: "enable_self",
+        ClassroomEvaluationSubmission.EvaluationType.PEER: "enable_peer",
+        ClassroomEvaluationSubmission.EvaluationType.TEACHER: "enable_teacher",
+    }[evaluation_type]
+
+
+def _clean_evaluation_criteria(raw_items, *, required: bool, label: str) -> list[dict]:
+    if not isinstance(raw_items, list):
+        raw_items = []
+    rows: list[dict] = []
+    errors: list[str] = []
+    seen_ids = set()
+    for index, item in enumerate(raw_items[:20], start=1):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        if not title and not description:
+            continue
+        if len(title) < 2 or len(title) > 80:
+            errors.append(f"{label}第 {index} 项标题需为 2-80 个字符。")
+            continue
+        if len(description) > 300:
+            errors.append(f"{label}第 {index} 项说明不能超过 300 个字符。")
+            continue
+        criterion_id = str(item.get("id") or "").strip()
+        if not criterion_id or criterion_id in seen_ids:
+            criterion_id = f"{label.lower()}_{index}"
+        seen_ids.add(criterion_id)
+        try:
+            sort_order = int(item.get("sort_order") or index * 10)
+        except (TypeError, ValueError):
+            sort_order = index * 10
+        rows.append(
+            {
+                "id": criterion_id[:64],
+                "title": title,
+                "description": description,
+                "sort_order": sort_order,
+            }
+        )
+    if len(raw_items) > 20:
+        errors.append(f"{label}最多设置 20 个评价项。")
+    if required and not rows:
+        errors.append(f"开启{label}后至少需要 1 个评价项。")
+    if errors:
+        raise ServiceError("评价内容校验失败。", errors={"criteria": errors}, status=400)
+    return sorted(rows, key=lambda row: (row["sort_order"], row["id"]))
+
+
+def _open_group_collaboration(session: ClassroomSession) -> ClassroomGroupCollaboration | None:
+    return (
+        ClassroomGroupCollaboration.objects.filter(
+            session=session,
+            is_enabled=True,
+            status=ClassroomGroupCollaboration.Status.OPEN,
+        )
+        .first()
+    )
+
+
+def _classroom_student_profiles(session: ClassroomSession) -> list[StudentProfile]:
+    return list(
+        StudentProfile.objects.select_related("user")
+        .filter(class_group=session.class_group, user__is_active=True)
+        .order_by("user__display_name", "user__username", "id")
+    )
+
+
+def _course_class_groups(course: Course) -> list[ClassGroup]:
+    return list(
+        ClassGroup.objects.filter(course_classes__course=course)
+        .annotate(student_count=Count("students", distinct=True))
+        .order_by("grade", "name", "id")
+    )
+
+
+def _course_class_group(course: Course, class_group_id=None) -> ClassGroup | None:
+    class_groups = _course_class_groups(course)
+    if class_group_id:
+        try:
+            wanted_id = int(class_group_id)
+        except (TypeError, ValueError):
+            wanted_id = 0
+        for class_group in class_groups:
+            if class_group.id == wanted_id:
+                return class_group
+    return class_groups[0] if class_groups else None
+
+
+def _course_student_profiles(course: Course, class_group: ClassGroup | None) -> list[StudentProfile]:
+    if class_group is None:
+        return []
+    return list(
+        StudentProfile.objects.select_related("user")
+        .filter(class_group=class_group, user__is_active=True)
+        .order_by("user__display_name", "user__username", "id")
+    )
+
+
+def _evaluation_student_row(profile: StudentProfile) -> dict:
+    return {
+        "student": account_row(profile.user),
+        "profile": student_profile_summary(profile),
+    }
+
+
+def _validate_evaluation_ratings(config: ClassroomEvaluationConfig, evaluation_type: str, ratings) -> dict[str, int]:
+    field = _evaluation_criteria_field(evaluation_type)
+    criteria = classroom_evaluation_config_row(config).get(field, [])
+    criterion_ids = {item["id"] for item in criteria}
+    if not isinstance(ratings, dict):
+        ratings = {}
+    cleaned: dict[str, int] = {}
+    errors: list[str] = []
+    for criterion in criteria:
+        criterion_id = criterion["id"]
+        raw_value = ratings.get(criterion_id)
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            errors.append(f"{criterion['title']}需要选择 1-5 星。")
+            continue
+        if value < 1 or value > 5:
+            errors.append(f"{criterion['title']}只能选择 1-5 星。")
+            continue
+        cleaned[criterion_id] = value
+    extra = [key for key in ratings.keys() if str(key) not in criterion_ids]
+    if extra:
+        errors.append("评价结果包含无效评价项。")
+    if errors:
+        raise ServiceError("评价星级校验失败。", errors={"ratings": errors}, status=400)
+    return cleaned
+
+
+def _evaluation_submission_average(criteria: list[dict], submissions: list[ClassroomEvaluationSubmission]) -> dict:
+    criterion_rows = []
+    values = []
+    for criterion in criteria:
+        criterion_values = []
+        for submission in submissions:
+            ratings = submission.ratings if isinstance(submission.ratings, dict) else {}
+            value = ratings.get(criterion["id"])
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= number <= 5:
+                criterion_values.append(number)
+                values.append(number)
+        criterion_rows.append(
+            {
+                "id": criterion["id"],
+                "title": criterion["title"],
+                "average": round(sum(criterion_values) / len(criterion_values), 2) if criterion_values else None,
+                "count": len(criterion_values),
+            }
+        )
+    return {
+        "average": round(sum(values) / len(values), 2) if values else None,
+        "criteria": criterion_rows,
+    }
+
+
+def _peer_possible_count(session: ClassroomSession) -> int:
+    collaboration = _open_group_collaboration(session)
+    if collaboration is None:
+        return 0
+    count = 0
+    for group in collaboration.groups.prefetch_related("members").all():
+        member_count = group.members.count()
+        count += member_count * max(member_count - 1, 0)
+    return count
+
+
+def _teacher_evaluation_payload(session: ClassroomSession, config: ClassroomEvaluationConfig | None = None) -> dict:
+    config = config or ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+    config_row = classroom_evaluation_config_row(config)
+    runtime_enabled = bool(session.evaluation_enabled)
+    profiles = _classroom_student_profiles(session)
+    submissions = list(
+        ClassroomEvaluationSubmission.objects.select_related("evaluator", "target", "group")
+        .filter(course=session.course, session=session)
+        .order_by("-updated_at", "-id")
+    )
+    submissions_by_type = {
+        evaluation_type: [item for item in submissions if item.evaluation_type == evaluation_type]
+        for evaluation_type in EVALUATION_TYPE_LABELS
+    }
+    summary = {}
+    totals = {
+        ClassroomEvaluationSubmission.EvaluationType.SELF: len(profiles),
+        ClassroomEvaluationSubmission.EvaluationType.PEER: _peer_possible_count(session),
+        ClassroomEvaluationSubmission.EvaluationType.TEACHER: len(profiles),
+    }
+    for evaluation_type, label in EVALUATION_TYPE_LABELS.items():
+        criteria = config_row.get(_evaluation_criteria_field(evaluation_type), [])
+        type_submissions = submissions_by_type[evaluation_type]
+        summary[evaluation_type] = {
+            "label": label,
+            "enabled": bool(config_row.get(_evaluation_enabled_field(evaluation_type))),
+            "submitted": len(type_submissions),
+            "total": totals[evaluation_type],
+            **_evaluation_submission_average(criteria, type_submissions),
+        }
+
+    teacher_by_target = {}
+    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.TEACHER]:
+        if item.evaluator_id == session.teacher_id and item.target_id not in teacher_by_target:
+            teacher_by_target[item.target_id] = item
+    self_by_target = {}
+    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.SELF]:
+        if item.evaluator_id == item.target_id and item.target_id not in self_by_target:
+            self_by_target[item.target_id] = item
+    peer_by_target: dict[int, list[ClassroomEvaluationSubmission]] = {}
+    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.PEER]:
+        peer_by_target.setdefault(item.target_id, []).append(item)
+
+    student_rows = []
+    peer_criteria = config_row.get("peer_criteria", [])
+    for profile in profiles:
+        peer_submissions = peer_by_target.get(profile.user_id, [])
+        student_rows.append(
+            {
+                **_evaluation_student_row(profile),
+                "self_submission": classroom_evaluation_submission_row(self_by_target.get(profile.user_id)),
+                "teacher_submission": classroom_evaluation_submission_row(teacher_by_target.get(profile.user_id)),
+                "peer_submission_count": len(peer_submissions),
+                "peer_average": _evaluation_submission_average(peer_criteria, peer_submissions)["average"] if peer_criteria else None,
+            }
+        )
+
+    return {
+        "runtime_enabled": runtime_enabled,
+        "runtime_opened_at": session.evaluation_opened_at,
+        "config": config_row,
+        "summary": summary,
+        "students": student_rows,
+        "recent_submissions": [classroom_evaluation_submission_row(item) for item in submissions[:50]],
+        "peer_available": _open_group_collaboration(session) is not None,
+    }
+
+
+def _teacher_course_evaluation_payload(
+    course: Course,
+    *,
+    class_group: ClassGroup | None = None,
+    config: ClassroomEvaluationConfig | None = None,
+) -> dict:
+    config = config or ClassroomEvaluationConfig.objects.filter(course=course).first()
+    config_row = classroom_evaluation_config_row(config)
+    class_options = _course_class_groups(course)
+    class_group = class_group or (class_options[0] if class_options else None)
+    profiles = _course_student_profiles(course, class_group)
+    target_ids = [profile.user_id for profile in profiles]
+    submissions = list(
+        ClassroomEvaluationSubmission.objects.select_related("evaluator", "target", "group", "session")
+        .filter(course=course, target_id__in=target_ids)
+        .order_by("-updated_at", "-id")
+    )
+    submissions_by_type = {
+        evaluation_type: [item for item in submissions if item.evaluation_type == evaluation_type]
+        for evaluation_type in EVALUATION_TYPE_LABELS
+    }
+    summary = {}
+    totals = {
+        ClassroomEvaluationSubmission.EvaluationType.SELF: len(profiles),
+        ClassroomEvaluationSubmission.EvaluationType.PEER: len(submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.PEER]),
+        ClassroomEvaluationSubmission.EvaluationType.TEACHER: len(profiles),
+    }
+    for evaluation_type, label in EVALUATION_TYPE_LABELS.items():
+        criteria = config_row.get(_evaluation_criteria_field(evaluation_type), [])
+        type_submissions = submissions_by_type[evaluation_type]
+        summary[evaluation_type] = {
+            "label": label,
+            "enabled": bool(config_row.get(_evaluation_enabled_field(evaluation_type))),
+            "submitted": len(type_submissions),
+            "total": totals[evaluation_type],
+            **_evaluation_submission_average(criteria, type_submissions),
+        }
+
+    teacher_by_target = {}
+    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.TEACHER]:
+        if item.evaluator_id == course.teacher_id and item.session_id is None and item.target_id not in teacher_by_target:
+            teacher_by_target[item.target_id] = item
+    self_by_target = {}
+    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.SELF]:
+        if item.evaluator_id == item.target_id and item.target_id not in self_by_target:
+            self_by_target[item.target_id] = item
+    peer_by_target: dict[int, list[ClassroomEvaluationSubmission]] = {}
+    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.PEER]:
+        peer_by_target.setdefault(item.target_id, []).append(item)
+
+    student_rows = []
+    peer_criteria = config_row.get("peer_criteria", [])
+    for profile in profiles:
+        peer_submissions = peer_by_target.get(profile.user_id, [])
+        student_rows.append(
+            {
+                **_evaluation_student_row(profile),
+                "self_submission": classroom_evaluation_submission_row(self_by_target.get(profile.user_id)),
+                "teacher_submission": classroom_evaluation_submission_row(teacher_by_target.get(profile.user_id)),
+                "peer_submission_count": len(peer_submissions),
+                "peer_average": _evaluation_submission_average(peer_criteria, peer_submissions)["average"] if peer_criteria else None,
+            }
+        )
+
+    return {
+        "course": course_row(course),
+        "class_options": [class_group_row(item) for item in class_options],
+        "selected_class_group": class_group_row(class_group) if class_group else None,
+        "config": config_row,
+        "summary": summary,
+        "students": student_rows,
+        "recent_submissions": [classroom_evaluation_submission_row(item) for item in submissions[:50]],
+        "peer_available": False,
+    }
+
+
+def _save_course_evaluation_config(request, course: Course, data) -> ClassroomEvaluationConfig:
+    enable_self = _bool_value(data.get("enable_self", False))
+    enable_peer = _bool_value(data.get("enable_peer", False))
+    enable_teacher = _bool_value(data.get("enable_teacher", False))
+    self_criteria = _clean_evaluation_criteria(data.get("self_criteria"), required=enable_self, label="自评")
+    peer_criteria = _clean_evaluation_criteria(data.get("peer_criteria"), required=enable_peer, label="互评")
+    teacher_criteria = _clean_evaluation_criteria(data.get("teacher_criteria"), required=enable_teacher, label="师评")
+    enable_self = bool(enable_self or self_criteria)
+    enable_peer = bool(enable_peer or peer_criteria)
+    enable_teacher = bool(enable_teacher or teacher_criteria)
+
+    config, _ = ClassroomEvaluationConfig.objects.get_or_create(
+        course=course,
+        defaults={"created_by": request.user},
+    )
+    config.enable_self = enable_self
+    config.enable_peer = enable_peer
+    config.enable_teacher = enable_teacher
+    config.self_criteria = self_criteria
+    config.peer_criteria = peer_criteria
+    config.teacher_criteria = teacher_criteria
+    if (enable_self or enable_peer or enable_teacher) and config.opened_at is None:
+        config.opened_at = timezone.now()
+    config.save()
+    write_audit(
+        request,
+        "teacher.course.evaluation.save",
+        school=request.user.school,
+        target_type="course",
+        target_id=course.id,
+        detail={
+            "enable_self": enable_self,
+            "enable_peer": enable_peer,
+            "enable_teacher": enable_teacher,
+            "self_count": len(self_criteria),
+            "peer_count": len(peer_criteria),
+            "teacher_count": len(teacher_criteria),
+        },
+    )
+    return config
+
+
+def _configured_evaluation_type_count(config: ClassroomEvaluationConfig | None) -> int:
+    if config is None:
+        return 0
+    config_row = classroom_evaluation_config_row(config)
+    count = 0
+    for evaluation_type in EVALUATION_TYPE_LABELS:
+        if config_row.get(_evaluation_criteria_field(evaluation_type)):
+            count += 1
+    return count
+
+
+@api_view(["GET", "POST", "PATCH"])
+@permission_classes([IsTeacher])
+def teacher_classroom_evaluation(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        if request.method in {"POST", "PATCH"}:
+            config = ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+            if "evaluation_enabled" in request.data:
+                enabled = _bool_value(request.data.get("evaluation_enabled", False))
+                if enabled and session.status != ClassroomSession.Status.RUNNING:
+                    raise ServiceError("请先开启课堂，再开放评价。", status=400)
+                if enabled and _configured_evaluation_type_count(config) == 0:
+                    raise ServiceError("请先回到课时设计设置并启用至少一类评价项。", status=400)
+                session.evaluation_enabled = enabled
+                update_fields = ["evaluation_enabled", "updated_at"]
+                if enabled and session.evaluation_opened_at is None:
+                    session.evaluation_opened_at = timezone.now()
+                    update_fields.append("evaluation_opened_at")
+                session.save(update_fields=update_fields)
+                write_audit(
+                    request,
+                    "teacher.classroom.evaluation.toggle",
+                    school=session.school,
+                    target_type="classroom_session",
+                    target_id=session.id,
+                    detail={
+                        "enabled": enabled,
+                        "course": session.course_id,
+                        "lesson": session.lesson_id,
+                        "class_group": session.class_group_id,
+                    },
+                )
+                return ok(
+                    _teacher_evaluation_payload(session, config),
+                    "课堂评价已开启。" if enabled else "课堂评价已关闭。",
+                )
+            config = _save_course_evaluation_config(request, session.course, request.data)
+            return ok(_teacher_evaluation_payload(session, config), "课堂评价设置已保存。")
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(_teacher_evaluation_payload(session))
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_evaluation_ai_generate(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        payload = generate_classroom_evaluation_criteria_with_ai(request, session, request.data)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(payload, "AI 已生成评价项草稿，请教师确认后保存。")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_evaluation_submit(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        config = ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+        config_row = classroom_evaluation_config_row(config)
+        if config is None or not config_row["enable_teacher"]:
+            raise ServiceError("本课堂尚未开启师评。", status=400)
+        try:
+            target_id = int(request.data.get("target"))
+        except (TypeError, ValueError):
+            raise ServiceError("请选择要评价的学生。", errors={"target": ["请选择学生。"]}, status=400)
+        profile = (
+            StudentProfile.objects.select_related("user")
+            .filter(user_id=target_id, class_group=session.class_group, user__is_active=True)
+            .first()
+        )
+        if profile is None:
+            raise ServiceError("学生不属于当前课堂班级。", status=404)
+        ratings = _validate_evaluation_ratings(config, ClassroomEvaluationSubmission.EvaluationType.TEACHER, request.data.get("ratings"))
+        comment = str(request.data.get("comment") or "").strip()
+        if len(comment) > 1000:
+            raise ServiceError("评价备注不能超过 1000 个字符。", errors={"comment": ["评价备注不能超过 1000 个字符。"]}, status=400)
+        submission, _ = ClassroomEvaluationSubmission.objects.update_or_create(
+            course=session.course,
+            class_group=session.class_group,
+            session=session,
+            evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
+            evaluator=request.user,
+            target=profile.user,
+            defaults={"ratings": ratings, "comment": comment, "group": None},
+        )
+        LearningEvent.objects.create(
+            actor=request.user,
+            class_group=session.class_group,
+            course=session.course,
+            lesson=session.lesson,
+            event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
+            object_type="classroom_evaluation",
+            object_id=str(submission.id),
+            metadata={
+                "action": "teacher_evaluation_submit",
+                "classroom_session": session.id,
+                "target_id": profile.user_id,
+                "ratings": ratings,
+                "comment": comment,
+                "ai_feature": "classroom_teacher_evaluation",
+            },
+            occurred_at=timezone.now(),
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(_teacher_evaluation_payload(session, config), "师评已保存。")
+
+
+def _teacher_course_evaluation_class_group(request, course: Course) -> ClassGroup | None:
+    raw_value = request.GET.get("class_group")
+    if request.method in {"POST", "PATCH"}:
+        raw_value = request.data.get("class_group", raw_value)
+    return _course_class_group(course, raw_value)
+
+
+@api_view(["GET", "POST", "PATCH"])
+@permission_classes([IsTeacher])
+def teacher_course_evaluation(request, pk):
+    try:
+        course = _teacher_course(request, pk)
+        class_group = _teacher_course_evaluation_class_group(request, course)
+        if request.method in {"POST", "PATCH"}:
+            config = _save_course_evaluation_config(request, course, request.data)
+            return ok(_teacher_course_evaluation_payload(course, class_group=class_group, config=config), "课程评价设置已保存。")
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(_teacher_course_evaluation_payload(course, class_group=class_group))
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_course_evaluation_ai_generate(request, pk):
+    try:
+        course = _teacher_course(request, pk)
+        payload = generate_classroom_evaluation_criteria_with_ai(request, None, request.data, course=course)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(payload, "AI 已生成评价项草稿，请教师确认后保存。")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_course_evaluation_submit(request, pk):
+    try:
+        course = _teacher_course(request, pk)
+        class_group = _teacher_course_evaluation_class_group(request, course)
+        if class_group is None:
+            raise ServiceError("请先为课程绑定班级。", errors={"class_group": ["课程暂无可评价班级。"]}, status=400)
+        config = ClassroomEvaluationConfig.objects.filter(course=course).first()
+        config_row = classroom_evaluation_config_row(config)
+        if config is None or not config_row["enable_teacher"]:
+            raise ServiceError("本课程尚未开启师评。", status=400)
+        try:
+            target_id = int(request.data.get("target"))
+        except (TypeError, ValueError):
+            raise ServiceError("请选择要评价的学生。", errors={"target": ["请选择学生。"]}, status=400)
+        profile = (
+            StudentProfile.objects.select_related("user")
+            .filter(user_id=target_id, class_group=class_group, user__is_active=True)
+            .first()
+        )
+        if profile is None:
+            raise ServiceError("学生不属于当前课程班级。", status=404)
+        ratings = _validate_evaluation_ratings(config, ClassroomEvaluationSubmission.EvaluationType.TEACHER, request.data.get("ratings"))
+        comment = str(request.data.get("comment") or "").strip()
+        if len(comment) > 1000:
+            raise ServiceError("评价备注不能超过 1000 个字符。", errors={"comment": ["评价备注不能超过 1000 个字符。"]}, status=400)
+        submission, _ = ClassroomEvaluationSubmission.objects.update_or_create(
+            course=course,
+            session=None,
+            evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
+            evaluator=request.user,
+            target=profile.user,
+            defaults={"ratings": ratings, "comment": comment, "group": None, "class_group": class_group},
+        )
+        LearningEvent.objects.create(
+            actor=request.user,
+            class_group=class_group,
+            course=course,
+            event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
+            object_type="course_evaluation",
+            object_id=str(submission.id),
+            metadata={
+                "action": "course_teacher_evaluation_submit",
+                "target_id": profile.user_id,
+                "class_group": class_group.id,
+                "ratings": ratings,
+                "comment": comment,
+                "ai_feature": "course_teacher_evaluation",
+            },
+            occurred_at=timezone.now(),
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(_teacher_course_evaluation_payload(course, class_group=class_group, config=config), "师评已保存。")
+
+
+def _student_evaluation_context(request, session_id):
+    profile = _student_profile(request)
+    session = (
+        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
+        .filter(pk=session_id, school=request.user.school, class_group=profile.class_group)
+        .first()
+    )
+    if session is None:
+        raise ServiceError("课堂不存在或无权进入。", status=404)
+    if session.status != ClassroomSession.Status.RUNNING:
+        raise ServiceError("课堂尚未开始，暂不能评价。", status=403)
+    config = ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+    collaboration = _open_group_collaboration(session)
+    group = None
+    if collaboration is not None:
+        member = (
+            ClassroomGroupMember.objects.select_related("group")
+            .filter(collaboration=collaboration, student=request.user)
+            .first()
+        )
+        group = member.group if member else None
+    return profile, session, config, collaboration, group
+
+
+def _student_evaluation_payload(request, session: ClassroomSession, config: ClassroomEvaluationConfig | None, group: ClassroomGroup | None) -> dict:
+    config_row = classroom_evaluation_config_row(config)
+    runtime_enabled = bool(session.evaluation_enabled)
+    submissions = list(
+        ClassroomEvaluationSubmission.objects.select_related("evaluator", "target", "group")
+        .filter(course=session.course, session=session, evaluator=request.user)
+        .order_by("-updated_at", "-id")
+    )
+    self_submission = next(
+        (item for item in submissions if item.evaluation_type == ClassroomEvaluationSubmission.EvaluationType.SELF and item.target_id == request.user.id),
+        None,
+    )
+    peer_submissions = [
+        item
+        for item in submissions
+        if item.evaluation_type == ClassroomEvaluationSubmission.EvaluationType.PEER
+    ]
+    peer_targets = []
+    if runtime_enabled and config and config_row["enable_peer"] and group is not None:
+        members = getattr(group, "prefetched_members", None)
+        if members is None:
+            members = group.members.select_related("student", "student_profile").all()
+        existing_by_target = {item.target_id: item for item in peer_submissions}
+        for member in members:
+            if member.student_id == request.user.id:
+                continue
+            peer_targets.append(
+                {
+                    "student_id": member.student_id,
+                    "username": member.student.username,
+                    "display_name": member.student.display_name or member.student.username,
+                    "student_no": member.student_profile.student_no if member.student_profile else "",
+                    "current_layer": member.student_profile.current_layer if member.student_profile else "",
+                    "current_layer_label": member.student_profile.get_current_layer_display() if member.student_profile and member.student_profile.current_layer else "",
+                    "submission": classroom_evaluation_submission_row(existing_by_target.get(member.student_id)),
+                }
+            )
+    return {
+        "runtime_enabled": runtime_enabled,
+        "runtime_opened_at": session.evaluation_opened_at,
+        "config": {
+            **config_row,
+            "enable_self": bool(runtime_enabled and config_row["enable_self"]),
+            "enable_peer": bool(runtime_enabled and config_row["enable_peer"] and group is not None),
+            "teacher_criteria": [],
+            "enable_teacher": False,
+            "self_criteria": config_row["self_criteria"] if runtime_enabled and config_row["enable_self"] else [],
+            "peer_criteria": config_row["peer_criteria"] if runtime_enabled and config_row["enable_peer"] and group is not None else [],
+        },
+        "self_submission": classroom_evaluation_submission_row(self_submission),
+        "peer_targets": peer_targets,
+        "my_group": classroom_group_row(group, include_files=False) if group else None,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsStudent])
+def student_classroom_evaluation(request, pk):
+    try:
+        profile, session, config, collaboration, group = _student_evaluation_context(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(_student_evaluation_payload(request, session, config, group))
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_classroom_evaluation_submit(request, pk):
+    try:
+        profile, session, config, collaboration, group = _student_evaluation_context(request, pk)
+        if not session.evaluation_enabled:
+            raise ServiceError("教师尚未开放课堂评价。", status=400)
+        if config is None:
+            raise ServiceError("教师尚未开启课堂评价。", status=400)
+        evaluation_type = str(request.data.get("evaluation_type") or "").strip()
+        if evaluation_type not in {
+            ClassroomEvaluationSubmission.EvaluationType.SELF,
+            ClassroomEvaluationSubmission.EvaluationType.PEER,
+        }:
+            raise ServiceError("评价类型不正确。", errors={"evaluation_type": ["请选择自评或互评。"]}, status=400)
+        config_row = classroom_evaluation_config_row(config)
+        if not config_row.get(_evaluation_enabled_field(evaluation_type)):
+            raise ServiceError(f"教师尚未开启{EVALUATION_TYPE_LABELS[evaluation_type]}。", status=400)
+        if evaluation_type == ClassroomEvaluationSubmission.EvaluationType.SELF:
+            target = request.user
+            target_group = None
+        else:
+            if group is None:
+                raise ServiceError("本课堂尚未开启你所在小组的互评。", status=400)
+            try:
+                target_id = int(request.data.get("target"))
+            except (TypeError, ValueError):
+                raise ServiceError("请选择互评对象。", errors={"target": ["请选择同组成员。"]}, status=400)
+            if target_id == request.user.id:
+                raise ServiceError("互评对象不能是自己。", errors={"target": ["请选择同组成员。"]}, status=400)
+            member = group.members.select_related("student").filter(student_id=target_id).first()
+            if member is None:
+                raise ServiceError("互评对象必须是同组成员。", status=403)
+            target = member.student
+            target_group = group
+        ratings = _validate_evaluation_ratings(config, evaluation_type, request.data.get("ratings"))
+        comment = str(request.data.get("comment") or "").strip()
+        if len(comment) > 1000:
+            raise ServiceError("评价备注不能超过 1000 个字符。", errors={"comment": ["评价备注不能超过 1000 个字符。"]}, status=400)
+        submission, _ = ClassroomEvaluationSubmission.objects.update_or_create(
+            course=session.course,
+            class_group=session.class_group,
+            session=session,
+            evaluation_type=evaluation_type,
+            evaluator=request.user,
+            target=target,
+            defaults={"ratings": ratings, "comment": comment, "group": target_group},
+        )
+        _write_student_event(
+            request,
+            profile,
+            LearningEvent.EventType.ANSWER_SUBMIT,
+            course=session.course,
+            lesson=session.lesson,
+            object_type="classroom_evaluation",
+            object_id=submission.id,
+            metadata={
+                "action": f"{evaluation_type}_evaluation_submit",
+                "classroom_session": session.id,
+                "evaluation_type": evaluation_type,
+                "target_id": target.id,
+                "group_id": target_group.id if target_group else None,
+                "ratings": ratings,
+                "comment": comment,
+                "ai_feature": f"classroom_{evaluation_type}_evaluation",
+            },
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(_student_evaluation_payload(request, session, config, group), f"{EVALUATION_TYPE_LABELS[evaluation_type]}已提交。")
+
+
+def _office_group(group_id) -> ClassroomGroup | None:
+    try:
+        return (
+            ClassroomGroup.objects.select_related(
+                "collaboration",
+                "collaboration__session",
+                "collaboration__session__school",
+                "collaboration__session__course",
+                "collaboration__session__lesson",
+                "collaboration__session__class_group",
+                "leader",
+            )
+            .filter(pk=int(group_id))
+            .first()
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _group_document_access(request, group: ClassroomGroup) -> tuple[bool, bool]:
+    user = request.user
+    if not user.is_authenticated:
+        return False, False
+    session = group.collaboration.session
+    if user.role == "teacher":
+        can_open = session.teacher_id == user.id and session.school_id == user.school_id
+        return can_open, can_open
+    if user.role == "student":
+        try:
+            profile = user.student_profile
+        except StudentProfile.DoesNotExist:
+            return False, False
+        if profile.class_group_id != session.class_group_id or session.school_id != user.school_id:
+            return False, False
+        is_member = ClassroomGroupMember.objects.filter(group=group, student=user).exists()
+        can_edit = (
+            is_member
+            and session.status == ClassroomSession.Status.RUNNING
+            and group.collaboration.is_enabled
+            and group.collaboration.status == ClassroomGroupCollaboration.Status.OPEN
+            and group.collaboration.allow_onlyoffice_edit
+        )
+        return is_member, can_edit
+    if user.role == "school_admin":
+        return user.school_id == session.school_id, False
+    if user.role == "super_admin":
+        return True, False
+    return False, False
+
+
+def _write_group_document_open_event(request, group: ClassroomGroup) -> None:
+    if request.user.role != "student":
+        return
+    try:
+        profile = request.user.student_profile
+    except StudentProfile.DoesNotExist:
+        return
+    session = group.collaboration.session
+    LearningEvent.objects.create(
+        actor=request.user,
+        class_group=profile.class_group,
+        course=session.course,
+        lesson=session.lesson,
+        event_type=LearningEvent.EventType.RESOURCE_VIEW,
+        object_type="classroom_group_document",
+        object_id=str(group.id),
+        metadata={
+            "action": "group_document_open",
+            "classroom_session": session.id,
+            "collaboration": group.collaboration_id,
+            "group": group.id,
+            "document_type": group.document_file_ext or group.collaboration.document_type,
+        },
+        occurred_at=timezone.now(),
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def classroom_group_office_config(request, group_id):
+    group = _office_group(group_id)
+    if group is None:
+        return fail("小组文档不存在。", status=404)
+    can_open, can_edit = _group_document_access(request, group)
+    if not can_open:
+        return fail("无权打开该小组协作文档。", status=403)
+
+    group = _ensure_group_document(group)
+    file_ext = group.document_file_ext or group.collaboration.document_type
+    if file_ext not in OFFICE_FILE_TYPES:
+        return fail("小组协作文档类型不支持网页内编辑。", status=400)
+
+    requested_mode = request.GET.get("mode", "view").strip().lower()
+    mode = "edit" if requested_mode == "edit" and can_edit else "view"
+    attachment_url = request.build_absolute_uri(f"/{group.collaboration_document.url.lstrip('/')}")
+    base_url = f"{'https' if request.is_secure() else 'http'}://{request.get_host()}"
+    config = {
+        "document": {
+            "fileType": file_ext,
+            "key": f"classroom-group-{group.id}-{group.document_version}-{int(group.updated_at.timestamp())}",
+            "title": group.document_original_name or f"{group.name}.{file_ext}",
+            "url": attachment_url,
+            "permissions": {
+                "edit": mode == "edit",
+                "comment": can_edit,
+                "download": True,
+                "print": True,
+            },
+        },
+        "documentType": _office_document_type(file_ext),
+        "editorConfig": {
+            "callbackUrl": f"{base_url}/api/v1/classroom/groups/{group.id}/office-callback/",
+            "lang": "zh-CN",
+            "mode": mode,
+            "user": {
+                "id": str(request.user.id),
+                "name": request.user.display_name or request.user.username,
+            },
+            "customization": {
+                "autosave": True,
+                "forcesave": True,
+            },
+        },
+        "height": "100%",
+        "width": "100%",
+    }
+    _write_group_document_open_event(request, group)
+    return ok(
+        {
+            "server_url": settings.ONLYOFFICE_DOCUMENT_SERVER_URL,
+            "mode": mode,
+            "can_edit": can_edit,
+            "config": sign_editor_config(config),
+        }
+    )
+
+
+@csrf_exempt
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def classroom_group_office_callback(request, group_id):
+    group = _office_group(group_id)
+    if group is None or not group.collaboration_document:
+        return JsonResponse({"error": 1}, status=404)
+    try:
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": 1})
+
+    status = payload.get("status")
+    if status in {2, 6} and payload.get("url"):
+        try:
+            with urllib.request.urlopen(payload["url"], timeout=30) as response:
+                data = response.read()
+            with group.collaboration_document.storage.open(group.collaboration_document.name, "wb") as target:
+                target.write(data)
+            group.document_version += 1
+            group.updated_at = timezone.now()
+            group.save(update_fields=["document_version", "updated_at"])
+        except Exception:
+            return JsonResponse({"error": 1})
+    return JsonResponse({"error": 0})
+
+
+def _score_float(value, fallback: float = 0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if number >= 0 else fallback
+
+
+def _clean_answer_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _answer_to_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [_clean_answer_text(item) for item in value if _clean_answer_text(item)]
+    text = _clean_answer_text(value)
+    return [text] if text else []
+
+
+def _answer_display(value) -> str:
+    if isinstance(value, list):
+        return "、".join(_answer_to_list(value))
+    if isinstance(value, dict):
+        attachment_name = _clean_answer_text(value.get("attachment_name") or value.get("original_name") or value.get("filename"))
+        if attachment_name:
+            return attachment_name
+        return json.dumps(value, ensure_ascii=False)
+    return _clean_answer_text(value)
+
+
+def _question_answer_value(answer, question_id: str):
+    if not isinstance(answer, dict):
+        return None
+    questions = answer.get("questions")
+    if not isinstance(questions, dict):
+        return None
+    return questions.get(str(question_id))
+
+
+def _answer_text_value(answer) -> str:
+    if isinstance(answer, dict):
+        return _clean_answer_text(answer.get("text"))
+    return _clean_answer_text(answer)
+
+
+def _question_answered(value) -> bool:
+    if isinstance(value, list):
+        return any(_clean_answer_text(item) for item in value)
+    if isinstance(value, dict):
+        return bool(
+            value.get("attachment_id")
+            or value.get("id")
+            or value.get("attachment_url")
+            or _clean_answer_text(value.get("answer"))
+            or _clean_answer_text(value.get("text"))
+        )
+    return bool(_clean_answer_text(value))
+
+
+def _answer_attachment_value(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    attachment_url = _clean_answer_text(value.get("attachment_url") or value.get("url"))
+    attachment_name = _clean_answer_text(value.get("attachment_name") or value.get("original_name") or value.get("filename"))
+    attachment_id = value.get("attachment_id") or value.get("id")
+    if not (attachment_id or attachment_url or attachment_name):
+        return None
+    try:
+        attachment_id = int(attachment_id) if attachment_id else None
+    except (TypeError, ValueError):
+        attachment_id = None
+    score = value.get("score")
+    try:
+        score = float(score) if score is not None and score != "" else None
+    except (TypeError, ValueError):
+        score = None
+    return {
+        "id": attachment_id,
+        "attachment_url": attachment_url,
+        "attachment_name": attachment_name,
+        "file_ext": clean_resource_ext(value.get("file_ext"), attachment_name, attachment_url),
+        "attachment_size": int(value.get("attachment_size") or value.get("file_size") or 0),
+        "score": score,
+        "feedback": _clean_answer_text(value.get("feedback")),
+        "evaluated_at": value.get("evaluated_at"),
+    }
+
+
+def _score_lesson_question(question: dict, value) -> dict:
+    question_type = str(question.get("question_type") or "")
+    expected = _answer_to_list(question.get("answer"))
+    actual = [] if question_type == "file" else _answer_to_list(value)
+    max_score = _score_float(question.get("score"))
+    answer_text = _answer_display(value)
+    auto_gradable = question_type in {"single", "multiple", "judge", "blank"} and bool(expected)
+    attachment = _answer_attachment_value(value) if question_type == "file" else None
+    is_correct = None
+    score = attachment.get("score") if attachment else None
+
+    if auto_gradable:
+        if question_type == "multiple":
+            is_correct = sorted(actual) == sorted(expected)
+        elif question_type == "blank":
+            is_correct = bool(actual) and (actual[0] in expected or sorted(actual) == sorted(expected))
+        else:
+            is_correct = bool(actual) and actual[0] == expected[0]
+        score = max_score if is_correct else 0
+
+    return {
+        "question_id": str(question.get("id") or ""),
+        "question_type": question_type,
+        "question_type_label": question.get("question_type_label") or question_type,
+        "stem": question.get("stem") or "",
+        "required": bool(question.get("is_required", True)),
+        "answer_values": actual,
+        "answer_text": answer_text,
+        "is_answered": _question_answered(value),
+        "auto_gradable": auto_gradable,
+        "is_correct": is_correct,
+        "score": score,
+        "max_score": max_score,
+        "attachment": attachment,
+    }
+
+
+def _lesson_step_answer_progress(questions: list[dict], answer) -> dict:
+    answer_rows = []
+    answered_count = 0
+    auto_score = 0.0
+    auto_score_max = 0.0
+    auto_gradable_count = 0
+    correct_count = 0
+    for question in questions:
+        value = _question_answer_value(answer, str(question.get("id") or ""))
+        row = _score_lesson_question(question, value)
+        answer_rows.append(row)
+        if row["is_answered"]:
+            answered_count += 1
+        if row["auto_gradable"]:
+            auto_gradable_count += 1
+            auto_score_max += _score_float(row["max_score"])
+            auto_score += _score_float(row["score"])
+            if row["is_correct"]:
+                correct_count += 1
+    return {
+        "answers": answer_rows,
+        "text": _answer_text_value(answer),
+        "answered_count": answered_count,
+        "question_count": len(questions),
+        "required_count": sum(1 for question in questions if question.get("is_required", True)),
+        "auto_score": round(auto_score, 2),
+        "auto_score_max": round(auto_score_max, 2),
+        "auto_gradable_count": auto_gradable_count,
+        "correct_count": correct_count,
+    }
+
+
+def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
+    step = session.current_step if getattr(session, "current_step", None) and session.current_step_id else None
+    if step is None:
+        return {
+            "step": None,
+            "summary": {
+                "total": 0,
+                "submitted": 0,
+                "not_submitted": 0,
+                "question_count": 0,
+                "required_count": 0,
+                "auto_score_avg": None,
+                "auto_score_max": 0,
+            },
+            "rows": [],
+        }
+
+    profiles = list(
+        StudentProfile.objects.select_related("user")
+        .filter(class_group=session.class_group, user__is_active=True)
+        .order_by("user__display_name", "user__username", "id")
+    )
+    threshold = session.current_step_started_at or session.started_at
+    events = LearningEvent.objects.filter(
+        actor_id__in=[profile.user_id for profile in profiles],
+        event_type=LearningEvent.EventType.ANSWER_SUBMIT,
+        object_type="lesson_step",
+        object_id=str(step.id),
+    ).select_related("actor")
+    if threshold:
+        events = events.filter(occurred_at__gte=threshold)
+
+    latest_by_student = {}
+    for event in events.order_by("actor_id", "-occurred_at", "-id"):
+        latest_by_student.setdefault(event.actor_id, event)
+    work_by_student_question = {
+        (item.student_id, item.question_id): item
+        for item in StudentWorkAttachment.objects.filter(
+            lesson_step=step,
+            student_id__in=[profile.user_id for profile in profiles],
+        )
+    }
+
+    apply_layering = lesson_step_has_layered_questions(step)
+    rows = []
+    auto_score_sum = 0.0
+    auto_score_rows = 0
+    max_auto_score = 0.0
+    for profile in profiles:
+        questions = normalize_lesson_question_items(
+            step.question_items,
+            include_answer=True,
+            student_layer=profile.current_layer,
+            apply_layering=apply_layering,
+        )
+        event = latest_by_student.get(profile.user_id)
+        metadata = event.metadata if event and isinstance(event.metadata, dict) else {}
+        answer = metadata.get("answer") if event else None
+        progress = _lesson_step_answer_progress(questions, answer)
+        for answer_row in progress["answers"]:
+            if answer_row["question_type"] != "file":
+                continue
+            work = work_by_student_question.get((profile.user_id, answer_row["question_id"]))
+            if not work:
+                continue
+            attachment_payload = student_work_attachment_row(work)
+            answer_row["attachment"] = attachment_payload
+            answer_row["answer_text"] = attachment_payload["attachment_name"]
+            answer_row["is_answered"] = True
+            answer_row["score"] = attachment_payload["score"]
+        submitted = event is not None
+        if submitted and progress["auto_score_max"] > 0:
+            auto_score_sum += progress["auto_score"]
+            auto_score_rows += 1
+        max_auto_score = max(max_auto_score, progress["auto_score_max"])
+        rows.append(
+            {
+                "student_id": profile.user_id,
+                "profile_id": profile.id,
+                "username": profile.user.username,
+                "display_name": profile.user.display_name or profile.user.username,
+                "student_no": profile.student_no,
+                "current_layer": profile.current_layer or "",
+                "current_layer_label": profile.get_current_layer_display() if profile.current_layer else "",
+                "submitted": submitted,
+                "submitted_at": event.occurred_at if event else None,
+                "event_id": event.id if event else None,
+                "text": progress["text"],
+                "answered_count": progress["answered_count"],
+                "question_count": progress["question_count"],
+                "required_count": progress["required_count"],
+                "auto_score": progress["auto_score"] if submitted else None,
+                "auto_score_max": progress["auto_score_max"],
+                "auto_gradable_count": progress["auto_gradable_count"],
+                "correct_count": progress["correct_count"],
+                "answers": progress["answers"] if submitted else [],
+            }
+        )
+
+    submitted_count = sum(1 for row in rows if row["submitted"])
+    return {
+        "step": {
+            "id": step.id,
+            "title": step.title,
+            "step_type": step.step_type,
+            "step_type_label": step.get_step_type_display(),
+            "is_layered": apply_layering,
+        },
+        "summary": {
+            "total": len(rows),
+            "submitted": submitted_count,
+            "not_submitted": len(rows) - submitted_count,
+            "question_count": max((row["question_count"] for row in rows), default=0),
+            "required_count": max((row["required_count"] for row in rows), default=0),
+            "auto_score_avg": round(auto_score_sum / auto_score_rows, 2) if auto_score_rows else None,
+            "auto_score_max": round(max_auto_score, 2),
+        },
+        "rows": rows,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_classroom_step_progress(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(_teacher_classroom_step_progress_payload(session))
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_attachment_score(request, pk, attachment_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    attachment = (
+        StudentWorkAttachment.objects.select_related("student", "lesson_step", "lesson", "course", "class_group")
+        .filter(pk=attachment_id, class_group=session.class_group, lesson_step=session.current_step)
+        .first()
+    )
+    if attachment is None:
+        return fail("附件提交不存在或无权评分。", status=404)
+    question = next(
+        (
+            item
+            for item in normalize_lesson_question_items(attachment.lesson_step.question_items, include_answer=True)
+            if str(item.get("id")) == attachment.question_id
+        ),
+        None,
+    )
+    max_score = _score_float(question.get("score") if question else 100, 100)
+    try:
+        score = float(request.data.get("score"))
+    except (TypeError, ValueError):
+        return fail("分数必须是数字。", errors={"score": ["分数必须是数字。"]}, status=400)
+    if score < 0 or score > max_score:
+        return fail(f"分数需在 0-{max_score:g} 之间。", errors={"score": [f"分数需在 0-{max_score:g} 之间。"]}, status=400)
+    feedback = str(request.data.get("feedback") or "").strip()
+    if len(feedback) > 1000:
+        return fail("反馈不能超过 1000 个字符。", errors={"feedback": ["反馈不能超过 1000 个字符。"]}, status=400)
+
+    attachment.score = score
+    attachment.feedback = feedback
+    attachment.evaluated_by = request.user
+    attachment.evaluated_at = timezone.now()
+    attachment.save(update_fields=["score", "feedback", "evaluated_by", "evaluated_at", "updated_at"])
+    LearningEvent.objects.create(
+        actor=request.user,
+        class_group=session.class_group,
+        course=session.course,
+        lesson=session.lesson,
+        event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
+        object_type="student_work_attachment",
+        object_id=str(attachment.id),
+        score=score,
+        metadata={
+            "action": "student_work_attachment_score",
+            "classroom_session": session.id,
+            "student_id": attachment.student_id,
+            "lesson_step": attachment.lesson_step_id,
+            "question_id": attachment.question_id,
+            "feedback": feedback,
+        },
+        occurred_at=timezone.now(),
+    )
+    return ok(student_work_attachment_row(attachment), "附件评分已保存。")
+
+
+def _attendance_events_for_activity(activity: ClassroomActivity):
+    return (
+        LearningEvent.objects.filter(
+            object_type="classroom_activity",
+            object_id=str(activity.id),
+            metadata__action="classroom_activity_response",
+            metadata__command="sign_in",
+        )
+        .select_related("actor")
+        .order_by("actor_id", "-occurred_at", "-id")
+    )
+
+
+def _teacher_attendance_payload(activity: ClassroomActivity) -> dict:
+    profiles = (
+        StudentProfile.objects.select_related("user")
+        .filter(class_group=activity.session.class_group, user__is_active=True)
+        .order_by("user__display_name", "user__username")
+    )
+    latest_by_student = {}
+    for event in _attendance_events_for_activity(activity):
+        latest_by_student.setdefault(event.actor_id, event)
+    rows = [classroom_attendance_row(activity, profile, latest_by_student.get(profile.user_id)) for profile in profiles]
+    summary = {
+        "total": len(rows),
+        "signed": sum(1 for row in rows if row["status"] == "signed"),
+        "late": sum(1 for row in rows if row["status"] == "late"),
+        "leave": sum(1 for row in rows if row["status"] == "leave"),
+        "absent": sum(1 for row in rows if row["status"] == "absent"),
+        "not_signed": sum(1 for row in rows if row["status"] == "not_signed"),
+    }
+    return {"activity": classroom_activity_row(activity), "summary": summary, "rows": rows}
+
+
+def _quick_answer_response_events(activity: ClassroomActivity):
+    return (
+        LearningEvent.objects.filter(
+            object_type="classroom_activity",
+            object_id=str(activity.id),
+            metadata__action="classroom_activity_response",
+            metadata__command="quick_answer",
+            metadata__response_type="quick_answer",
+        )
+        .select_related("actor", "actor__student_profile")
+        .order_by("occurred_at", "id")
+    )
+
+
+def _quick_answer_score_events(activity: ClassroomActivity):
+    return (
+        LearningEvent.objects.filter(
+            object_type="classroom_activity",
+            object_id=str(activity.id),
+            metadata__action="quick_answer_score",
+        )
+        .select_related("actor")
+        .order_by("actor_id", "-occurred_at", "-id")
+    )
+
+
+def _quick_answer_defaults(activity: ClassroomActivity) -> dict:
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    defaults = metadata.get("score_defaults") if isinstance(metadata.get("score_defaults"), dict) else {}
+    try:
+        plus = float(defaults.get("plus", 2))
+    except (TypeError, ValueError):
+        plus = 2
+    try:
+        minus = float(defaults.get("minus", -1))
+    except (TypeError, ValueError):
+        minus = -1
+    return {"plus": plus, "minus": minus}
+
+
+def _teacher_quick_answer_payload(activity: ClassroomActivity) -> dict:
+    score_by_student = {}
+    for event in _quick_answer_score_events(activity):
+        score_by_student.setdefault(event.actor_id, event)
+
+    rows = []
+    for index, event in enumerate(_quick_answer_response_events(activity), start=1):
+        profile = getattr(event.actor, "student_profile", None)
+        score_event = score_by_student.get(event.actor_id)
+        score_metadata = score_event.metadata if score_event and isinstance(score_event.metadata, dict) else {}
+        rows.append(
+            {
+                "rank": index,
+                "event_id": event.id,
+                "student_id": event.actor_id,
+                "username": event.actor.username,
+                "display_name": event.actor.display_name or event.actor.username,
+                "student_no": getattr(profile, "student_no", "") if profile else "",
+                "current_layer": getattr(profile, "current_layer", "") or "",
+                "current_layer_label": profile.get_current_layer_display() if profile and profile.current_layer else "",
+                "responded_at": event.occurred_at,
+                "score": score_event.score if score_event else None,
+                "score_action": str(score_metadata.get("score_action") or ""),
+                "score_note": str(score_metadata.get("score_note") or ""),
+                "scored_at": score_event.occurred_at if score_event else None,
+            }
+        )
+
+    defaults = _quick_answer_defaults(activity)
+    summary = {
+        "total": len(rows),
+        "scored": sum(1 for row in rows if row["score"] is not None),
+        "plus": sum(1 for row in rows if row["score_action"] == "plus"),
+        "minus": sum(1 for row in rows if row["score_action"] == "minus"),
+    }
+    return {"activity": classroom_activity_row(activity), "summary": summary, "score_defaults": defaults, "rows": rows}
+
+
+def _random_pick_score_events(activity: ClassroomActivity):
+    return (
+        LearningEvent.objects.filter(
+            object_type="classroom_activity",
+            object_id=str(activity.id),
+            metadata__action="random_pick_score",
+        )
+        .select_related("actor")
+        .order_by("actor_id", "-occurred_at", "-id")
+    )
+
+
+def _teacher_random_pick_student_rows(
+    session: ClassroomSession,
+    *,
+    picked_user_id: int = 0,
+    score_by_student: dict | None = None,
+) -> tuple[list[dict], dict | None]:
+    score_by_student = score_by_student or {}
+    students = []
+    picked_row = None
+    profiles = (
+        StudentProfile.objects.select_related("user")
+        .filter(class_group=session.class_group, user__is_active=True)
+        .order_by("user__display_name", "user__username")
+    )
+    for profile in profiles:
+        score_event = score_by_student.get(profile.user_id)
+        score_metadata = score_event.metadata if score_event and isinstance(score_event.metadata, dict) else {}
+        row = {
+            "student_id": profile.user_id,
+            "profile_id": profile.id,
+            "username": profile.user.username,
+            "display_name": profile.user.display_name or profile.user.username,
+            "student_no": profile.student_no,
+            "current_layer": profile.current_layer or "",
+            "current_layer_label": profile.get_current_layer_display() if profile.current_layer else "",
+            "is_picked": profile.user_id == picked_user_id,
+            "score": score_event.score if score_event else None,
+            "score_action": str(score_metadata.get("score_action") or ""),
+            "score_note": str(score_metadata.get("score_note") or ""),
+            "scored_at": score_event.occurred_at if score_event else None,
+        }
+        if row["is_picked"]:
+            picked_row = row
+        students.append(row)
+    return students, picked_row
+
+
+def _teacher_random_pick_preview_payload(session: ClassroomSession) -> dict:
+    students, _ = _teacher_random_pick_student_rows(session)
+    return {
+        "summary": {"total": len(students), "picked": 0, "scored": 0},
+        "score_defaults": {"plus": 2, "minus": -1},
+        "picked_student": None,
+        "students": students,
+    }
+
+
+def _teacher_random_pick_payload(activity: ClassroomActivity) -> dict:
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    picked = metadata.get("picked_student") if isinstance(metadata.get("picked_student"), dict) else {}
+    picked_user_id = int(picked.get("user_id") or 0)
+    score_by_student = {}
+    for event in _random_pick_score_events(activity):
+        score_by_student.setdefault(event.actor_id, event)
+
+    students, picked_row = _teacher_random_pick_student_rows(
+        activity.session,
+        picked_user_id=picked_user_id,
+        score_by_student=score_by_student,
+    )
+
+    defaults = _quick_answer_defaults(activity)
+    summary = {
+        "total": len(students),
+        "picked": 1 if picked_row else 0,
+        "scored": 1 if picked_row and picked_row["score"] is not None else 0,
+    }
+    return {
+        "activity": classroom_activity_row(activity),
+        "summary": summary,
+        "score_defaults": defaults,
+        "picked_student": picked_row,
+        "students": students,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_classroom_random_pick_preview(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if session.status != ClassroomSession.Status.RUNNING:
+        return fail("请先开始课堂，再使用随机点名。", status=400)
+    return ok(_teacher_random_pick_preview_payload(session))
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_classroom_attendance(request, pk, activity_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        activity = _teacher_classroom_activity(request, activity_id)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if activity.session_id != session.id:
+        return fail("签到活动不属于当前课堂。", status=404)
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    if metadata.get("command") != "sign_in":
+        return fail("该课堂活动不是签到。", status=400)
+    return ok(_teacher_attendance_payload(activity))
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_classroom_quick_answer(request, pk, activity_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        activity = _teacher_classroom_activity(request, activity_id)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if activity.session_id != session.id:
+        return fail("抢答活动不属于当前课堂。", status=404)
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    if metadata.get("command") != "quick_answer":
+        return fail("该课堂活动不是抢答。", status=400)
+    return ok(_teacher_quick_answer_payload(activity))
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_classroom_random_pick(request, pk, activity_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        activity = _teacher_classroom_activity(request, activity_id)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if activity.session_id != session.id:
+        return fail("随机点名活动不属于当前课堂。", status=404)
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    if metadata.get("command") != "random_pick":
+        return fail("该课堂活动不是随机点名。", status=400)
+    return ok(_teacher_random_pick_payload(activity))
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_random_pick_score(request, pk, activity_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        activity = _teacher_classroom_activity(request, activity_id)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if activity.session_id != session.id:
+        return fail("随机点名活动不属于当前课堂。", status=404)
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    if metadata.get("command") != "random_pick":
+        return fail("该课堂活动不是随机点名。", status=400)
+    picked = metadata.get("picked_student") if isinstance(metadata.get("picked_student"), dict) else {}
+    picked_user_id = int(picked.get("user_id") or 0)
+    action = str(request.data.get("action") or "").strip()
+    defaults = _quick_answer_defaults(activity)
+    if action == "plus":
+        default_score = defaults["plus"]
+        default_label = "加分"
+    elif action == "minus":
+        default_score = defaults["minus"]
+        default_label = "减分"
+    else:
+        return fail("评分动作不正确。", errors={"action": ["请选择加分或减分。"]}, status=400)
+    try:
+        student_id = int(request.data.get("student_id") or picked_user_id)
+    except (TypeError, ValueError):
+        student_id = picked_user_id
+    if not picked_user_id or student_id != picked_user_id:
+        return fail("只能给本次被点名的学生评分。", status=400)
+    profile = (
+        StudentProfile.objects.select_related("user")
+        .filter(user_id=student_id, class_group=session.class_group, user__is_active=True)
+        .first()
+    )
+    if profile is None:
+        return fail("学生不属于当前课堂班级。", status=404)
+    try:
+        score = float(request.data.get("score", default_score))
+    except (TypeError, ValueError):
+        score = default_score
+    score = abs(score) if action == "plus" else -abs(score)
+    score = min(max(score, -100), 100)
+    note = str(request.data.get("note") or default_label).strip()[:500]
+    previous_score_event = _random_pick_score_events(activity).filter(actor_id=student_id).first()
+    previous_score = float(previous_score_event.score or 0) if previous_score_event else 0
+    LearningEvent.objects.create(
+        actor=profile.user,
+        class_group=profile.class_group,
+        course=session.course,
+        lesson=session.lesson,
+        event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
+        object_type="classroom_activity",
+        object_id=str(activity.id),
+        score=score,
+        metadata={
+            "action": "random_pick_score",
+            "command": "random_pick",
+            "response_type": "random_pick_score",
+            "score_action": action,
+            "score_note": note,
+            "activity_title": activity.title,
+            "session": session.id,
+            "default_score": default_score,
+            "previous_score": previous_score,
+            "ai_feature": "random_pick_score",
+        },
+        occurred_at=timezone.now(),
+    )
+    profile.score = max(float(profile.score or 0) - previous_score + score, 0)
+    profile.save(update_fields=["score", "updated_at"])
+    return ok(_teacher_random_pick_payload(activity), "随机点名评分已记录。")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_quick_answer_score(request, pk, activity_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        activity = _teacher_classroom_activity(request, activity_id)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if activity.session_id != session.id:
+        return fail("抢答活动不属于当前课堂。", status=404)
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    if metadata.get("command") != "quick_answer":
+        return fail("该课堂活动不是抢答。", status=400)
+
+    action = str(request.data.get("action") or "").strip()
+    defaults = _quick_answer_defaults(activity)
+    if action == "plus":
+        default_score = defaults["plus"]
+        default_label = "加分"
+    elif action == "minus":
+        default_score = defaults["minus"]
+        default_label = "减分"
+    else:
+        return fail("评分动作不正确。", errors={"action": ["请选择加分或减分。"]}, status=400)
+    try:
+        student_id = int(request.data.get("student_id"))
+    except (TypeError, ValueError):
+        return fail("学生编号不正确。", errors={"student_id": ["请选择学生。"]}, status=400)
+    profile = (
+        StudentProfile.objects.select_related("user")
+        .filter(user_id=student_id, class_group=session.class_group, user__is_active=True)
+        .first()
+    )
+    if profile is None:
+        return fail("学生不属于当前课堂班级。", status=404)
+    has_responded = _quick_answer_response_events(activity).filter(actor_id=student_id).exists()
+    if not has_responded:
+        return fail("该学生还没有参与本次抢答。", status=400)
+    try:
+        score = float(request.data.get("score", default_score))
+    except (TypeError, ValueError):
+        score = default_score
+    if action == "plus":
+        score = abs(score)
+    else:
+        score = -abs(score)
+    score = min(max(score, -100), 100)
+    note = str(request.data.get("note") or default_label).strip()[:500]
+    previous_score_event = _quick_answer_score_events(activity).filter(actor_id=student_id).first()
+    previous_score = float(previous_score_event.score or 0) if previous_score_event else 0
+    LearningEvent.objects.create(
+        actor=profile.user,
+        class_group=profile.class_group,
+        course=session.course,
+        lesson=session.lesson,
+        event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
+        object_type="classroom_activity",
+        object_id=str(activity.id),
+        score=score,
+        metadata={
+            "action": "quick_answer_score",
+            "command": "quick_answer",
+            "response_type": "quick_answer_score",
+            "score_action": action,
+            "score_note": note,
+            "activity_title": activity.title,
+            "session": session.id,
+            "default_score": default_score,
+            "previous_score": previous_score,
+            "ai_feature": "quick_answer_score",
+        },
+        occurred_at=timezone.now(),
+    )
+    profile.score = max(float(profile.score or 0) - previous_score + score, 0)
+    profile.save(update_fields=["score", "updated_at"])
+    return ok(_teacher_quick_answer_payload(activity), "抢答评分已记录。")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_attendance_mark(request, pk, activity_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+        activity = _teacher_classroom_activity(request, activity_id)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if activity.session_id != session.id:
+        return fail("签到活动不属于当前课堂。", status=404)
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    if metadata.get("command") != "sign_in":
+        return fail("该课堂活动不是签到。", status=400)
+    status = str(request.data.get("status") or "").strip()
+    labels = {"signed": "已签到", "late": "迟到", "leave": "请假", "absent": "缺勤"}
+    if status not in labels:
+        return fail("签到状态不正确。", errors={"status": ["请选择已签到、迟到、请假或缺勤。"]}, status=400)
+    try:
+        student_id = int(request.data.get("student_id"))
+    except (TypeError, ValueError):
+        return fail("学生编号不正确。", errors={"student_id": ["请选择学生。"]}, status=400)
+    profile = (
+        StudentProfile.objects.select_related("user")
+        .filter(user_id=student_id, class_group=session.class_group, user__is_active=True)
+        .first()
+    )
+    if profile is None:
+        return fail("学生不属于当前课堂班级。", status=404)
+    note = str(request.data.get("note") or "").strip()[:500]
+    LearningEvent.objects.create(
+        actor=profile.user,
+        class_group=profile.class_group,
+        course=session.course,
+        lesson=session.lesson,
+        event_type=LearningEvent.EventType.PAGE_VIEW,
+        object_type="classroom_activity",
+        object_id=str(activity.id),
+        metadata={
+            "action": "classroom_activity_response",
+            "response_type": "sign_in",
+            "command": "sign_in",
+            "attendance_status": status,
+            "attendance_status_label": labels[status],
+            "source": "teacher",
+            "note": note,
+            "activity_title": activity.title,
+        },
+        occurred_at=timezone.now(),
+    )
+    return ok(_teacher_attendance_payload(activity), "签到状态已更新。")
 
 
 @api_view(["GET", "POST"])
@@ -2675,7 +5276,7 @@ def _student_teachers(profile: StudentProfile):
 def _student_current_classroom(profile: StudentProfile) -> ClassroomSession | None:
     if not profile.class_group_id:
         return None
-    return (
+    session = (
         ClassroomSession.objects.select_related("teacher", "course", "course__subject", "lesson", "class_group", "current_step", "current_step__lesson")
         .filter(
             school=profile.user.school,
@@ -2685,6 +5286,9 @@ def _student_current_classroom(profile: StudentProfile) -> ClassroomSession | No
         .order_by("-started_at", "-created_at")
         .first()
     )
+    if session is not None:
+        session.prefetched_activities = list(session.activities.filter(status=ClassroomActivity.Status.OPEN).order_by("-opened_at", "-created_at"))
+    return session
 
 
 def _student_required_pretest_status(user, subject: Subject | None) -> dict:
@@ -2810,7 +5414,7 @@ def _ensure_student_lesson_workspace_allowed(profile: StudentProfile, lesson: Le
     raise ServiceError("该课时属于课堂教学，教师启用课堂后才能进入。", status=403)
 
 
-def _ensure_student_step_classroom_open(profile: StudentProfile, step: LessonStep, *, for_answer: bool = False) -> None:
+def _ensure_student_step_classroom_open(profile: StudentProfile, step: LessonStep, *, for_answer: bool = False) -> ClassroomSession:
     session = _student_lesson_classroom_session(profile, step.lesson)
     if session is None:
         raise ServiceError("该课时尚未启用课堂教学，暂不能学习该环节。", status=403)
@@ -2822,6 +5426,7 @@ def _ensure_student_step_classroom_open(profile: StudentProfile, step: LessonSte
         raise ServiceError("当前环节已关闭。", status=403)
     if for_answer and session.submission_locked:
         raise ServiceError("当前环节已锁定提交。", status=403)
+    return session
 
 
 def _student_lesson_step(profile: StudentProfile, step_id) -> LessonStep:
@@ -2875,6 +5480,200 @@ def _write_student_event(
     )
 
 
+def _lesson_step_contains_learning_web_page(step: LessonStep | None, page_id: int) -> bool:
+    if step is None or not isinstance(step.resource_items, list):
+        return False
+    for item in step.resource_items:
+        if not isinstance(item, dict) or str(item.get("kind") or "") != "learning_page":
+            continue
+        try:
+            if int(item.get("learning_page_id") or 0) == page_id:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _student_learning_web_page_context(request, page_id, *, for_submit: bool = False):
+    profile = _student_profile(request)
+    page = (
+        LearningWebPage.objects.select_related("school", "teacher", "course", "lesson")
+        .filter(pk=page_id, school=request.user.school, is_active=True, status=LearningWebPage.Status.READY)
+        .first()
+    )
+    if page is None:
+        raise ServiceError("学习网页不存在或已停用。", status=404)
+    session = _student_current_classroom(profile)
+    if session is None or session.course_id != page.course_id or session.lesson_id != page.lesson_id:
+        raise ServiceError("该学习网页不属于当前课堂。", status=403)
+    step = session.current_step
+    if step is None or not _lesson_step_contains_learning_web_page(step, page.id):
+        raise ServiceError("教师尚未投放该学习网页。", status=403)
+    _ensure_student_step_classroom_open(profile, step, for_answer=for_submit)
+    return profile, page, session, step
+
+
+def _learning_web_page_form(schema: dict, form_id: str) -> dict | None:
+    blocks = schema.get("blocks") if isinstance(schema, dict) and isinstance(schema.get("blocks"), list) else []
+    return next(
+        (
+            item
+            for item in blocks
+            if isinstance(item, dict) and item.get("type") == "form" and str(item.get("form_id") or "") == form_id
+        ),
+        None,
+    )
+
+
+def _clean_learning_web_page_answers(form: dict, raw_answers) -> dict:
+    answers = raw_answers if isinstance(raw_answers, dict) else {}
+    cleaned = {}
+    errors = {}
+    fields = form.get("fields") if isinstance(form.get("fields"), list) else []
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        field_id = str(field.get("id") or "")
+        field_type = str(field.get("type") or "short_text")
+        value = answers.get(field_id)
+        empty = value is None or value == "" or isinstance(value, list) and not value
+        if field.get("required", True) and empty:
+            errors[field_id] = ["该项必填。"]
+            continue
+        if empty:
+            cleaned[field_id] = [] if field_type == "multiple" else ""
+            continue
+        options = [str(item) for item in field.get("options", [])]
+        if field_type in {"single", "select", "scale"}:
+            value = str(value)
+            if value not in options:
+                errors[field_id] = ["选项不正确。"]
+                continue
+            cleaned[field_id] = value
+        elif field_type == "multiple":
+            values = value if isinstance(value, list) else [value]
+            selected = []
+            for item in values:
+                item = str(item)
+                if item in options and item not in selected:
+                    selected.append(item)
+            if field.get("required", True) and not selected:
+                errors[field_id] = ["请至少选择一项。"]
+                continue
+            cleaned[field_id] = selected
+        elif field_type == "number":
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                errors[field_id] = ["请输入数字。"]
+                continue
+            minimum = field.get("min")
+            maximum = field.get("max")
+            if minimum is not None and number < float(minimum):
+                errors[field_id] = [f"不能小于 {minimum}。"]
+                continue
+            if maximum is not None and number > float(maximum):
+                errors[field_id] = [f"不能大于 {maximum}。"]
+                continue
+            cleaned[field_id] = number
+        else:
+            text = str(value).strip()
+            max_length = 8000 if field_type == "long_text" else 1000
+            if len(text) > max_length:
+                errors[field_id] = [f"内容不能超过 {max_length} 个字符。"]
+                continue
+            cleaned[field_id] = text
+    if errors:
+        raise ServiceError("表单内容校验失败。", errors=errors, status=400)
+    return cleaned
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def learning_web_page_view(request, pk):
+    try:
+        if request.user.role == "teacher":
+            page = _teacher_learning_web_page(request, pk)
+        elif request.user.role == "student":
+            profile, page, session, step = _student_learning_web_page_context(request, pk)
+            _write_student_event(
+                request,
+                profile,
+                LearningEvent.EventType.RESOURCE_VIEW,
+                course=page.course,
+                lesson=page.lesson,
+                object_type="learning_web_page",
+                object_id=page.id,
+                metadata={
+                    "action": "learning_web_page_view",
+                    "page_version": page.revision_no,
+                    "lesson_step": step.id,
+                    "classroom_session": session.id,
+                },
+            )
+        else:
+            raise ServiceError("当前角色无权查看学习网页。", status=403)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(learning_web_page_row(page))
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_learning_web_page_submit(request, pk):
+    try:
+        profile, page, session, step = _student_learning_web_page_context(request, pk, for_submit=True)
+        form_id = str(request.data.get("form_id") or "").strip()
+        form = _learning_web_page_form(page.schema if isinstance(page.schema, dict) else {}, form_id)
+        if form is None:
+            raise ServiceError("表单不存在或已被教师修改。", errors={"form_id": ["请刷新网页后重试。"]}, status=400)
+        answers = _clean_learning_web_page_answers(form, request.data.get("answers"))
+        with transaction.atomic():
+            latest_attempt = (
+                LearningWebPageResponse.objects.filter(page=page, student=request.user, form_id=form_id)
+                .aggregate(max_attempt=Max("attempt_no"))
+                .get("max_attempt")
+                or 0
+            )
+            response = LearningWebPageResponse.objects.create(
+                school=request.user.school,
+                page=page,
+                page_version=page.revision_no,
+                student=request.user,
+                class_group=profile.class_group,
+                course=page.course,
+                lesson=page.lesson,
+                lesson_step=step,
+                classroom_session=session,
+                form_id=form_id,
+                answers=answers,
+                attempt_no=latest_attempt + 1,
+            )
+            _write_student_event(
+                request,
+                profile,
+                LearningEvent.EventType.ANSWER_SUBMIT,
+                course=page.course,
+                lesson=page.lesson,
+                object_type="learning_web_page_form",
+                object_id=response.id,
+                metadata={
+                    "action": "learning_web_page_form_submit",
+                    "learning_web_page": page.id,
+                    "page_version": page.revision_no,
+                    "form_id": form_id,
+                    "lesson_step": step.id,
+                    "classroom_session": session.id,
+                    "attempt_no": response.attempt_no,
+                    "answers": answers,
+                    "ai_feature": "learning_web_page_form",
+                },
+            )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    return ok(learning_web_page_response_row(response), "表单已提交。", status=201)
+
+
 def _student_dashboard_data(request, profile: StudentProfile) -> dict:
     courses = list(_student_course_queryset(profile)[:8])
     for course in courses:
@@ -2919,10 +5718,37 @@ def _student_dashboard_data(request, profile: StudentProfile) -> dict:
                 "path": f"/student/classroom/{current_classroom.id}",
             },
         )
+    if profile.class_group_id:
+        now = timezone.now()
+        pending_test = (
+            TestAssessment.objects.filter(
+                school=request.user.school,
+                target_classes=profile.class_group,
+                status=TestAssessment.Status.OPEN,
+                is_active=True,
+            )
+            .filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
+            .filter(Q(end_at__isnull=True) | Q(end_at__gt=now))
+            .exclude(
+                attempts__student=request.user,
+                attempts__status__in=[TestAttempt.Status.SUBMITTED, TestAttempt.Status.GRADED],
+            )
+            .order_by("end_at", "opened_at", "id")
+            .first()
+        )
+        if pending_test:
+            todo_rows.append(
+                {
+                    "label": "待完成测试",
+                    "detail": pending_test.title,
+                    "level": "warn",
+                    "path": f"/student/assessments/{pending_test.id}",
+                }
+            )
 
     return {
         "profile": student_profile_summary(profile),
-        "current_classroom": student_classroom_row(current_classroom, student_layer=profile.current_layer),
+        "current_classroom": student_classroom_row(current_classroom, student_layer=profile.current_layer, student_user=request.user),
         "metrics": [
             {"label": "我的课程", "value": len(courses), "sub": "当前班级可见"},
             {"label": "学习事件", "value": events.count(), "sub": "已记录行为"},
@@ -2950,7 +5776,7 @@ def student_me(request):
         {
             "user": user_summary(request.user),
             "profile": student_profile_summary(profile),
-            "current_classroom": student_classroom_row(_student_current_classroom(profile), student_layer=profile.current_layer),
+            "current_classroom": student_classroom_row(_student_current_classroom(profile), student_layer=profile.current_layer, student_user=request.user),
             "teachers": [student_teacher_row(teacher) for teacher in _student_teachers(profile)],
         }
     )
@@ -2964,6 +5790,262 @@ def student_dashboard(request):
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(_student_dashboard_data(request, profile))
+
+
+STUDENT_ARCHIVE_EVENT_LABELS = {
+    LearningEvent.EventType.LOGIN: "登录平台",
+    LearningEvent.EventType.PAGE_VIEW: "浏览学习内容",
+    LearningEvent.EventType.RESOURCE_VIEW: "查看学习资源",
+    LearningEvent.EventType.LESSON_ENTER: "进入课时学习",
+    LearningEvent.EventType.ANSWER_SUBMIT: "提交学习作答",
+    LearningEvent.EventType.TASK_SUBMIT: "提交课堂作品",
+    LearningEvent.EventType.PROJECT_SUBMIT: "提交项目成果",
+    LearningEvent.EventType.CHAT_MESSAGE: "参与课堂交流",
+    LearningEvent.EventType.QUESTION_ASK: "提出问题",
+    LearningEvent.EventType.QUESTION_ANSWER: "参与回答",
+}
+
+
+def _student_archive_event_label(event: LearningEvent) -> str:
+    metadata = event.metadata if isinstance(event.metadata, dict) else {}
+    action = str(metadata.get("action") or "")
+    action_labels = {
+        "step_enter": "进入学习环节",
+        "step_complete": "完成学习环节",
+        "learning_web_page_view": "查看 AI 学习任务单",
+        "learning_web_page_form_submit": "提交 AI 学习任务单",
+        "student_work_attachment_upload": "提交课堂作品",
+        "lesson_step_answer_submit": "提交课堂题目",
+    }
+    return action_labels.get(action) or STUDENT_ARCHIVE_EVENT_LABELS.get(event.event_type) or event.get_event_type_display()
+
+
+def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
+    raw_subject = request.query_params.get("subject")
+    subject_id = None
+    if raw_subject not in {None, ""}:
+        try:
+            subject_id = int(raw_subject)
+        except (TypeError, ValueError):
+            raise ServiceError("学科参数不正确。", errors={"subject": ["请选择有效学科。"]}, status=400)
+        selected_subject = Subject.objects.filter(pk=subject_id, school=request.user.school, is_active=True).first()
+        if selected_subject is None:
+            raise ServiceError("学科不存在或已停用。", errors={"subject": ["请选择有效学科。"]}, status=404)
+    else:
+        selected_subject = None
+
+    courses = list(_student_course_queryset(profile))
+    attempts = list(
+        TestAttempt.objects.filter(student=request.user)
+        .select_related("assessment", "assessment__subject", "assessment__course", "assessment__teacher")
+        .annotate(total_possible=Sum("assessment__questions__score"))
+        .order_by("-submitted_at", "-started_at")
+    )
+    pretests = list(
+        PretestSubmission.objects.filter(student=request.user)
+        .select_related("subject", "paper")
+        .order_by("-submitted_at")
+    )
+    works = list(
+        StudentWorkAttachment.objects.filter(student=request.user)
+        .select_related("course", "course__subject", "lesson", "lesson_step", "evaluated_by")
+        .order_by("-updated_at")
+    )
+    evaluations = list(
+        ClassroomEvaluationSubmission.objects.filter(target=request.user)
+        .select_related("course", "course__subject", "evaluator", "session")
+        .order_by("-updated_at")
+    )
+
+    relevant_subjects = {}
+    for course in courses:
+        if course.subject_id:
+            relevant_subjects[course.subject_id] = course.subject
+    for attempt in attempts:
+        if attempt.assessment.subject_id:
+            relevant_subjects[attempt.assessment.subject_id] = attempt.assessment.subject
+    for submission in pretests:
+        relevant_subjects[submission.subject_id] = submission.subject
+    if selected_subject is not None:
+        relevant_subjects[selected_subject.id] = selected_subject
+
+    if subject_id:
+        courses = [item for item in courses if item.subject_id == subject_id]
+        attempts = [item for item in attempts if item.assessment.subject_id == subject_id]
+        pretests = [item for item in pretests if item.subject_id == subject_id]
+        works = [item for item in works if item.course.subject_id == subject_id]
+        evaluations = [item for item in evaluations if item.course.subject_id == subject_id]
+
+    events = LearningEvent.objects.filter(actor=request.user)
+    if subject_id:
+        events = events.filter(course__subject_id=subject_id)
+
+    course_rows = []
+    for course in courses:
+        course_events = events.filter(course=course)
+        visited_lessons = course_events.filter(
+            event_type=LearningEvent.EventType.LESSON_ENTER,
+            lesson_id__isnull=False,
+        ).values("lesson_id").distinct().count()
+        completed_steps = set(
+            course_events.filter(object_type="lesson_step", metadata__action="step_complete")
+            .exclude(object_id="")
+            .values_list("object_id", flat=True)
+        )
+        step_count = int(getattr(course, "step_count", 0) or 0)
+        latest_event = course_events.order_by("-occurred_at").first()
+        course_rows.append(
+            {
+                "id": course.id,
+                "title": course.title,
+                "subject": subject_row(course.subject) if course.subject_id else None,
+                "teacher": student_teacher_row(course.teacher),
+                "lesson_count": int(getattr(course, "lesson_count", 0) or 0),
+                "visited_lesson_count": visited_lessons,
+                "step_count": step_count,
+                "completed_step_count": min(len(completed_steps), step_count) if step_count else len(completed_steps),
+                "progress_percent": round(min(len(completed_steps) * 100 / step_count, 100), 1) if step_count else 0,
+                "event_count": course_events.count(),
+                "last_activity_at": latest_event.occurred_at if latest_event else None,
+            }
+        )
+
+    test_rows = [
+        {
+            "id": attempt.id,
+            "assessment_id": attempt.assessment_id,
+            "title": attempt.assessment.title,
+            "subject": subject_row(attempt.assessment.subject),
+            "course": {"id": attempt.assessment.course_id, "title": attempt.assessment.course.title} if attempt.assessment.course_id else None,
+            "status": attempt.status,
+            "status_label": attempt.get_status_display(),
+            "objective_score": attempt.objective_score,
+            "subjective_score": attempt.subjective_score,
+            "total_score": attempt.total_score,
+            "total_possible": float(getattr(attempt, "total_possible", 0) or 0),
+            "started_at": attempt.started_at,
+            "submitted_at": attempt.submitted_at,
+            "graded_at": attempt.graded_at,
+        }
+        for attempt in attempts[:50]
+    ]
+
+    pretest_rows = [
+        {
+            "id": submission.id,
+            "subject": subject_row(submission.subject),
+            "paper_title": submission.paper.title,
+            "kind": submission.paper.kind,
+            "kind_label": submission.paper.get_kind_display(),
+            "score": submission.score,
+            "submitted_at": submission.submitted_at,
+        }
+        for submission in pretests[:30]
+    ]
+
+    work_rows = []
+    for work in works[:50]:
+        payload = student_work_attachment_row(work)
+        work_rows.append(
+            {
+                **payload,
+                "course_title": work.course.title,
+                "subject": subject_row(work.course.subject) if work.course.subject_id else None,
+                "lesson_title": work.lesson.title,
+                "step_title": work.lesson_step.title,
+                "status": "evaluated" if work.evaluated_at else "submitted",
+                "status_label": "已评价" if work.evaluated_at else "已提交",
+            }
+        )
+
+    evaluation_rows = []
+    for submission in evaluations[:50]:
+        ratings = submission.ratings if isinstance(submission.ratings, dict) else {}
+        numeric_ratings = [float(value) for value in ratings.values() if isinstance(value, (int, float))]
+        evaluation_rows.append(
+            {
+                "id": submission.id,
+                "course": {"id": submission.course_id, "title": submission.course.title},
+                "subject": subject_row(submission.course.subject) if submission.course.subject_id else None,
+                "evaluation_type": submission.evaluation_type,
+                "evaluation_type_label": submission.get_evaluation_type_display(),
+                "average_rating": round(sum(numeric_ratings) / len(numeric_ratings), 1) if numeric_ratings else None,
+                "comment": submission.comment,
+                "evaluator_label": submission.evaluator.display_name if submission.evaluation_type == ClassroomEvaluationSubmission.EvaluationType.TEACHER else submission.get_evaluation_type_display(),
+                "updated_at": submission.updated_at,
+            }
+        )
+
+    event_distribution = []
+    event_count = events.count()
+    distribution_counts = events.values("event_type").annotate(value=Count("id")).order_by("-value")
+    for item in distribution_counts:
+        label = STUDENT_ARCHIVE_EVENT_LABELS.get(item["event_type"])
+        if not label:
+            continue
+        event_distribution.append(
+            {
+                "event_type": item["event_type"],
+                "label": label,
+                "value": item["value"],
+                "percent": round(item["value"] * 100 / event_count, 1) if event_count else 0,
+            }
+        )
+
+    recent_events = []
+    for event in events.select_related("course", "lesson").order_by("-occurred_at")[:60]:
+        recent_events.append(
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "label": _student_archive_event_label(event),
+                "course": {"id": event.course_id, "title": event.course.title} if event.course_id else None,
+                "lesson": {"id": event.lesson_id, "title": event.lesson.title} if event.lesson_id else None,
+                "duration_ms": event.duration_ms,
+                "occurred_at": event.occurred_at,
+            }
+        )
+
+    active_days = events.annotate(day=TruncDate("occurred_at")).values("day").distinct().count()
+    completed_tests = sum(item.status == TestAttempt.Status.GRADED for item in attempts)
+    latest_event = events.order_by("-occurred_at").first()
+    return {
+        "student": {
+            "id": request.user.id,
+            "username": request.user.username,
+            "display_name": request.user.display_name or request.user.username,
+            "student_no": profile.student_no,
+            "school": {"id": request.user.school_id, "name": request.user.school.name} if request.user.school_id else None,
+            "class_group": class_group_row(profile.class_group) if profile.class_group_id else None,
+        },
+        "subjects": [subject_row(item) for item in sorted(relevant_subjects.values(), key=lambda row: row.name)],
+        "selected_subject": subject_id,
+        "metrics": {
+            "course_count": len(courses),
+            "active_day_count": active_days,
+            "learning_event_count": event_count,
+            "completed_test_count": completed_tests,
+            "work_count": len(works),
+            "last_activity_at": latest_event.occurred_at if latest_event else None,
+        },
+        "courses": course_rows,
+        "pretests": pretest_rows,
+        "tests": test_rows,
+        "works": work_rows,
+        "evaluations": evaluation_rows,
+        "event_distribution": event_distribution,
+        "recent_events": recent_events,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsStudent])
+def student_profile_archive(request):
+    try:
+        profile = _student_profile(request)
+        return ok(_student_profile_archive_data(request, profile))
+    except ServiceError as exc:
+        return _service_fail(exc)
 
 
 @api_view(["GET"])
@@ -3290,16 +6372,137 @@ def student_lesson_step_complete(request, step_id):
     return ok({}, "已记录完成环节。")
 
 
+def _student_step_question(profile: StudentProfile, step: LessonStep, question_id: str) -> dict:
+    questions = normalize_lesson_question_items(
+        step.question_items,
+        include_answer=False,
+        student_layer=profile.current_layer,
+        apply_layering=lesson_step_has_layered_questions(step),
+    )
+    question = next((item for item in questions if str(item.get("id")) == str(question_id)), None)
+    if question is None:
+        raise ServiceError("题目不存在或当前层级不可提交。", status=404)
+    return question
+
+
+def _validate_student_work_file(question: dict, uploaded_file) -> tuple[str, int]:
+    if uploaded_file is None:
+        raise ServiceError("请选择要上传的文件。", errors={"attachment": ["请选择要上传的文件。"]}, status=400)
+    config = question.get("file_config") if isinstance(question.get("file_config"), dict) else {}
+    allowed_extensions = config.get("allowed_extensions") if isinstance(config.get("allowed_extensions"), list) else []
+    allowed_extensions = [clean_resource_ext(item) for item in allowed_extensions if clean_resource_ext(item)]
+    if not allowed_extensions:
+        allowed_extensions = ["doc", "docx", "ppt", "pptx", "xls", "xlsx", "pdf", "zip", "rar", "7z", "png", "jpg", "jpeg"]
+    try:
+        max_size_mb = int(config.get("max_size_mb", 100) or 100)
+    except (TypeError, ValueError):
+        max_size_mb = 100
+    max_size = min(max(max_size_mb, 1), 512) * 1024 * 1024
+    file_size = int(getattr(uploaded_file, "size", 0) or 0)
+    if file_size <= 0:
+        raise ServiceError("上传文件为空。", errors={"attachment": ["上传文件为空。"]}, status=400)
+    if file_size > max_size:
+        raise ServiceError(
+            f"文件不能超过 {max_size_mb}MB。",
+            errors={"attachment": [f"文件不能超过 {max_size_mb}MB。"]},
+            status=400,
+        )
+    ext = clean_resource_ext(Path(getattr(uploaded_file, "name", "")).suffix)
+    if ext not in allowed_extensions:
+        raise ServiceError(
+            f"文件格式不支持，请上传：{', '.join(allowed_extensions)}。",
+            errors={"attachment": [f"文件格式不支持，请上传：{', '.join(allowed_extensions)}。"]},
+            status=400,
+        )
+    return ext, file_size
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+@parser_classes([MultiPartParser, FormParser])
+def student_lesson_step_attachment(request, step_id):
+    try:
+        profile = _student_profile(request)
+        step = _student_lesson_step(profile, step_id)
+        session = _ensure_student_step_classroom_open(profile, step, for_answer=True)
+        question_id = str(request.data.get("question_id") or "").strip()
+        question = _student_step_question(profile, step, question_id)
+        if question.get("question_type") != "file":
+            raise ServiceError("当前题目不是附件提交题。", status=400)
+        uploaded_file = request.FILES.get("attachment")
+        file_ext, file_size = _validate_student_work_file(question, uploaded_file)
+    except ServiceError as exc:
+        return _service_fail(exc)
+
+    with transaction.atomic():
+        work = (
+            StudentWorkAttachment.objects.select_for_update()
+            .filter(student=request.user, lesson_step=step, question_id=question_id)
+            .first()
+        )
+        if work and work.attachment:
+            work.attachment.delete(save=False)
+        if work is None:
+            work = StudentWorkAttachment(
+                school=request.user.school,
+                class_group=profile.class_group,
+                course=step.lesson.course,
+                lesson=step.lesson,
+                lesson_step=step,
+                student=request.user,
+                question_id=question_id,
+            )
+        work.classroom_session = session
+        work.question_stem = str(question.get("stem") or "")[:1000]
+        work.attachment = uploaded_file
+        work.original_name = Path(getattr(uploaded_file, "name", "") or "attachment").name[:255]
+        work.file_ext = file_ext
+        work.file_size = file_size
+        work.score = None
+        work.feedback = ""
+        work.evaluated_by = None
+        work.evaluated_at = None
+        work.save()
+
+    payload = student_work_attachment_row(work)
+    _write_student_event(
+        request,
+        profile,
+        LearningEvent.EventType.TASK_SUBMIT,
+        course=step.lesson.course,
+        lesson=step.lesson,
+        object_type="student_work_attachment",
+        object_id=work.id,
+        metadata={
+            "action": "student_work_attachment_upload",
+            "classroom_session": session.id,
+            "lesson_step": step.id,
+            "question_id": question_id,
+            "filename": work.original_name,
+            "file_ext": file_ext,
+            "file_size": file_size,
+        },
+    )
+    return ok(payload, "附件已上传。", status=201)
+
+
 @api_view(["POST"])
 @permission_classes([IsStudent])
 def student_lesson_step_answer(request, step_id):
     try:
         profile = _student_profile(request)
         step = _student_lesson_step(profile, step_id)
-        _ensure_student_step_classroom_open(profile, step, for_answer=True)
+        session = _ensure_student_step_classroom_open(profile, step, for_answer=True)
     except ServiceError as exc:
         return _service_fail(exc)
     answer = request.data.get("answer", "")
+    questions = normalize_lesson_question_items(
+        step.question_items,
+        include_answer=True,
+        student_layer=profile.current_layer,
+        apply_layering=lesson_step_has_layered_questions(step),
+    )
+    progress = _lesson_step_answer_progress(questions, answer)
     _write_student_event(
         request,
         profile,
@@ -3308,9 +6511,30 @@ def student_lesson_step_answer(request, step_id):
         lesson=step.lesson,
         object_type="lesson_step",
         object_id=step.id,
-        metadata={"step_type": step.step_type, "answer": answer},
+        score=progress["auto_score"] if progress["auto_score_max"] > 0 else None,
+        metadata={
+            "action": "lesson_step_answer",
+            "classroom_session": session.id,
+            "step_type": step.step_type,
+            "answer": answer,
+            "answered_count": progress["answered_count"],
+            "question_count": progress["question_count"],
+            "required_count": progress["required_count"],
+            "auto_score": progress["auto_score"],
+            "auto_score_max": progress["auto_score_max"],
+            "auto_gradable_count": progress["auto_gradable_count"],
+            "correct_count": progress["correct_count"],
+        },
     )
-    return ok({}, "答案已提交。")
+    return ok(
+        {
+            "answered_count": progress["answered_count"],
+            "question_count": progress["question_count"],
+            "auto_score": progress["auto_score"],
+            "auto_score_max": progress["auto_score_max"],
+        },
+        "答案已提交。",
+    )
 
 
 @api_view(["GET"])
@@ -3320,7 +6544,7 @@ def student_current_classroom(request):
         profile = _student_profile(request)
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok(student_classroom_row(_student_current_classroom(profile), student_layer=profile.current_layer))
+    return ok(student_classroom_row(_student_current_classroom(profile), student_layer=profile.current_layer, student_user=request.user))
 
 
 @api_view(["GET"])
@@ -3339,7 +6563,213 @@ def student_classroom_detail(request, pk):
         return fail("课堂不存在或无权进入。", status=404)
     if session.status != ClassroomSession.Status.RUNNING:
         return fail("课堂尚未开始，暂不能进入。", status=403)
-    return ok(student_classroom_row(session, student_layer=profile.current_layer))
+    return ok(student_classroom_row(session, student_layer=profile.current_layer, student_user=request.user))
+
+
+def _student_group_collaboration_context(request, session_id):
+    profile = _student_profile(request)
+    session = (
+        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
+        .filter(pk=session_id, school=request.user.school, class_group=profile.class_group)
+        .first()
+    )
+    if session is None:
+        raise ServiceError("课堂不存在或无权进入。", status=404)
+    if session.status != ClassroomSession.Status.RUNNING:
+        raise ServiceError("课堂尚未开始，暂不能进入小组合作。", status=403)
+    collaboration = (
+        ClassroomGroupCollaboration.objects.select_related("session")
+        .filter(
+            session=session,
+            is_enabled=True,
+            status=ClassroomGroupCollaboration.Status.OPEN,
+        )
+        .first()
+    )
+    if collaboration is None:
+        return profile, session, None, None
+    member = (
+        ClassroomGroupMember.objects.select_related("group", "group__collaboration", "student_profile", "student")
+        .filter(collaboration=collaboration, student=request.user)
+        .first()
+    )
+    return profile, session, collaboration, member.group if member else None
+
+
+@api_view(["GET"])
+@permission_classes([IsStudent])
+def student_classroom_group_collaboration(request, pk):
+    try:
+        profile, session, collaboration, group = _student_group_collaboration_context(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if collaboration is None or group is None:
+        return ok(None)
+    group = (
+        _classroom_group_queryset(collaboration)
+        .filter(pk=group.pk)
+        .first()
+        or group
+    )
+    return ok(classroom_group_collaboration_row(collaboration, include_groups=False, my_group=group))
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+@parser_classes([MultiPartParser, FormParser])
+def student_classroom_group_file_upload(request, pk):
+    try:
+        profile, session, collaboration, group = _student_group_collaboration_context(request, pk)
+        if collaboration is None or group is None:
+            raise ServiceError("教师尚未开启你的小组合作。", status=404)
+        if not collaboration.allow_student_upload:
+            raise ServiceError("教师当前未开放小组共享文件上传。", status=403)
+        file = _save_group_file(request, group, request.FILES.get("attachment"), str(request.data.get("description") or "").strip())
+    except ServiceError as exc:
+        return _service_fail(exc)
+
+    _write_student_event(
+        request,
+        profile,
+        LearningEvent.EventType.TASK_SUBMIT,
+        course=session.course,
+        lesson=session.lesson,
+        object_type="classroom_group_file",
+        object_id=file.id,
+        metadata={
+            "action": "group_file_upload",
+            "classroom_session": session.id,
+            "collaboration": collaboration.id,
+            "group": group.id,
+            "filename": file.original_name,
+            "file_ext": file.file_ext,
+            "file_size": file.file_size,
+        },
+    )
+    return ok(classroom_group_file_row(file), "小组文件已上传", status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_classroom_activity_response(request, pk, activity_id):
+    try:
+        profile = _student_profile(request)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    session = (
+        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
+        .filter(pk=pk, school=request.user.school, class_group=profile.class_group)
+        .first()
+    )
+    if session is None:
+        return fail("课堂不存在或无权进入。", status=404)
+    if session.status != ClassroomSession.Status.RUNNING:
+        return fail("课堂尚未开始，暂不能响应。", status=403)
+    activity = session.activities.filter(pk=activity_id, status=ClassroomActivity.Status.OPEN).first()
+    if activity is None:
+        return fail("课堂活动不存在或已关闭。", status=404)
+
+    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
+    command = str(metadata.get("command") or activity.activity_type)
+    response_type = str(request.data.get("response_type") or command).strip() or command
+    content = str(request.data.get("content") or "").strip()[:1000]
+    existing_query = LearningEvent.objects.filter(
+        actor=request.user,
+        object_type="classroom_activity",
+        object_id=str(activity.id),
+        metadata__action="classroom_activity_response",
+        metadata__response_type=response_type,
+    )
+    if command == "sign_in":
+        existing_query = existing_query.filter(metadata__source="student")
+    existing = existing_query.first()
+    if existing is not None:
+        return ok(classroom_activity_row(activity), "已记录过本次响应。")
+
+    _write_student_event(
+        request,
+        profile,
+        LearningEvent.EventType.PAGE_VIEW,
+        course=session.course,
+        lesson=session.lesson,
+        object_type="classroom_activity",
+        object_id=activity.id,
+        metadata={
+            "action": "classroom_activity_response",
+            "response_type": response_type,
+            "command": command,
+            "attendance_status": "signed" if command == "sign_in" else "",
+            "attendance_status_label": "已签到" if command == "sign_in" else "",
+            "source": "student" if command == "sign_in" else "",
+            "quick_answer": command == "quick_answer",
+            "activity_title": activity.title,
+            "content": content,
+        },
+    )
+    return ok(classroom_activity_row(activity), "课堂响应已记录。")
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_classroom_score_feedback_ack(request, pk, activity_id):
+    try:
+        profile = _student_profile(request)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    session = (
+        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
+        .filter(pk=pk, school=request.user.school, class_group=profile.class_group)
+        .first()
+    )
+    if session is None:
+        return fail("课堂不存在或无权进入。", status=404)
+    activity = session.activities.filter(pk=activity_id).first()
+    if activity is None:
+        return fail("课堂活动不存在。", status=404)
+    try:
+        score_event_id = int(request.data.get("score_event_id"))
+    except (TypeError, ValueError):
+        return fail("评分事件不正确。", errors={"score_event_id": ["请提供评分事件。"]}, status=400)
+    score_event = (
+        LearningEvent.objects.filter(
+            Q(metadata__action="quick_answer_score") | Q(metadata__action="random_pick_score"),
+            pk=score_event_id,
+            actor=request.user,
+            object_type="classroom_activity",
+            object_id=str(activity.id),
+        )
+        .first()
+    )
+    if score_event is None:
+        return fail("评分反馈不存在或不属于当前学生。", status=404)
+    existing = LearningEvent.objects.filter(
+        Q(metadata__action="classroom_score_feedback_ack") | Q(metadata__action="quick_answer_score_feedback_ack"),
+        actor=request.user,
+        object_type="classroom_activity",
+        object_id=str(activity.id),
+        metadata__score_event_id=score_event.id,
+    ).first()
+    if existing is None:
+        score_metadata = score_event.metadata if isinstance(score_event.metadata, dict) else {}
+        _write_student_event(
+            request,
+            profile,
+            LearningEvent.EventType.PAGE_VIEW,
+            course=session.course,
+            lesson=session.lesson,
+            object_type="classroom_activity",
+            object_id=activity.id,
+            score=score_event.score,
+            metadata={
+                "action": "classroom_score_feedback_ack",
+                "command": score_metadata.get("command", ""),
+                "score_event_id": score_event.id,
+                "score": score_event.score,
+                "score_action": score_metadata.get("score_action", ""),
+                "activity_title": activity.title,
+            },
+        )
+    return ok({"score_event_id": score_event.id}, "评分反馈已确认。")
 
 
 @api_view(["GET"])

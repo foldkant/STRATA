@@ -24,11 +24,13 @@ import {
   type ResourceRow
 } from '@/api/teacher'
 import AppShell from '@/layouts/AppShell.vue'
+import CourseEvaluationModal from '@/components/teacher/CourseEvaluationModal.vue'
+import LearningPageStudio from '@/components/teacher/LearningPageStudio.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
 import { teacherNav } from './nav'
 
-type ToolTab = 'resource' | 'question' | 'document' | 'ai'
+type ToolTab = 'resource' | 'question' | 'evaluation' | 'ai'
 type PreviewMode = 'student' | 'resource'
 type QuestionLayerMode = 'standard' | 'layered_score' | 'layered_target'
 type LayerCode = 'A' | 'B' | 'C'
@@ -61,6 +63,7 @@ const resourceFileInput = ref<HTMLInputElement | null>(null)
 const selectedPreviewResource = ref<ResourceBinding | null>(null)
 const previewOpen = ref(false)
 const previewMode = ref<PreviewMode>('student')
+const evaluationModalOpen = ref(false)
 const editingQuestionId = ref<string | null>(null)
 const stepModalOpen = ref(false)
 const resourceUploadOpen = ref(false)
@@ -113,6 +116,7 @@ const questionLayerModeOptions: Array<{ value: QuestionLayerMode; label: string;
   { value: 'layered_target', label: '分层专属题', description: '只给指定层级或相邻层级显示，可按需要设置分值。' }
 ]
 const layerScoreCodes: LayerCode[] = ['A', 'B', 'C']
+const defaultFileExtensions = ['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf', 'zip', 'rar', '7z', 'png', 'jpg', 'jpeg']
 
 const stepForm = reactive<LessonStepPayload>({
   title: '',
@@ -142,6 +146,7 @@ const questionDraft = reactive<LessonStepQuestion>({
   target_layer: 'all',
   use_layer_scores: false,
   layer_scores: { A: '', B: '', C: '' },
+  file_config: { allowed_extensions: [...defaultFileExtensions], max_size_mb: 100 },
   analysis: '',
   is_required: true,
   sort_order: 10
@@ -190,14 +195,10 @@ const questionTypeOptions: Array<{ value: LessonStepQuestionType; label: string 
   { value: 'multiple', label: '多选' },
   { value: 'judge', label: '判断' },
   { value: 'blank', label: '填空' },
-  { value: 'text', label: '简答' }
+  { value: 'text', label: '简答' },
+  { value: 'file', label: '附件提交' }
 ]
-
-const documentRows = [
-  { title: '教师协同教案', scope: '备课组', permission: '教师可编辑' },
-  { title: '学生任务单', scope: '学生只读', permission: '禁止外链脚本' },
-  { title: '小组协作文档', scope: '按小组复制', permission: '组内编辑' }
-]
+const aiQuestionTypeOptions = questionTypeOptions.filter((item) => item.value !== 'file')
 
 const activeStep = computed(() => lessonSteps.value.find((item) => item.id === activeStepId.value) || null)
 const activeStepIndex = computed(() => lessonSteps.value.findIndex((item) => item.id === activeStepId.value))
@@ -241,6 +242,7 @@ const lessonQuestionLibrary = computed<QuestionLibraryItem[]>(() => {
 })
 const isChoiceQuestion = computed(() => ['single', 'multiple'].includes(questionDraft.question_type))
 const isJudgeQuestion = computed(() => questionDraft.question_type === 'judge')
+const isFileQuestion = computed(() => questionDraft.question_type === 'file')
 const questionNeedsOptions = computed(() => isChoiceQuestion.value || isJudgeQuestion.value)
 const stepModalTitle = computed(() => (activeStep.value ? '编辑环节' : '新增环节'))
 const questionLayerMode = computed<QuestionLayerMode>({
@@ -253,9 +255,9 @@ const questionLayerMode = computed<QuestionLayerMode>({
 })
 const activeLayerScoreCodes = computed(() => layerCodesFromTarget(questionDraft.target_layer))
 const questionLayerModeHelp = computed(() => {
-  if (questionLayerMode.value === 'standard') return '普通课堂和分层课堂都会显示这道题，学生使用统一基础分。'
-  if (questionLayerMode.value === 'layered_score') return '适合“同题不同评价标准”，分层课堂中学生只获得自己层级对应分值。'
-  return '适合“不同层级做不同题”，分层课堂中只有匹配层级的学生能看到。'
+  if (questionLayerMode.value === 'standard') return '所有学生都会显示这道题，学生使用统一基础分。'
+  if (questionLayerMode.value === 'layered_score') return '适合“同题不同评价标准”，学生只获得自己层级对应分值。'
+  return '适合“不同层级做不同题”，只有匹配层级的学生能看到。'
 })
 
 function targetLayerLabel(value: string) {
@@ -273,6 +275,7 @@ function scoreNumber(value: number | string | undefined | null, fallback = 0) {
 }
 
 function defaultScoreForType(type: LessonStepQuestionType) {
+  if (type === 'file') return 10
   if (type === 'text') return 5
   if (type === 'blank') return 3
   return 2
@@ -463,7 +466,12 @@ function cleanQuestionItems(items: LessonStepQuestion[]) {
       const options = questionType === 'judge'
         ? ['正确', '错误']
         : item.options.map((option) => option.trim()).filter(Boolean).slice(0, 8)
-      const answer = item.answer.map((value) => value.trim()).filter(Boolean)
+      const answer = item.question_type === 'file' ? [] : item.answer.map((value) => value.trim()).filter(Boolean)
+      const rawFileConfig = item.file_config || { allowed_extensions: defaultFileExtensions, max_size_mb: 100 }
+      const allowedExtensions = Array.isArray(rawFileConfig.allowed_extensions)
+        ? rawFileConfig.allowed_extensions.map((value) => String(value).trim().replace(/^\./, '').toLowerCase()).filter(Boolean)
+        : defaultFileExtensions
+      const maxSize = Number(rawFileConfig.max_size_mb || 100)
       return {
         ...item,
         id: item.id || makeQuestionId(),
@@ -479,6 +487,12 @@ function cleanQuestionItems(items: LessonStepQuestion[]) {
           B: scoreNumber(item.layer_scores?.B, scoreNumber(item.score)),
           C: scoreNumber(item.layer_scores?.C, scoreNumber(item.score))
         },
+        file_config: item.question_type === 'file'
+          ? {
+              allowed_extensions: Array.from(new Set(allowedExtensions)).slice(0, 24),
+              max_size_mb: Number.isFinite(maxSize) ? Math.min(Math.max(Math.round(maxSize), 1), 512) : 100
+            }
+          : undefined,
         analysis: item.analysis.trim(),
         is_required: item.is_required,
         sort_order: Number(item.sort_order) || (index + 1) * 10
@@ -500,6 +514,7 @@ function resetQuestionDraft(type: LessonStepQuestionType = 'single') {
   questionDraft.target_layer = 'all'
   questionDraft.use_layer_scores = false
   questionDraft.layer_scores = suggestedLayerScores(defaultScoreForType(type), 'all')
+  questionDraft.file_config = { allowed_extensions: [...defaultFileExtensions], max_size_mb: 100 }
   questionDraft.analysis = ''
   questionDraft.is_required = true
   questionDraft.sort_order = (stepForm.question_items.length + 1) * 10
@@ -513,11 +528,34 @@ function onQuestionTypeChange() {
   } else if (['single', 'multiple'].includes(questionDraft.question_type)) {
     questionDraft.options = questionDraft.options.filter(Boolean).length ? questionDraft.options : ['', '']
     questionDraft.answer = []
+  } else if (questionDraft.question_type === 'file') {
+    questionDraft.options = []
+    questionDraft.answer = []
+    questionDraft.file_config = questionDraft.file_config || { allowed_extensions: [...defaultFileExtensions], max_size_mb: 100 }
   } else {
     questionDraft.options = []
     questionDraft.answer = []
   }
   syncLayerScoresWithBase(true)
+}
+
+function setQuestionFileExtensions(value: string) {
+  const extensions = value
+    .split(/[,，\s]+/)
+    .map((item) => item.trim().replace(/^\./, '').toLowerCase())
+    .filter(Boolean)
+  questionDraft.file_config = {
+    ...(questionDraft.file_config || { max_size_mb: 100, allowed_extensions: [] }),
+    allowed_extensions: Array.from(new Set(extensions)).slice(0, 24)
+  }
+}
+
+function setQuestionFileMaxSize(value: string) {
+  const maxSize = Number(value)
+  questionDraft.file_config = {
+    ...(questionDraft.file_config || { allowed_extensions: [...defaultFileExtensions], max_size_mb: 100 }),
+    max_size_mb: Number.isFinite(maxSize) ? Math.min(Math.max(Math.round(maxSize), 1), 512) : 100
+  }
 }
 
 function addQuestionOption() {
@@ -563,6 +601,12 @@ function validateQuestionDraft() {
   if (stem.length < 2 || stem.length > 1000) errors.push('题干需为 2-1000 个字符。')
   if (!Number.isFinite(score) || score < 0 || score > 100) errors.push('分值需为 0-100。')
   if (isChoiceQuestion.value && options.length < 2) errors.push('选择题至少需要 2 个选项。')
+  if (isFileQuestion.value) {
+    const extensions = questionDraft.file_config?.allowed_extensions || []
+    const maxSize = Number(questionDraft.file_config?.max_size_mb || 0)
+    if (!extensions.length) errors.push('附件提交题至少需要设置 1 种允许格式。')
+    if (!Number.isFinite(maxSize) || maxSize < 1 || maxSize > 512) errors.push('附件大小限制需为 1-512MB。')
+  }
   if (!targetLayerOptions.some((item) => item.value === questionDraft.target_layer)) errors.push('题目适用层级不正确。')
   if (questionLayerMode.value === 'layered_target' && ['all', 'A/B/C'].includes(questionDraft.target_layer)) {
     errors.push('分层专属题需选择 A、B、C、A/B 或 B/C。')
@@ -625,6 +669,9 @@ function editQuestion(item: LessonStepQuestion) {
     B: item.layer_scores?.B ?? item.score,
     C: item.layer_scores?.C ?? item.score
   }
+  questionDraft.file_config = item.file_config
+    ? { allowed_extensions: [...item.file_config.allowed_extensions], max_size_mb: item.file_config.max_size_mb }
+    : { allowed_extensions: [...defaultFileExtensions], max_size_mb: 100 }
   questionDraft.analysis = item.analysis
   questionDraft.is_required = item.is_required
   questionDraft.sort_order = item.sort_order
@@ -819,12 +866,15 @@ function resourceTitle(item: ResourceBinding | string) {
 
 function resourceSubTitle(item: ResourceBinding | string) {
   if (typeof item === 'string') return '旧资源占位，重新从资源库加入后可预览。'
+  if (item.kind === 'learning_page') return `AI 学习网页 · v${item.revision_no || 1}`
   const ext = item.file_ext ? item.file_ext.toUpperCase() : '资源'
   return item.attachment_name ? `${ext} · ${item.attachment_name}` : ext
 }
 
 function resourceKey(item: ResourceBinding | string) {
-  return typeof item === 'string' ? `legacy:${item}` : `resource:${item.id || item.title}`
+  if (typeof item === 'string') return `legacy:${item}`
+  if (item.kind === 'learning_page') return `learning-page:${item.learning_page_id || item.id}`
+  return `resource:${item.id || item.title}`
 }
 
 function isResourceInCurrentStep(item: ResourceBinding | string) {
@@ -1030,6 +1080,22 @@ function addResourceItem(item: ResourceBinding | string) {
   }
 }
 
+function addLearningPageToCurrentStep(resource: ResourceBinding) {
+  addResourceItem(resource)
+  notice.value = 'AI 学习网页已加入当前环节，请保存内容。'
+}
+
+function updateLearningPageInCurrentStep(resource: ResourceBinding) {
+  stepForm.resource_items = stepForm.resource_items.map((item) => {
+    if (typeof item === 'string' || item.kind !== 'learning_page') return item
+    return Number(item.learning_page_id || 0) === Number(resource.learning_page_id || 0) ? resource : item
+  })
+  if (selectedPreviewResource.value?.kind === 'learning_page'
+    && Number(selectedPreviewResource.value.learning_page_id || 0) === Number(resource.learning_page_id || 0)) {
+    selectedPreviewResource.value = resource
+  }
+}
+
 function formatFileSize(size: number) {
   if (!size) return '无附件'
   if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
@@ -1157,6 +1223,7 @@ onMounted(loadLesson)
         <div class="lesson-designer-actions">
           <RouterLink class="secondary-button" to="/teacher/courses">返回课程</RouterLink>
           <RouterLink class="secondary-button" to="/teacher/classroom">课堂教学</RouterLink>
+          <button class="secondary-button" type="button" :disabled="!course" @click="evaluationModalOpen = true">评价设置</button>
           <button class="secondary-button" type="button" @click="openStudentPreview">大屏预览</button>
         </div>
       </header>
@@ -1278,7 +1345,7 @@ onMounted(loadLesson)
                 <div class="layer-status-note">
                   <span>普通题 {{ standardQuestionCount }} 道</span>
                   <span>分层题 {{ layeredQuestionCount }} 道</span>
-                  <small>分层过滤和 A/B/C 分值只在课堂教学开启“分层教学模式”后生效。</small>
+                  <small>只要当前环节设置了 A/B/C、A/B、B/C 或分层分值，学生端会按学生层级自动匹配。</small>
                 </div>
                 <div class="composition-list single-column-list">
                   <article v-for="(question, index) in activeQuestionItems" :key="question.id" class="question-composition-card">
@@ -1328,7 +1395,7 @@ onMounted(loadLesson)
           <div class="designer-tabs">
             <button :class="{ active: activeTool === 'resource' }" type="button" @click="activeTool = 'resource'">资源</button>
             <button :class="{ active: activeTool === 'question' }" type="button" @click="activeTool = 'question'">题目</button>
-            <button :class="{ active: activeTool === 'document' }" type="button" @click="activeTool = 'document'">文档</button>
+            <button :class="{ active: activeTool === 'evaluation' }" type="button" @click="activeTool = 'evaluation'">评价</button>
             <button :class="{ active: activeTool === 'ai' }" type="button" @click="activeTool = 'ai'">AI</button>
           </div>
 
@@ -1371,7 +1438,7 @@ onMounted(loadLesson)
           <div v-else-if="activeTool === 'question'" class="question-tool-panel">
             <section class="tool-entry-panel">
               <strong>题目</strong>
-              <p>新增课堂题后会加入当前环节。开启分层后，可设置题目适用层级和 A/B/C 分值。</p>
+              <p>新增课堂题后会加入当前环节。设置题目适用层级或 A/B/C 分值后，课堂投放时自动按学生层级生效。</p>
               <div class="tool-entry-actions">
                 <button class="primary-button" type="button" @click="openCreateQuestionModal">新增课堂题</button>
                 <button class="secondary-button" type="button" @click="openAiQuestionModal">AI 生成分层题</button>
@@ -1410,27 +1477,29 @@ onMounted(loadLesson)
 
           </div>
 
-          <div v-else-if="activeTool === 'document'" class="designer-side-list">
-            <article v-for="item in documentRows" :key="item.title">
-              <strong>{{ item.title }}</strong>
-              <span>{{ item.scope }}</span>
-              <small>{{ item.permission }}</small>
-              <button type="button" @click="addResourceItem(item.title)">加入环节</button>
-            </article>
+          <div v-else-if="activeTool === 'evaluation'" class="evaluation-tool-panel">
+            <section class="tool-entry-panel">
+              <strong>评价设置</strong>
+              <p>在备课阶段设计自评、互评和师评内容。课堂中只查看完成情况和填写师评。</p>
+              <button class="primary-button" type="button" :disabled="!course" @click="evaluationModalOpen = true">打开评价设置</button>
+            </section>
+            <section class="evaluation-tool-note">
+              <strong>课堂使用规则</strong>
+              <span>自评：学生在课堂中对自己进行 5 星评价。</span>
+              <span>互评：需要课堂开启小组合作后，学生评价同组成员。</span>
+              <span>师评：教师可在课堂或课程评价情况中填写。</span>
+            </section>
           </div>
 
-          <div v-else class="ai-draft-panel">
-            <strong>AI 学习单草稿</strong>
-            <p>教师配置自己的 DeepSeek 接口后，可让 AI 辅助生成学习单、问题和任务说明。第一版只保存生成目标，不直接发布 AI 内容。</p>
-            <label>
-              <span>生成目标</span>
-              <textarea v-model.trim="stepForm.ai_prompt" rows="7" maxlength="3000" placeholder="写清楚本环节要生成什么，例如：面向 B/C 层学生生成一份数据采集流程学习单。"></textarea>
-            </label>
-            <div class="row-actions">
-              <RouterLink to="/teacher/ai">AI接入</RouterLink>
-              <button class="primary-button" type="button" @click="saveStep">保存目标</button>
-            </div>
-          </div>
+          <LearningPageStudio
+            v-else
+            :lesson-id="lessonId"
+            :lesson-title="lessonTitle"
+            :active-step-id="activeStepId"
+            :resource-items="stepForm.resource_items"
+            @add-resource="addLearningPageToCurrentStep"
+            @update-resource="updateLearningPageInCurrentStep"
+          />
         </aside>
       </div>
     </section>
@@ -1563,7 +1632,7 @@ onMounted(loadLesson)
               <label>
                 <span>题型</span>
                 <select v-model="aiQuestionForm.question_type">
-                  <option v-for="item in questionTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
+                  <option v-for="item in aiQuestionTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
                 </select>
                 <small v-if="aiQuestionErrors.question_type" class="field-error">{{ aiQuestionErrors.question_type[0] }}</small>
               </label>
@@ -1748,6 +1817,34 @@ onMounted(loadLesson)
                 </label>
               </div>
 
+              <section v-else-if="isFileQuestion" class="question-file-config span-2">
+                <header>
+                  <strong>附件提交设置</strong>
+                  <span>学生上传后，教师可在课堂控制台逐题查看、预览和评分。</span>
+                </header>
+                <label>
+                  <span>允许格式</span>
+                  <input
+                    :value="(questionDraft.file_config?.allowed_extensions || defaultFileExtensions).join(', ')"
+                    maxlength="200"
+                    placeholder="doc, docx, pptx, pdf, zip"
+                    @input="setQuestionFileExtensions(($event.target as HTMLInputElement).value)"
+                  />
+                  <small>用逗号或空格分隔，默认支持 Office、PDF、压缩包和常见图片。</small>
+                </label>
+                <label>
+                  <span>最大大小 MB</span>
+                  <input
+                    :value="questionDraft.file_config?.max_size_mb || 100"
+                    type="number"
+                    min="1"
+                    max="512"
+                    @input="setQuestionFileMaxSize(($event.target as HTMLInputElement).value)"
+                  />
+                  <small>默认 100MB，最高 512MB。</small>
+                </label>
+              </section>
+
               <label v-else class="span-2">
                 <span>参考答案</span>
                 <textarea
@@ -1825,6 +1922,12 @@ onMounted(loadLesson)
         </section>
       </div>
     </Teleport>
+
+    <CourseEvaluationModal
+      :open="evaluationModalOpen"
+      :course="course"
+      @close="evaluationModalOpen = false"
+    />
 
     <Teleport to="body">
       <div v-if="previewOpen" class="lesson-preview-backdrop" role="presentation" @click.self="previewOpen = false">

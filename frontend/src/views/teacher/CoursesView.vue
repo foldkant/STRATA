@@ -27,6 +27,7 @@ import {
 import type { ClassGroupRow, PageResult, SubjectRow } from '@/api/management'
 import AppShell from '@/layouts/AppShell.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import CourseEvaluationModal from '@/components/teacher/CourseEvaluationModal.vue'
 import ManagementPage from '@/components/ManagementPage.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import { teacherNav } from './nav'
@@ -64,6 +65,8 @@ const pendingCourseAction = ref<{ type: PendingCourseAction; row: CourseRow } | 
 const lessonConfirmOpen = ref(false)
 const lessonConfirmLoading = ref(false)
 const pendingLessonAction = ref<{ type: PendingLessonAction; row: LessonRow } | null>(null)
+const evaluationModalOpen = ref(false)
+const evaluationCourse = ref<CourseRow | null>(null)
 
 const courseForm = reactive<CoursePayload>({
   subject: '',
@@ -333,6 +336,11 @@ async function openLessons(row: CourseRow) {
   }
 }
 
+function openCourseEvaluation(row: CourseRow) {
+  evaluationCourse.value = row
+  evaluationModalOpen.value = true
+}
+
 function resetLessonForm() {
   editingLesson.value = null
   lessonErrors.value = {}
@@ -552,6 +560,7 @@ onMounted(async () => {
               <button type="button" @click="openEditCourse(item)">编辑</button>
               <button type="button" @click="openClassManager(item)">班级</button>
               <button type="button" @click="openLessons(item)">课时设计</button>
+              <button type="button" @click="openCourseEvaluation(item)">课程评价</button>
               <button v-if="!item.is_active" type="button" @click="askCourse('publish', item)">发布</button>
               <button v-else type="button" @click="askCourse('archive', item)">停用</button>
               <button class="danger-link" type="button" @click="askCourse('delete', item)">删除</button>
@@ -758,6 +767,12 @@ onMounted(async () => {
         </form>
       </div>
     </Teleport>
+
+    <CourseEvaluationModal
+      :open="evaluationModalOpen"
+      :course="evaluationCourse"
+      @close="evaluationModalOpen = false"
+    />
 
     <ConfirmDialog
       :open="confirmOpen"
