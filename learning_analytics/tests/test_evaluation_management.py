@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from io import BytesIO
+
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from openpyxl import load_workbook
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -12,6 +15,7 @@ from learning_analytics.evaluation_models import (
     EvaluationScope,
     EvaluationCriterionVersion,
     EvaluationStandardVersion,
+    EvaluationTrialRecord,
 )
 from school.models import School
 
@@ -165,6 +169,29 @@ class EvaluationManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 201, response.data)
         return response.data["data"]
+
+    def create_published_standard(self) -> EvaluationStandardVersion:
+        plan = self.create_plan()
+        response = self.client.post(
+            f"/api/v1/school-admin/evaluations/plans/{plan['id']}/publish/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        response = self.client.post(
+            "/api/v1/school-admin/evaluations/standards/",
+            self.standard_payload(plan["id"]),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        standard_id = response.data["data"]["id"]
+        response = self.client.post(
+            f"/api/v1/school-admin/evaluations/standards/{standard_id}/publish/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        return EvaluationStandardVersion.objects.get(source_id=standard_id)
 
     def test_options_and_drafts_are_school_scoped(self):
         response = self.client.get("/api/v1/school-admin/evaluations/options/")
@@ -321,3 +348,130 @@ class EvaluationManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("unknown_fields", response.data["errors"])
+
+    def test_trial_record_flow_and_completed_history_protection(self):
+        version = self.create_published_standard()
+        options = self.client.get("/api/v1/school-admin/evaluations/options/")
+        self.assertEqual(options.status_code, 200)
+        self.assertEqual(
+            [row["id"] for row in options.data["data"]["standard_versions"]],
+            [version.id],
+        )
+
+        payload = {
+            "standard_version": version.id,
+            "record_type": "classroom_trial",
+            "title": "高一数据表达课堂试用",
+            "status": "planned",
+            "activity_date": "2026-07-20",
+            "participant_count": 0,
+            "agreement_rate": None,
+            "conclusion": "pending",
+            "summary": "",
+            "issues": [],
+            "action_items": [],
+        }
+        response = self.client.post(
+            "/api/v1/school-admin/evaluations/trials/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        record_id = response.data["data"]["id"]
+
+        payload.update(
+            {
+                "status": "completed",
+                "participant_count": 32,
+                "conclusion": "revise",
+                "summary": "学生能够理解主要指标，但二星和三星说明仍需区分。",
+                "issues": ["二星和三星说明接近"],
+                "action_items": ["修改两档说明后重新发布标准版本"],
+            }
+        )
+        response = self.client.patch(
+            f"/api/v1/school-admin/evaluations/trials/{record_id}/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["status_label"], "已完成")
+
+        response = self.client.patch(
+            f"/api/v1/school-admin/evaluations/trials/{record_id}/",
+            {"title": "不应修改"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        response = self.client.delete(
+            f"/api/v1/school-admin/evaluations/trials/{record_id}/"
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertTrue(EvaluationTrialRecord.objects.filter(pk=record_id).exists())
+
+    def test_scoring_check_requires_agreement_rate(self):
+        version = self.create_published_standard()
+        payload = {
+            "standard_version": version.id,
+            "record_type": "scoring_check",
+            "title": "两名教师评分检查",
+            "status": "completed",
+            "activity_date": "2026-07-20",
+            "participant_count": 2,
+            "agreement_rate": None,
+            "conclusion": "ready",
+            "summary": "两名教师完成同一批作品评分。",
+            "issues": [],
+            "action_items": [],
+        }
+        response = self.client.post(
+            "/api/v1/school-admin/evaluations/trials/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("agreement_rate", response.data["errors"])
+
+        payload["agreement_rate"] = "87.50"
+        response = self.client.post(
+            "/api/v1/school-admin/evaluations/trials/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+
+    def test_trial_records_are_school_scoped_and_exportable(self):
+        version = self.create_published_standard()
+        record = EvaluationTrialRecord.objects.create(
+            school=self.school,
+            standard_version=version,
+            record_type="content_review",
+            title="内容审核",
+            status="completed",
+            activity_date="2026-07-20",
+            participant_count=3,
+            conclusion="ready",
+            summary="审核完成。",
+            issues=[],
+            action_items=[],
+            created_by=self.school_admin,
+            updated_by=self.school_admin,
+        )
+        other_client = APIClient()
+        other_client.force_authenticate(self.other_school_admin)
+        self.assertEqual(
+            other_client.get(
+                f"/api/v1/school-admin/evaluations/trials/{record.id}/"
+            ).status_code,
+            404,
+        )
+
+        response = self.client.get(
+            "/api/v1/school-admin/evaluations/trials/export/"
+        )
+        self.assertEqual(response.status_code, 200)
+        workbook = load_workbook(BytesIO(response.content), read_only=True)
+        self.assertIn("评价试用记录", workbook.sheetnames)
+        rows = list(workbook["评价试用记录"].iter_rows(values_only=True))
+        self.assertEqual(rows[0][0], "记录ID")
+        self.assertEqual(rows[1][6], "内容审核")

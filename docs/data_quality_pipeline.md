@@ -2,7 +2,7 @@
 
 > 版本：`data-check-v2`  
 > 更新日期：2026-07-19  
-> 状态：`DATA-03A/B` 工程实现完成；开发校最近完整 7 日检查已通过。
+> 状态：后端、夜间任务和学校管理员页面已经完成；开发校最近完整 7 日检查已通过。
 
 补充：`SIM-01` 模拟学校可以单独生成检查报告，用于验证程序是否可运行，但不进入正式学校夜间任务，也不能改变真实学校的检查结果。详见[模拟数据开发说明](synthetic_data_research_track.md)。
 
@@ -78,8 +78,8 @@ learning_analytics.tasks.run_nightly_data_quality
 
 ## 7. 验收证据
 
-- SQLite：全量 111 项测试通过。
-- PostgreSQL 17.10：全量 111 项测试通过。
+- SQLite：全量 114 项测试通过。
+- PostgreSQL 17.10：全量 114 项测试通过。
 - 数据库审计：当前检查报告表没有旧列名，历史 `thresholds/counts/issues/summary/metrics` 中没有旧 JSON 键，执行阶段只保存 `collect_learning_data`、`compare_old_new_records`、`save_data_check_report`。
 - PostgreSQL 17.10：完整迁移和全量测试通过。
 - Redis/Memurai：`56379` 实例协议和任务队列验证通过。
@@ -95,7 +95,7 @@ learning_analytics.tasks.run_nightly_data_quality
 
 开发校原有 6 条旧测试事件无法转换，已按用户确认从新旧事件表中成对删除。重新检查结果为：10 条正式事件、旧事件未转换比例 0%、新旧记录差异 0%，报告为绿色。
 
-进入 M2 前必须满足：
+进入评价与题目开发前必须满足：
 
 1. 连续约定观察窗口内有真实教学事件，不能只用迁移样例。
 2. 旧事件只允许通过明确规则转换；不能确定含义的记录继续隔离，测试垃圾数据可在确认后成对清理。

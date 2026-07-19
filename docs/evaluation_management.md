@@ -1,7 +1,7 @@
-# EVAL-01A 学校评价管理
+# STRATA 学校评价管理
 
 > 实现日期：2026-07-19  
-> 当前状态：数据库、API、学校管理员页面和版本管理已完成；正式学校试用与专家审核尚未开始。
+> 当前状态：评价方案、评价标准、版本管理和试用记录已经完成；当前使用测试记录验证流程，正式学校试用结论尚未形成。
 
 ## 1. 功能定位
 
@@ -22,6 +22,7 @@
 - `EvaluationStandardVersion`：已发布的评价标准版本。
 - `EvaluationCriterionVersion`：评价标准中的单项指标。
 - `EvaluationScoringExample`：帮助统一评分判断的示例。
+- `EvaluationTrialRecord`：内容审核、课堂试用、评分培训和评分一致性检查记录。
 
 实际数据库表、字段、Python 类、API 和前端类型均使用上述名称。历史迁移文件保留旧名称，只用于记录数据库升级过程。
 
@@ -88,9 +89,26 @@ POST     /api/v1/school-admin/evaluations/plans/{id}/publish/
 GET|POST /api/v1/school-admin/evaluations/standards/
 GET|PATCH /api/v1/school-admin/evaluations/standards/{id}/
 POST     /api/v1/school-admin/evaluations/standards/{id}/publish/
+GET|POST /api/v1/school-admin/evaluations/trials/
+GET|PATCH|DELETE /api/v1/school-admin/evaluations/trials/{id}/
+GET      /api/v1/school-admin/evaluations/trials/export/
 ```
 
-## 8. 数据迁移
+页面包含“评价方案、评价标准、试用记录”三个页签。试用记录支持 XLSX 导出。
+
+## 8. 试用记录
+
+试用记录必须绑定已发布评价标准，包含：
+
+- 内容审核、课堂试用、评分培训或评分一致性检查。
+- 记录名称、日期、参与人数和当前状态。
+- 评分一致性检查可填写 0-100 的一致率。
+- 完成后的处理结论：可使用、需要修改或暂不使用。
+- 结果说明、发现的问题和后续处理。
+
+待进行和进行中的记录可以编辑或删除。已完成记录只能查看和导出，不能修改或删除；需要更正时新增补充记录。
+
+## 9. 数据迁移
 
 迁移 `learning_analytics.0013-0015` 已完成：
 
@@ -99,13 +117,30 @@ POST     /api/v1/school-admin/evaluations/standards/{id}/publish/
 - 把课堂评价字段改为 `evaluation_version`。
 - 把评价提交事件改为 `evaluation.rating.submitted`。
 - 保留原有 1 个方案、1 个标准、5 个指标和 10 个评分示例。
+- 迁移 `learning_analytics.0018` 新增评价试用记录表、学校/日期索引和评分一致率范围约束。
 
 SQLite 升级前备份位于 `storage/dev.before-evaluation-rename.sqlite3`。
 
-## 9. 后续开发
+## 10. 测试数据
 
-1. 学校管理员审核、启用和停用评价版本。
-2. 教师在课程或课时中选择已发布评价标准。
-3. 题库题目与评价目标关联。
-4. 评分一致性检查和试用记录。
-5. 在正式数据满足要求后，再进入学生特征和分层建议开发。
+当前小榄中学已生成 4 条带“测试-”前缀的记录，用于检查页面和导出：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py seed_evaluation_trial_records --school-code 001 --username xlzx_admin
+```
+
+清理测试记录：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py seed_evaluation_trial_records --school-code 001 --purge
+```
+
+测试记录不能作为正式评价结论。
+
+## 11. 后续开发
+
+1. 教师在课程或课时中选择学校发布的评价标准。
+2. 为题库题目增加审核、试用、启用和停用状态。
+3. 建立共同测试和不同版本结果比较。
+4. 使用正式课堂数据补充真实试用记录。
+5. 前述流程稳定后，再进入学生学习情况汇总和分层建议开发。

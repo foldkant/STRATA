@@ -55,7 +55,7 @@ API 前缀：
 - `layer_hint`、`grouping_strategy`、`grouping_strategy_label`
 - 模型概率、置信度、排名、风险原因和其他内容变体
 
-已完成的 M0 契约调整：
+已完成的学生隐私与权限调整：
 
 - `GET /api/v1/student/me/`：学生 profile 不返回当前层级和持久分组编号。
 - `GET /api/v1/student/classroom/current/` 与 `GET /api/v1/student/classroom/{id}/`：服务端完成题目过滤，只返回已分配题目，不返回环节目标层、分层分值和“已匹配层级”标记。
@@ -1500,6 +1500,9 @@ POST /api/v1/school-admin/evaluations/plans/{id}/publish/
 GET|POST /api/v1/school-admin/evaluations/standards/
 GET|PATCH /api/v1/school-admin/evaluations/standards/{id}/
 POST /api/v1/school-admin/evaluations/standards/{id}/publish/
+GET|POST /api/v1/school-admin/evaluations/trials/
+GET|PATCH|DELETE /api/v1/school-admin/evaluations/trials/{id}/
+GET /api/v1/school-admin/evaluations/trials/export/
 ```
 
 编辑中的内容允许暂时不完整；发布接口检查学习目标、评价依据、学习任务、星级说明和评分示例。发布成功返回详情及最新版本；相同内容重复发布返回现有版本，不新增行。发布失败返回：
@@ -1513,5 +1516,7 @@ POST /api/v1/school-admin/evaluations/standards/{id}/publish/
   }
 }
 ```
+
+试用记录必须绑定本校已发布的评价标准版本。类型为“内容审核、课堂试用、评分培训、评分一致性检查”，状态为“待进行、进行中、已完成”。已完成记录必须填写参与人数、结果说明和处理结论；评分一致性检查还必须填写 0-100 的一致率。已完成记录不能修改或删除，导出返回本校 XLSX。
 
 发布后的评价方案版本、评价标准版本、评价指标和评分示例不可 PATCH 或 DELETE。完整字段见[学校评价管理](evaluation_management.md)。

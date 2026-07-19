@@ -19,6 +19,7 @@ from .models import (
     EvaluationCriterionVersion,
     EvaluationStandard,
     EvaluationStandardVersion,
+    EvaluationTrialRecord,
     SensitiveInferenceAccessLog,
     SyntheticDatasetRun,
 )
@@ -472,3 +473,18 @@ class EvaluationScoringExampleAdmin(ReadOnlyAnalyticsAdmin):
     list_filter = ("level",)
     search_fields = ("title", "criterion__code", "criterion__title")
     readonly_fields = tuple(field.name for field in EvaluationScoringExample._meta.fields)
+
+
+@admin.register(EvaluationTrialRecord)
+class EvaluationTrialRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "school",
+        "standard_version",
+        "record_type",
+        "status",
+        "conclusion",
+        "activity_date",
+    )
+    list_filter = ("record_type", "status", "conclusion", "school")
+    search_fields = ("title", "standard_version__title", "summary")

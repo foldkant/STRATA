@@ -220,7 +220,7 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 
 再由学校管理员访问 `/app/school-admin/data-quality` 手动检查最近完整 7 日。报告未通过不代表服务故障；应先查看待处理问题和 XLSX，不得直接修改报告状态。进入后续分析前，必须保存一份最新通过报告及对应检查记录。
 
-便携验证实例可使用非默认端口，但 Web、worker 和 beat 的 `REDIS_URL/CELERY_*` 必须一致。当前工程验证使用 PostgreSQL `55432` 和 Redis 兼容服务 `56379`；这不是学校生产默认端口。
+便携验证实例可使用非默认端口，但 Web、worker 和 beat 的数据库与 Redis 配置必须一致。2026-07-19 最新全量测试使用 PostgreSQL `5432`；Redis 兼容服务此前使用 `56379` 完成任务队列验证。这些仅为本机验证端口，不是学校生产默认端口。
 
 ## 模拟数据部署边界
 

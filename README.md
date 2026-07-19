@@ -19,7 +19,7 @@ STRATA 是面向中学课堂的过程性评价与分层教学平台。系统采�
 - 文档能力：ONLYOFFICE 在线预览与协作，未安装时保留本地预览和下载降级路线。
 - 数据能力：35 个严格事件类型、不可修改的新版学习事件、批量防重复接收、新旧记录兼容写入、历史记录转换、学生学习任务关联、评分版本、课堂积分流水，以及七项学习数据检查指标和夜间自动检查。
 
-当前开发校最近完整 7 日数据检查已通过，旧事件未转换比例为 0%。评价管理已迁移到学校管理员端；正式学校试用、题目质量管理、学生特征和分层建议仍按开发计划继续推进。跨学校数据采集、统一分析和夜间班级模型训练仍在后续开发范围内。
+当前开发校最近完整 7 日数据检查已通过，旧事件未转换比例为 0%。学校管理员端已完成评价方案、评价标准、版本管理和试用记录，并用 4 条带测试标记的记录跑通页面与导出；正式学校试用、题目完整管理、学生学习情况汇总和分层建议仍按开发计划继续推进。跨学校数据采集、统一分析和夜间班级模型训练仍在后续开发范围内。
 
 ## 技术架构
 
@@ -215,7 +215,7 @@ http://127.0.0.1:8010/app/school-admin/data-quality
 
 ## 模拟数据
 
-平台无真实纵向样本时，可以在独立模拟学校中生成可复现数据，用于验证 M2/M3 工程，不进入正式运营统计：
+平台无真实纵向样本时，可以在独立模拟学校中生成可重复数据，用于验证评价、题目和学习情况汇总工程，不进入正式运营统计：
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py generate_synthetic_learning_data `
@@ -288,7 +288,7 @@ git diff --check
 - [课堂实名聊天](docs/classroom_chat_design.md)
 - [教学资源中心](docs/resource_center_design.md)
 - [AI 隐性动态分层设计报告](docs/student_behavior_ai_stratification_design.md)
-- [AI 隐性动态分层开发路线图](docs/student_behavior_ai_stratification_development_roadmap.md)
+- [学生学习分析与分层教学开发计划](docs/student_behavior_ai_stratification_development_roadmap.md)
 - [学生评价、积分与奖章设计](docs/student_evaluation_incentive_design.md)
 
 ## 安全原则

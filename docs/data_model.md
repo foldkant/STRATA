@@ -192,7 +192,7 @@
 - `learning_analytics.services.access_audit.teacher_has_class_scope`：按学校和有效任课关系判断教师是否可查看班级个体分析，单纯教师角色不足以授权。
 - `sync_learning_event_schemas`：将代码中 35 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
 - `purge_expired_event_rejections`：删除超过本地保留期限的加密拒绝记录；正式环境后续由 Celery beat 定时调用。
-- 当前 app 已完成 M0、`DATA-01A/01B/01C/02A/02B/03A/03B` 和评价管理工程底座。所有旧业务写入已通过统一服务兼容写入新版记录；历史旧记录使用确定性 UUID 回填，不能明确转换的记录以内部状态 `legacy.unmapped` 隔离，界面统一显示“旧事件未转换”。学习数据检查已经完成；特征生成和模型训练尚未完成。
+- 当前 app 已完成隐私权限、学习记录、学习任务关联、评分积分、新旧记录兼容写入和学习数据检查。历史旧记录使用确定性 UUID 回填，不能明确转换的记录以内部状态 `legacy.unmapped` 隔离，界面统一显示“旧事件未转换”。评价管理和试用记录已经完成；学习情况汇总和模型训练尚未完成。
 
 机会状态当前只支持立即投放：`content.released` 的发生时间即实际开放时间。未来定时任务必须先增加 `content.assigned`，到点后再追加 `released`；不能把未来计划时间提前记成已开放。
 
@@ -331,7 +331,8 @@
 - `EvaluationStandardVersion`：已发布的评价标准版本，必须绑定对应的评价方案版本。
 - `EvaluationCriterionVersion`：单项评价指标，保存评价方面、材料来源、具体表现、暂不评价条件、可用帮助、常见问题、1-5 星表现说明和后续教学建议。
 - `EvaluationScoringExample`：评价指标的评分示例，登记星级、示例说明和可选材料引用。
+- `EvaluationTrialRecord`：评价试用与审核记录，绑定已发布评价标准版本，保存记录类型、日期、参与人数、状态、评分一致率、处理结论、问题和后续安排。
 
-实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名。完整约束见[学校评价管理](evaluation_management.md)。
+实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录。已完成记录由 API 禁止修改和删除。完整约束见[学校评价管理](evaluation_management.md)。
 
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

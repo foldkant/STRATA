@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 
 from api.permissions import IsSchoolAdmin
@@ -11,7 +12,12 @@ from learning_analytics.evaluation_models import (
     EvaluationScope,
     EvaluationReviewStatus,
     EvaluationStandard,
+    EvaluationStandardVersion,
     EvaluationDimension,
+    EvaluationTrialConclusion,
+    EvaluationTrialRecord,
+    EvaluationTrialStatus,
+    EvaluationTrialType,
 )
 from learning_analytics.services.evaluation import (
     THINKING_REQUIREMENT_VALUES,
@@ -22,7 +28,9 @@ from learning_analytics.services.evaluation import (
 from .evaluation_serializers import (
     EvaluationPlanWriteSerializer,
     EvaluationStandardWriteSerializer,
+    EvaluationTrialRecordWriteSerializer,
 )
+from ops.xlsx import build_workbook, workbook_response
 
 
 def _validation_errors(exc: DjangoValidationError) -> dict[str, list[str]]:
@@ -136,6 +144,44 @@ def _standard_row(standard: EvaluationStandard, *, detail: bool = False) -> dict
     return row
 
 
+def _trial_row(record: EvaluationTrialRecord) -> dict:
+    version = record.standard_version
+    return {
+        "id": record.id,
+        "standard_version": {
+            "id": version.id,
+            "title": version.title,
+            "version_no": version.version_no,
+            "subject": {
+                "id": version.subject_id,
+                "name": version.subject.name,
+            },
+            "course": (
+                {"id": version.course_id, "title": version.course.title}
+                if version.course_id
+                else None
+            ),
+        },
+        "record_type": record.record_type,
+        "record_type_label": record.get_record_type_display(),
+        "title": record.title,
+        "status": record.status,
+        "status_label": record.get_status_display(),
+        "activity_date": record.activity_date,
+        "participant_count": record.participant_count,
+        "agreement_rate": record.agreement_rate,
+        "conclusion": record.conclusion,
+        "conclusion_label": record.get_conclusion_display(),
+        "summary": record.summary,
+        "issues": record.issues,
+        "action_items": record.action_items,
+        "created_by": record.created_by.display_name or record.created_by.username,
+        "updated_by": record.updated_by.display_name or record.updated_by.username,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
 def _school_plans(request):
     return EvaluationPlan.objects.filter(
         school=request.user.school,
@@ -148,6 +194,17 @@ def _school_standards(request):
     ).select_related("subject", "course", "plan")
 
 
+def _school_trial_records(request):
+    return EvaluationTrialRecord.objects.filter(
+        school=request.user.school,
+    ).select_related(
+        "standard_version__subject",
+        "standard_version__course",
+        "created_by",
+        "updated_by",
+    )
+
+
 @api_view(["GET"])
 @permission_classes([IsSchoolAdmin])
 def evaluation_options(request):
@@ -157,6 +214,13 @@ def evaluation_options(request):
         )
         .select_related("subject")
         .order_by("subject__name", "title")
+    )
+    standard_versions = list(
+        EvaluationStandardVersion.objects.filter(
+            school=request.user.school,
+        )
+        .select_related("subject", "course", "source")
+        .order_by("subject__name", "title", "-version_no")
     )
     return ok(
         {
@@ -199,6 +263,35 @@ def evaluation_options(request):
                     ("create", "创造"),
                 )
                 if value in THINKING_REQUIREMENT_VALUES
+            ],
+            "standard_versions": [
+                {
+                    "id": version.id,
+                    "title": version.title,
+                    "version_no": version.version_no,
+                    "subject": {
+                        "id": version.subject_id,
+                        "name": version.subject.name,
+                    },
+                    "course": (
+                        {"id": version.course_id, "title": version.course.title}
+                        if version.course_id
+                        else None
+                    ),
+                }
+                for version in standard_versions
+            ],
+            "trial_types": [
+                {"value": value, "label": label}
+                for value, label in EvaluationTrialType.choices
+            ],
+            "trial_statuses": [
+                {"value": value, "label": label}
+                for value, label in EvaluationTrialStatus.choices
+            ],
+            "trial_conclusions": [
+                {"value": value, "label": label}
+                for value, label in EvaluationTrialConclusion.choices
             ],
         }
     )
@@ -318,3 +411,113 @@ def publish_standard_view(request, pk: int):
     message = "已发布新的评价标准版本。" if result.created else "当前内容与已发布版本一致。"
     standard.refresh_from_db()
     return ok(_standard_row(standard, detail=True), message)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsSchoolAdmin])
+def trial_records(request):
+    if request.method == "GET":
+        rows = _school_trial_records(request)
+        record_type = request.query_params.get("type", "").strip()
+        status = request.query_params.get("status", "").strip()
+        if record_type:
+            rows = rows.filter(record_type=record_type)
+        if status:
+            rows = rows.filter(status=status)
+        return ok([_trial_row(row) for row in rows])
+
+    serializer = EvaluationTrialRecordWriteSerializer(
+        data=request.data,
+        context={"request": request},
+    )
+    if not serializer.is_valid():
+        return fail("评价试用记录未保存。", errors=serializer.errors, status=400)
+    record = serializer.save()
+    return ok(_trial_row(record), "评价试用记录已创建。", status=201)
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+@permission_classes([IsSchoolAdmin])
+def trial_record_detail(request, pk: int):
+    record = _school_trial_records(request).filter(pk=pk).first()
+    if record is None:
+        return fail("评价试用记录不存在或无权访问。", status=404)
+    if request.method == "GET":
+        return ok(_trial_row(record))
+    if request.method == "DELETE":
+        if record.status == EvaluationTrialStatus.COMPLETED:
+            return fail("已完成记录不能删除。", status=409)
+        record.delete()
+        return ok(message="评价试用记录已删除。")
+
+    serializer = EvaluationTrialRecordWriteSerializer(
+        record,
+        data=request.data,
+        partial=True,
+        context={"request": request},
+    )
+    if not serializer.is_valid():
+        return fail("评价试用记录未保存。", errors=serializer.errors, status=400)
+    record = serializer.save()
+    return ok(_trial_row(record), "评价试用记录已保存。")
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def export_trial_records(request):
+    school = request.user.school
+    rows = _school_trial_records(request)
+    workbook = build_workbook(
+        [
+            {
+                "title": "评价试用记录",
+                "headers": [
+                    "记录ID",
+                    "学科",
+                    "课程",
+                    "评价标准",
+                    "标准版本",
+                    "记录类型",
+                    "记录名称",
+                    "状态",
+                    "日期",
+                    "参与人数",
+                    "评分一致率",
+                    "处理结论",
+                    "结果说明",
+                    "发现的问题",
+                    "后续处理",
+                    "创建人",
+                    "更新时间",
+                ],
+                "rows": [
+                    [
+                        record.id,
+                        record.standard_version.subject.name,
+                        record.standard_version.course.title
+                        if record.standard_version.course_id
+                        else "",
+                        record.standard_version.title,
+                        record.standard_version.version_no,
+                        record.get_record_type_display(),
+                        record.title,
+                        record.get_status_display(),
+                        record.activity_date,
+                        record.participant_count,
+                        record.agreement_rate,
+                        record.get_conclusion_display(),
+                        record.summary,
+                        "；".join(record.issues),
+                        "；".join(record.action_items),
+                        record.created_by.display_name or record.created_by.username,
+                        record.updated_at,
+                    ]
+                    for record in rows
+                ],
+            }
+        ]
+    )
+    return workbook_response(
+        workbook,
+        f"{school.code}-评价试用记录-{timezone.localdate():%Y%m%d}.xlsx",
+    )

@@ -17,6 +17,7 @@
 | 暂不评价条件 | `skip_condition` | 缺少足够材料时不评价该项 |
 | 星级说明 | `level_descriptions` | 1-5 星分别对应的具体表现 |
 | 评分示例 | `EvaluationScoringExample` | 帮助教师统一判断的示例 |
+| 评价试用记录 | `EvaluationTrialRecord` | 内容审核、课堂试用、评分培训和评分一致性检查记录 |
 | 评价版本 | `evaluation_version` | 课堂评价提交所使用的版本 |
 | 评价提交事件 | `evaluation.rating.submitted` | 自评、互评或师评的逐项星级记录 |
 | 学习数据检查 | `DataQualityReport` | 学校管理员检查学习记录是否完整、可转换并关联到学习任务 |

@@ -2,45 +2,62 @@
 import { computed, onMounted, ref } from 'vue'
 import { ApiError } from '@/api/client'
 import {
+  deleteEvaluationTrial,
+  evaluationTrialExportUrl,
   getEvaluationPlan,
   getEvaluationPlans,
   getEvaluationOptions,
   getEvaluationStandard,
   getEvaluationStandards,
+  getEvaluationTrial,
+  getEvaluationTrials,
   publishEvaluationPlan,
   publishEvaluationStandard,
   type EvaluationPlanRow,
   type EvaluationOptions,
-  type EvaluationStandardRow
+  type EvaluationStandardRow,
+  type EvaluationTrialRow
 } from '@/api/evaluation'
 import EvaluationPlanEditorModal from '@/components/evaluation/EvaluationPlanEditorModal.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import EvaluationStandardEditorModal from '@/components/evaluation/EvaluationStandardEditorModal.vue'
+import EvaluationTrialEditorModal from '@/components/evaluation/EvaluationTrialEditorModal.vue'
 import AppShell from '@/layouts/AppShell.vue'
 import { schoolAdminNav } from './nav'
 
 const navItems = schoolAdminNav('/school-admin/evaluations')
-const activeTab = ref<'plans' | 'standards'>('plans')
+const activeTab = ref<'plans' | 'standards' | 'trials'>('plans')
 const options = ref<EvaluationOptions | null>(null)
 const plans = ref<EvaluationPlanRow[]>([])
 const standards = ref<EvaluationStandardRow[]>([])
+const trials = ref<EvaluationTrialRow[]>([])
 const loading = ref(false)
 const notice = ref('')
 const noticeTone = ref<'success' | 'warning' | 'error' | 'info'>('info')
 const planEditor = ref(false)
 const standardEditor = ref(false)
+const trialEditor = ref(false)
 const editingPlan = ref<EvaluationPlanRow | null>(null)
 const editingStandard = ref<EvaluationStandardRow | null>(null)
+const editingTrial = ref<EvaluationTrialRow | null>(null)
 const publishing = ref(false)
 const publishTarget = ref<{ type: 'plan' | 'standard'; id: number; title: string } | null>(null)
+const deleteTarget = ref<EvaluationTrialRow | null>(null)
 
 const summary = computed(() => [
   { label: '评价方案', value: plans.value.length, detail: `${plans.value.filter((item) => item.latest_version).length} 个已发布` },
   { label: '评价标准', value: standards.value.length, detail: `${standards.value.reduce((sum, item) => sum + item.criterion_count, 0)} 个评价指标` },
-  { label: '学校课程', value: options.value?.courses.length || 0, detail: '覆盖本校已建课程' },
-  { label: '版本管理', value: plans.value.filter((item) => item.latest_version).length + standards.value.filter((item) => item.latest_version).length, detail: '发布后保留历史版本' }
+  { label: '试用记录', value: trials.value.length, detail: `${trials.value.filter((item) => item.status === 'completed').length} 条已完成` },
+  { label: '评分检查', value: trials.value.filter((item) => item.record_type === 'scoring_check').length, detail: '记录评分一致情况' }
 ])
+
+const pageTitle = computed(() => activeTab.value === 'plans' ? '评价方案' : activeTab.value === 'standards' ? '评价标准' : '试用记录')
+const pageDescription = computed(() => activeTab.value === 'plans'
+  ? '明确学习目标、评价依据和学习任务，供本校课程统一使用。'
+  : activeTab.value === 'standards'
+    ? '为每个评价指标设置具体表现、星级说明和评分示例。'
+    : '记录内容审核、课堂试用、评分培训和评分一致性检查。')
 
 function firstApiError(error: ApiError) {
   const first = Object.values(error.errors).flat()[0]
@@ -50,14 +67,16 @@ function firstApiError(error: ApiError) {
 async function load() {
   loading.value = true
   try {
-    const [optionRows, planRows, standardRows] = await Promise.all([
+    const [optionRows, planRows, standardRows, trialRows] = await Promise.all([
       getEvaluationOptions(),
       getEvaluationPlans(),
-      getEvaluationStandards()
+      getEvaluationStandards(),
+      getEvaluationTrials()
     ])
     options.value = optionRows
     plans.value = planRows
     standards.value = standardRows
+    trials.value = trialRows
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '评价管理数据加载失败。'
     noticeTone.value = 'error'
@@ -88,14 +107,46 @@ async function openStandard(row?: EvaluationStandardRow) {
   }
 }
 
-async function saved(kind: 'plan' | 'standard') {
+async function openTrial(row?: EvaluationTrialRow) {
+  notice.value = ''
+  try {
+    editingTrial.value = row ? await getEvaluationTrial(row.id) : null
+    trialEditor.value = true
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '评价试用记录加载失败。'
+    noticeTone.value = 'error'
+  }
+}
+
+async function saved(kind: 'plan' | 'standard' | 'trial') {
   planEditor.value = false
   standardEditor.value = false
+  trialEditor.value = false
   editingPlan.value = null
   editingStandard.value = null
-  notice.value = kind === 'plan' ? '评价方案已保存。' : '评价标准已保存。'
+  editingTrial.value = null
+  notice.value = kind === 'plan' ? '评价方案已保存。' : kind === 'standard' ? '评价标准已保存。' : '评价试用记录已保存。'
   noticeTone.value = 'success'
   await load()
+}
+
+async function confirmDeleteTrial() {
+  if (!deleteTarget.value) return
+  try {
+    await deleteEvaluationTrial(deleteTarget.value.id)
+    notice.value = '评价试用记录已删除。'
+    noticeTone.value = 'success'
+    deleteTarget.value = null
+    await load()
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '评价试用记录删除失败。'
+    noticeTone.value = 'error'
+    deleteTarget.value = null
+  }
+}
+
+function exportTrials() {
+  window.location.href = evaluationTrialExportUrl()
 }
 
 function requestPublish(type: 'plan' | 'standard', row: EvaluationPlanRow | EvaluationStandardRow) {
@@ -144,18 +195,20 @@ onMounted(load)
     <section class="evaluation-workspace">
       <header class="evaluation-page-header">
         <div>
-          <h2>{{ activeTab === 'plans' ? '评价方案' : '评价标准' }}</h2>
-          <p v-if="activeTab === 'plans'">明确学习目标、评价依据和学习任务，供本校课程统一使用。</p>
-          <p v-else>为每个评价指标设置具体表现、星级说明和评分示例。</p>
+          <h2>{{ pageTitle }}</h2>
+          <p>{{ pageDescription }}</p>
         </div>
-        <button
-          class="primary-button"
-          type="button"
-          :disabled="!options?.courses.length || (activeTab === 'standards' && !plans.length)"
-          @click="activeTab === 'plans' ? openPlan() : openStandard()"
-        >
-          {{ activeTab === 'plans' ? '新建方案' : '新建标准' }}
-        </button>
+        <div class="evaluation-heading-actions">
+          <button v-if="activeTab === 'trials'" class="secondary-button" type="button" :disabled="!trials.length" @click="exportTrials">导出 XLSX</button>
+          <button
+            class="primary-button"
+            type="button"
+            :disabled="!options?.courses.length || (activeTab === 'standards' && !plans.length) || (activeTab === 'trials' && !options?.standard_versions.length)"
+            @click="activeTab === 'plans' ? openPlan() : activeTab === 'standards' ? openStandard() : openTrial()"
+          >
+            {{ activeTab === 'plans' ? '新建方案' : activeTab === 'standards' ? '新建标准' : '新增记录' }}
+          </button>
+        </div>
       </header>
 
       <div class="evaluation-tabs" role="tablist" aria-label="评价管理类型">
@@ -164,6 +217,9 @@ onMounted(load)
         </button>
         <button role="tab" type="button" :aria-selected="activeTab === 'standards'" :class="{ active: activeTab === 'standards' }" @click="activeTab = 'standards'">
           评价标准 <span>{{ standards.length }}</span>
+        </button>
+        <button role="tab" type="button" :aria-selected="activeTab === 'trials'" :class="{ active: activeTab === 'trials' }" @click="activeTab = 'trials'">
+          试用记录 <span>{{ trials.length }}</span>
         </button>
       </div>
 
@@ -193,7 +249,7 @@ onMounted(load)
         </table>
       </div>
 
-      <div v-else class="evaluation-table-wrap">
+      <div v-else-if="activeTab === 'standards'" class="evaluation-table-wrap">
         <p v-if="!standards.length" class="evaluation-empty">
           尚无评价标准。评价标准需要绑定一个已发布的评价方案。
         </p>
@@ -210,6 +266,30 @@ onMounted(load)
                 <div class="evaluation-row-actions">
                   <button type="button" @click="openStandard(row)">编辑</button>
                   <button type="button" @click="requestPublish('standard', row)">发布版本</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-else class="evaluation-table-wrap">
+        <p v-if="!trials.length" class="evaluation-empty">
+          尚无试用记录。先发布评价标准，再记录审核、课堂试用或评分检查。
+        </p>
+        <table v-else class="evaluation-table evaluation-trial-table">
+          <thead><tr><th>记录</th><th>评价标准</th><th>日期与人数</th><th>状态</th><th>处理结论</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr v-for="row in trials" :key="row.id">
+              <td data-label="记录"><strong>{{ row.title }}</strong><small>{{ row.record_type_label }}</small></td>
+              <td data-label="评价标准"><strong>{{ row.standard_version.title }} v{{ row.standard_version.version_no }}</strong><small>{{ row.standard_version.subject.name }} · {{ row.standard_version.course?.title || '校级通用' }}</small></td>
+              <td data-label="日期与人数"><span>{{ row.activity_date }}</span><small>{{ row.participant_count }} 人参与<span v-if="row.agreement_rate !== null"> · 一致率 {{ row.agreement_rate }}%</span></small></td>
+              <td data-label="状态"><span class="evaluation-status" :class="row.status">{{ row.status_label }}</span></td>
+              <td data-label="处理结论"><span class="evaluation-conclusion" :class="row.conclusion">{{ row.conclusion_label }}</span></td>
+              <td data-label="操作">
+                <div class="evaluation-row-actions">
+                  <button type="button" @click="openTrial(row)">{{ row.status === 'completed' ? '查看' : '编辑' }}</button>
+                  <button v-if="row.status !== 'completed'" class="danger-link" type="button" @click="deleteTarget = row">删除</button>
                 </div>
               </td>
             </tr>
@@ -233,6 +313,13 @@ onMounted(load)
       @close="standardEditor = false"
       @saved="saved('standard')"
     />
+    <EvaluationTrialEditorModal
+      v-if="trialEditor && options"
+      :draft="editingTrial"
+      :options="options"
+      @close="trialEditor = false"
+      @saved="saved('trial')"
+    />
     <ConfirmDialog
       :open="Boolean(publishTarget)"
       title="发布新版本"
@@ -241,6 +328,15 @@ onMounted(load)
       :loading="publishing"
       @close="publishTarget = null"
       @confirm="confirmPublish"
+    />
+    <ConfirmDialog
+      :open="Boolean(deleteTarget)"
+      title="删除试用记录"
+      :message="`确认删除“${deleteTarget?.title || ''}”。已完成记录不允许删除。`"
+      confirm-label="确认删除"
+      :danger="true"
+      @close="deleteTarget = null"
+      @confirm="confirmDeleteTrial"
     />
   </AppShell>
 </template>
@@ -302,6 +398,13 @@ onMounted(load)
 .evaluation-page-header h2,
 .evaluation-page-header p {
   margin: 0;
+}
+
+.evaluation-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 
 .evaluation-page-header p {
@@ -408,6 +511,48 @@ onMounted(load)
   color: #166534;
 }
 
+.evaluation-status,
+.evaluation-conclusion {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0 9px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.evaluation-status.in_progress {
+  background: #fff4dd;
+  color: #9a4f08;
+}
+
+.evaluation-status.completed,
+.evaluation-conclusion.ready {
+  background: #e8f7ef;
+  color: #166534;
+}
+
+.evaluation-conclusion.revise {
+  background: #fff4dd;
+  color: #9a4f08;
+}
+
+.evaluation-conclusion.hold {
+  background: #fff0f0;
+  color: #b42318;
+}
+
+.evaluation-trial-table td:nth-child(3) > span {
+  margin: 0;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
 .evaluation-row-actions {
   display: flex;
   align-items: center;
@@ -425,6 +570,14 @@ onMounted(load)
 
 .evaluation-row-actions button:hover {
   color: var(--primary-dark);
+}
+
+.evaluation-row-actions .danger-link {
+  color: #b42318;
+}
+
+.evaluation-row-actions .danger-link:hover {
+  color: #7f1d1d;
 }
 
 .evaluation-empty {
@@ -470,6 +623,11 @@ onMounted(load)
   .evaluation-page-header {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .evaluation-heading-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
   }
 
   .evaluation-tabs {

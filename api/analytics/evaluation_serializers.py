@@ -8,6 +8,11 @@ from learning_analytics.evaluation_models import (
     EvaluationScope,
     EvaluationReviewStatus,
     EvaluationStandard,
+    EvaluationStandardVersion,
+    EvaluationTrialConclusion,
+    EvaluationTrialRecord,
+    EvaluationTrialStatus,
+    EvaluationTrialType,
 )
 
 
@@ -206,6 +211,130 @@ class EvaluationStandardWriteSerializer(StrictModelSerializer):
         instance.updated_by = request.user
         instance.scope = EvaluationScope.COURSE
         instance.review_status = EvaluationReviewStatus.DRAFT
+        for field_name, value in validated_data.items():
+            setattr(instance, field_name, value)
+        instance.save()
+        return instance
+
+
+class EvaluationTrialRecordWriteSerializer(StrictModelSerializer):
+    standard_version = serializers.PrimaryKeyRelatedField(
+        queryset=EvaluationStandardVersion.objects.none()
+    )
+
+    class Meta:
+        model = EvaluationTrialRecord
+        fields = (
+            "standard_version",
+            "record_type",
+            "title",
+            "status",
+            "activity_date",
+            "participant_count",
+            "agreement_rate",
+            "conclusion",
+            "summary",
+            "issues",
+            "action_items",
+        )
+        extra_kwargs = {
+            "title": {"required": True, "allow_blank": False},
+            "issues": {"required": False},
+            "action_items": {"required": False},
+            "summary": {"required": False},
+            "participant_count": {"required": False},
+            "agreement_rate": {"required": False, "allow_null": True},
+            "conclusion": {"required": False},
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        if request and request.user.is_authenticated:
+            self.fields["standard_version"].queryset = (
+                EvaluationStandardVersion.objects.filter(
+                    school=request.user.school,
+                ).select_related("source", "subject", "course")
+            )
+
+    def validate_title(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("请填写记录名称。")
+        return value
+
+    def validate_issues(self, value):
+        return _clean_string_list(value, field_name="发现的问题", max_items=20)
+
+    def validate_action_items(self, value):
+        return _clean_string_list(value, field_name="后续处理", max_items=20)
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance and instance.status == EvaluationTrialStatus.COMPLETED:
+            raise serializers.ValidationError("已完成记录不能修改，请新增一条补充记录。")
+
+        status = attrs.get(
+            "status",
+            instance.status if instance else EvaluationTrialStatus.PLANNED,
+        )
+        record_type = attrs.get(
+            "record_type",
+            instance.record_type if instance else None,
+        )
+        agreement_rate = attrs.get(
+            "agreement_rate",
+            instance.agreement_rate if instance else None,
+        )
+        conclusion = attrs.get(
+            "conclusion",
+            instance.conclusion if instance else EvaluationTrialConclusion.PENDING,
+        )
+        participant_count = attrs.get(
+            "participant_count",
+            instance.participant_count if instance else 0,
+        )
+        summary = attrs.get("summary", instance.summary if instance else "").strip()
+        activity_date = attrs.get(
+            "activity_date",
+            instance.activity_date if instance else None,
+        )
+
+        errors = {}
+        if record_type == EvaluationTrialType.SCORING_CHECK:
+            if status == EvaluationTrialStatus.COMPLETED and agreement_rate is None:
+                errors["agreement_rate"] = ["完成评分一致性检查时必须填写一致率。"]
+        elif agreement_rate is not None:
+            errors["agreement_rate"] = ["只有评分一致性检查可以填写一致率。"]
+
+        if status == EvaluationTrialStatus.COMPLETED:
+            if participant_count < 1:
+                errors["participant_count"] = ["完成记录至少需要 1 名参与者。"]
+            if not summary:
+                errors["summary"] = ["完成记录必须填写结果说明。"]
+            if conclusion == EvaluationTrialConclusion.PENDING:
+                errors["conclusion"] = ["完成记录必须选择处理结论。"]
+            if activity_date is None:
+                errors["activity_date"] = ["请选择完成日期。"]
+        elif conclusion != EvaluationTrialConclusion.PENDING:
+            errors["conclusion"] = ["未完成记录的处理结论应为待确认。"]
+
+        if errors:
+            raise serializers.ValidationError(errors)
+        attrs["summary"] = summary
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        return EvaluationTrialRecord.objects.create(
+            school=request.user.school,
+            created_by=request.user,
+            updated_by=request.user,
+            **validated_data,
+        )
+
+    def update(self, instance, validated_data):
+        instance.updated_by = self.context["request"].user
         for field_name, value in validated_data.items():
             setattr(instance, field_name, value)
         instance.save()

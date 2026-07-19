@@ -33,6 +33,26 @@ class EvaluationReviewStatus(models.TextChoices):
     APPROVED = "approved", "已启用"
 
 
+class EvaluationTrialType(models.TextChoices):
+    CONTENT_REVIEW = "content_review", "内容审核"
+    CLASSROOM_TRIAL = "classroom_trial", "课堂试用"
+    SCORER_TRAINING = "scorer_training", "评分培训"
+    SCORING_CHECK = "scoring_check", "评分一致性检查"
+
+
+class EvaluationTrialStatus(models.TextChoices):
+    PLANNED = "planned", "待进行"
+    IN_PROGRESS = "in_progress", "进行中"
+    COMPLETED = "completed", "已完成"
+
+
+class EvaluationTrialConclusion(models.TextChoices):
+    PENDING = "pending", "待确认"
+    READY = "ready", "可使用"
+    REVISE = "revise", "需要修改"
+    HOLD = "hold", "暂不使用"
+
+
 class EvaluationDimension(models.TextChoices):
     TASK_QUALITY = "task_quality", "任务完成质量"
     LEARNING_METHOD = "learning_method", "学习方法"
@@ -506,3 +526,95 @@ class EvaluationScoringExample(ImmutableEvaluationVersion):
 
     def __str__(self) -> str:
         return f"{self.criterion_id}:L{self.level}:{self.title}"
+
+
+class EvaluationTrialRecord(models.Model):
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="evaluation_trial_records",
+    )
+    standard_version = models.ForeignKey(
+        EvaluationStandardVersion,
+        on_delete=models.PROTECT,
+        related_name="trial_records",
+    )
+    record_type = models.CharField(max_length=32, choices=EvaluationTrialType.choices)
+    title = models.CharField(max_length=160)
+    status = models.CharField(
+        max_length=24,
+        choices=EvaluationTrialStatus.choices,
+        default=EvaluationTrialStatus.PLANNED,
+    )
+    activity_date = models.DateField()
+    participant_count = models.PositiveIntegerField(default=0)
+    agreement_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    conclusion = models.CharField(
+        max_length=24,
+        choices=EvaluationTrialConclusion.choices,
+        default=EvaluationTrialConclusion.PENDING,
+    )
+    summary = models.TextField(blank=True)
+    issues = models.JSONField(default=list, blank=True)
+    action_items = models.JSONField(default=list, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_evaluation_trial_records",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="updated_evaluation_trial_records",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["school", "activity_date"]),
+            models.Index(fields=["school", "record_type", "status"]),
+            models.Index(fields=["standard_version", "activity_date"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(agreement_rate__isnull=True)
+                    | (
+                        models.Q(agreement_rate__gte=0)
+                        & models.Q(agreement_rate__lte=100)
+                    )
+                ),
+                name="evaluation_trial_agreement_rate_0_100",
+            )
+        ]
+        ordering = ["-activity_date", "-id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.standard_version_id and self.standard_version.school_id != self.school_id:
+            errors["standard_version"] = "评价标准版本与试用记录不属于同一学校。"
+        if self.created_by_id and self.created_by.school_id != self.school_id:
+            errors["created_by"] = "创建人与试用记录不属于同一学校。"
+        if self.updated_by_id and self.updated_by.school_id != self.school_id:
+            errors["updated_by"] = "更新人与试用记录不属于同一学校。"
+        if not isinstance(self.issues, list):
+            errors["issues"] = "发现的问题必须是列表。"
+        if not isinstance(self.action_items, list):
+            errors["action_items"] = "后续处理必须是列表。"
+        if self.record_type != EvaluationTrialType.SCORING_CHECK and self.agreement_rate is not None:
+            errors["agreement_rate"] = "只有评分一致性检查可以填写一致率。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.get_record_type_display()}:{self.title}"

@@ -40,6 +40,21 @@ urlpatterns = [
         name="school_admin_evaluation_standard_publish",
     ),
     path(
+        "school-admin/evaluations/trials/",
+        evaluation_views.trial_records,
+        name="school_admin_evaluation_trials",
+    ),
+    path(
+        "school-admin/evaluations/trials/export/",
+        evaluation_views.export_trial_records,
+        name="school_admin_evaluation_trials_export",
+    ),
+    path(
+        "school-admin/evaluations/trials/<int:pk>/",
+        evaluation_views.trial_record_detail,
+        name="school_admin_evaluation_trial_detail",
+    ),
+    path(
         "learning-events/batch/",
         event_views.learning_event_batch,
         name="learning_event_batch",

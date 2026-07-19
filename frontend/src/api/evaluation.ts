@@ -19,6 +19,18 @@ export type EvaluationOptions = {
   review_statuses: EvaluationChoice[]
   dimensions: EvaluationChoice[]
   thinking_requirements: EvaluationChoice[]
+  standard_versions: EvaluationStandardVersionOption[]
+  trial_types: EvaluationChoice[]
+  trial_statuses: EvaluationChoice[]
+  trial_conclusions: EvaluationChoice[]
+}
+
+export type EvaluationStandardVersionOption = {
+  id: number
+  title: string
+  version_no: number
+  subject: { id: number; name: string }
+  course: { id: number; title: string } | null
 }
 
 export type EvaluationVersion = {
@@ -144,6 +156,42 @@ export type EvaluationStandardRow = {
   updated_at: string
 }
 
+export type EvaluationTrialPayload = {
+  standard_version: number | string
+  record_type: string
+  title: string
+  status: string
+  activity_date: string
+  participant_count: number
+  agreement_rate: number | string | null
+  conclusion: string
+  summary: string
+  issues: string[]
+  action_items: string[]
+}
+
+export type EvaluationTrialRow = {
+  id: number
+  standard_version: EvaluationStandardVersionOption
+  record_type: string
+  record_type_label: string
+  title: string
+  status: string
+  status_label: string
+  activity_date: string
+  participant_count: number
+  agreement_rate: string | null
+  conclusion: string
+  conclusion_label: string
+  summary: string
+  issues: string[]
+  action_items: string[]
+  created_by: string
+  updated_by: string
+  created_at: string
+  updated_at: string
+}
+
 const baseUrl = '/api/v1/school-admin/evaluations'
 
 export function getEvaluationOptions() {
@@ -192,4 +240,27 @@ export function publishEvaluationStandard(id: number) {
     method: 'POST',
     body: toJsonBody({})
   })
+}
+
+export function getEvaluationTrials() {
+  return apiRequest<EvaluationTrialRow[]>(`${baseUrl}/trials/`)
+}
+
+export function getEvaluationTrial(id: number) {
+  return apiRequest<EvaluationTrialRow>(`${baseUrl}/trials/${id}/`)
+}
+
+export function saveEvaluationTrial(payload: EvaluationTrialPayload, id?: number) {
+  return apiRequest<EvaluationTrialRow>(id ? `${baseUrl}/trials/${id}/` : `${baseUrl}/trials/`, {
+    method: id ? 'PATCH' : 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function deleteEvaluationTrial(id: number) {
+  return apiRequest<null>(`${baseUrl}/trials/${id}/`, { method: 'DELETE' })
+}
+
+export function evaluationTrialExportUrl() {
+  return `${baseUrl}/trials/export/`
 }

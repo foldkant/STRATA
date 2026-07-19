@@ -1,1 +1,0 @@
-import{d as t,a as e,b as s,n,t as c}from"./index-_TUjuFic.js";const r=t({__name:"StatusBadge",props:{active:{type:Boolean}},setup(a){return(o,i)=>(e(),s("span",{class:n(["status-pill",a.active?"status-active":"status-disabled"])},c(a.active?"启用":"停用"),3))}});export{r as _};
