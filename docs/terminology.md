@@ -29,6 +29,11 @@
 | 新旧记录差异率 | `old_new_event_difference_rate` | 新旧记录核对后存在差异的比例 |
 | 检查版本 | `check_version` | 本次检查使用的规则版本 |
 | 来源校验码 | `source_checksum` | 用于确认检查来源数据未被替换的校验值 |
+| 新版学习事件 | `LearningEventV2` | 当前学习行为记录模型；文档正文不简称为“V2 事件” |
+| 旧记录追溯关系 | `LearningEventV2.legacy_event` | 内部兼容字段；界面和普通文档不使用“legacy”作为栏目名 |
+| 旧事件未转换 | `legacy.unmapped` / `legacy_unmapped` | 内部兼容事件名和状态值；界面、API 标签和导出统一显示“旧事件未转换” |
+| 自动检查记录 | `AnalyticsPipelineRun` | 保存定时、手动和重试检查；数据库状态 `blocked` 显示为“检查未通过” |
+| 自动检查阶段 | `AnalyticsTaskRun` | 当前阶段代码为 `collect_learning_data`、`compare_old_new_records`、`save_data_check_report` |
 
 ## 角色用语
 
@@ -62,6 +67,30 @@
 
 历史迁移文件和 Git 标签可以保留旧名称，因为它们记录已经发生的数据库和版本演进；当前模型、表、字段、接口和文档必须使用统一名称。
 
+## 兼容名称
+
+以下代码名称暂时保留以避免破坏已部署学校、历史数据或已有客户端，但不得扩散成新的菜单、字段或文档标题：
+
+- API 路径 `/api/v1/school-admin/analytics/quality/`：路径保持兼容，页面和接口说明称“学习数据检查”。
+- `AnalyticsPipelineRun.PipelineType.DATA_QUALITY` 及数据库值 `data_quality`：内部枚举保持兼容，显示名称为“数据检查”。
+- `DataQualityReport`、`EventIngestionDailyCounter`、`require_quality_checks`、`run_nightly_data_quality`：现有类名和函数名暂时保留；正文分别称“检查报告、学习事件每日接收记录、确认检查通过、执行夜间学习数据检查”。
+- 文件 `learning_analytics/services/quality.py`、文档文件 `data_quality_pipeline.md` 和前端路由 `/app/school-admin/data-quality`：路径暂时保持兼容，页面标题、导航和正文统一使用“学习数据检查”。
+- `LearningEventV2`、`backfill_learning_event_v2`、`reconcile_v1_v2_events`：真实类名、命令或底层函数可以原样出现在代码引用中，正文分别称“新版学习事件、历史旧记录回填、新旧记录核对”。
+- `LEARNING_EVENT_WRITE_MODE=v1_only`：紧急回滚配置值保持不变，文档解释为“只写旧业务记录”。
+
+旧名称只能出现在迁移映射、历史 Git 标签、停用名称清单和说明旧名称已被移除的审查记录中。
+
 ## 研究文档
 
-论文设计中可以使用效度、测量误差、评分一致性、IRT、DIF 等必要学术概念，但首次出现时必须用一句中文解释，并与平台按钮、菜单和数据库名称分开。研究术语不能直接成为普通教师或学生界面的栏目名称。
+论文设计中可以使用效度、测量误差、评分一致性、评分锚点、IRT、DIF 和数据质量等必要学术概念，但首次出现时必须用一句中文解释，并与平台按钮、菜单和数据库名称分开。例如，研究文档可讨论“数据质量”，当前产品模块仍统一称“学习数据检查”；研究文档可讨论“评分锚点”，平台字段和表单仍统一称“星级表现说明”。研究术语不能直接成为普通教师或学生界面的栏目名称，也不能反向成为新的数据库表名、字段名、接口名或开发任务名。
+
+## 文档同步范围
+
+每次调整统一名称时，至少检查以下文件：
+
+- 根目录 `README.md` 和 `docs/README.md`。
+- `api_contract.md`、`data_model.md`、`private_deployment.md`。
+- 对应角色设计文档和专题设计文档。
+- 开发路线图、进度审计、模拟数据说明和历史审查结论。
+
+迁移文件、历史 Git 标签和必须保持兼容的代码路径可以保留旧名称，但必须在附近注明当前中文名称。除停用名称清单和历史变更说明外，文档正文不得继续使用已经停用的旧名称。

@@ -140,7 +140,7 @@ PostgreSQL 环境缺失或配置错误时，`manage.py check` 会阻断启动。
 .\.venv\Scripts\python.exe manage.py sync_learning_event_schemas
 ```
 
-从旧版事件表升级时，先备份数据库并执行 dry-run，再正式回填和对账：
+从旧版事件表升级时，先备份数据库并执行 dry-run，再正式回填和核对：
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py backfill_learning_event_v2 --dry-run --batch-size 500
@@ -222,7 +222,7 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 
 便携验证实例可使用非默认端口，但 Web、worker 和 beat 的 `REDIS_URL/CELERY_*` 必须一致。当前工程验证使用 PostgreSQL `55432` 和 Redis 兼容服务 `56379`；这不是学校生产默认端口。
 
-## 合成研究数据部署边界
+## 模拟数据部署边界
 
 `generate_synthetic_learning_data` 主要用于开发机或独立测试数据库。学校正式库确需做界面验收时可使用 `school_overlay`，但必须先备份、指定真实任课教师，并记录返回的 `run_id` 和完整 `dataset_key`。正式检查报告会排除测试批次，其他普通业务统计在清理前可能显示带 `SIM` 前缀的测试班级和学生。
 

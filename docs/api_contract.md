@@ -535,7 +535,7 @@ DELETE /api/v1/teacher/lesson-steps/{id}/
 - 新建题目基础分按题型给初始值：选择/判断 2 分，填空 3 分，简答 5 分。
 - 新建题目开启分层分值时，前端先按 `target_layer` 给 `layer_scores.A/B/C` 初始建议值；无法判断时三层都等于基础分。
 - AI 分值建议只能返回建议值，不能直接覆盖教师已保存的 `layer_scores`。
-- 学生提交课堂题仍走 `POST /api/v1/student/lesson-steps/{id}/answer/`；正文写入版本化 `LessonStepAttempt/Answer`，分析事件按题双写且不复制答案正文。
+- 学生提交课堂题仍走 `POST /api/v1/student/lesson-steps/{id}/answer/`；正文写入版本化 `LessonStepAttempt/Answer`，每题通过统一服务兼容写入旧业务记录和新版事件，且不复制答案正文。
 
 ### 教师 AI 接入
 
@@ -675,7 +675,7 @@ POST /api/v1/student/classroom/{id}/activities/{activity_id}/response/
 - 开启和关闭课堂活动会写入 `LearningEvent.teacher_intervention`。
 - `command=sign_in` 开启签到时使用 `content.released@1.2` 为当前班级启用学生生成必做 `attendance` 机会；重复请求同一开放活动不重复生成机会。
 - 学生签到只允许写本人 `attendance_status=signed` 和 `recorded_by=student`。迟到、请假、缺勤及教师代签必须通过教师 `mark` 接口。
-- 教师每次修改考勤都会追加 `attendance.recorded`，通过 `revision_no/supersedes_event_id` 关联前一状态；备注不进入 V2。
+- 教师每次修改考勤都会追加 `attendance.recorded`，通过 `revision_no/supersedes_event_id` 关联前一状态；备注不进入新版事件。
 - 关闭签到后学生不能继续提交，但教师可在课堂结束前核实状态。课堂结束后未响应机会撤回，不自动生成缺勤；已开启或已有记录的活动禁止物理删除。
 - 当前已完成课堂场次、环节投放、锁定/关闭、学生版本化作答、附件版本上传、客观题自动评分、主观题待评和附件复评事实；课堂控制继续使用现有 WebSocket 推送。
 
@@ -736,7 +736,7 @@ POST /api/v1/classroom/groups/{group_id}/office-callback/
 - 教师端可查看所有小组成员、层级提示、组长、空间使用和共享文件。
 - 学生端只返回自己的 `my_group`，不返回其他小组成员和文件。
 - 每组的文档和共享区分别使用 `content.released@1.1.target_student_ids` 只向本组成员生成非必做 `document/task` 机会，不进入其他学生分母。
-- 打开小组协作文档写 `group.document.opened`；上传共享文件写 `group.file.shared`。文件名、描述、地址和正文只保存在业务表，不进入 V2。
+- 打开小组协作文档写 `group.document.opened`；上传共享文件写 `group.file.shared`。文件名、描述、地址和正文只保存在业务表，不进入新版事件。
 - ONLYOFFICE 回调必须提供有效 HS256 JWT，且签名内的 `status/key/url/users/actions` 与请求一致。服务端同时校验文档 key、下载 URL 来源和文件大小。
 - 有实际内容变化的回调追加 `ClassroomGroupDocumentVersion` 和组级 `group.document.saved`；相同 SHA-256 的重复回调不新增版本或事件。保存事实不自动归因到单个学生。
 - 关闭小组合作或结束课堂会关闭入口并撤回未完成机会；已提交共享文件等完成事实保留。
@@ -999,7 +999,7 @@ POST /api/v1/student/lesson-steps/{step_id}/reflection/
 - `file` 附件提交题下发 `file_config.allowed_extensions` 和 `file_config.max_size_mb`，学生上传接口仍会在后端二次校验格式和大小。
 - 进入课程、课时、环节和查看资源仍处于旧记录迁移阶段；课堂提交和附件上传已由统一服务在同一事务写入新旧记录。
 - 学生上传附件会追加 `StudentWorkAttachment.upload_version`，不会覆盖或删除旧版本，并写 `task.submitted`；响应中的 `upload_version` 可用于教师端确认版本。
-- 学生提交环节后返回 `attempt_id` 和 `attempt_no`。正文保存在 `LessonStepAttempt/Answer`；V2 `item.submitted` 仅保存题目版本、题型、尝试号及机会引用。
+- 学生提交环节后返回 `attempt_id` 和 `attempt_no`。正文保存在 `LessonStepAttempt/Answer`；新版 `item.submitted` 事件仅保存题目版本、题型、尝试号及学习任务引用。
 
 ### 资源
 
@@ -1103,7 +1103,7 @@ GET /api/v1/student/feedback/{id}/
 学校管理员 API 必须从登录用户获取学校范围。  
 不能信任 URL 或请求体传入的 `school_id`。
 
-## 学习事件 V2 批量接收
+## 新版学习事件批量接收
 
 ```text
 POST /api/v1/learning-events/batch/
@@ -1141,7 +1141,7 @@ POST /api/v1/learning-events/batch/
 
 规则：
 
-- 服务端根据登录会话重建 `actor/school/source`，请求体不得提交 `school_id`、`actor_id`、角色、质量状态或模型版本。
+- 服务端根据登录会话重建 `actor/school/source`，请求体不得提交 `school_id`、`actor_id`、角色、记录状态或模型版本。
 - 学生事件的 `target_student` 固定为本人；教师目标学生必须属于本人任教班级。
 - `event_id` 和服务端生成的“客户端会话 + 序号”幂等键共同去重。
 - 同一幂等键、同一事实返回 `duplicate`；同一幂等键对应不同内容返回 `idempotency_conflict`。
@@ -1155,7 +1155,7 @@ POST /api/v1/learning-events/batch/
 - `target_layers` 支持 `all`、`A`、`B`、`C`、`A/B`、`B/C` 和 `A/B/C`。层级只在服务端用于实际投放，学生响应不得返回目标层级或 `delivered_band`；尚无当前层级的学生只接收 `all` 内容。
 - `content.withdrawn@1.0` 必须引用原 `release_event_id` 和结构化 `reason_code`；已提交或已评分的机会保留，其余机会追加 `withdrawn` 事实。
 - `resource.opened`、`video.progress`、`document.progress`、`group.document.opened`、`group.file.shared`、`attendance.recorded`、`quick_answer.responded`、`item.submitted`、`item.graded`、`task.submitted` 和 `evaluation.rating.submitted` 必须提交真实 `opportunity_id`。随机 UUID、跨学生引用、内容版本不一致或机会终止后的事件按条拒绝。
-- `quick_answer.responded` 只允许服务端写入，载荷仅保存首次响应排名和相对活动开启时间的延迟；学生回答正文不复制进 V2。`random_call.selected` 也只允许服务端写入，记录教师选择事实，不要求机会、不生成提交状态。
+- `quick_answer.responded` 只允许服务端写入，载荷仅保存首次响应排名和相对活动开启时间的延迟；学生回答正文不复制进新版事件。`random_call.selected` 也只允许服务端写入，记录教师选择事实，不要求学习任务关联、不生成提交状态。
 - `resource.center.opened`、`lesson.entered`、`lesson.step.entered/completed`、`pretest.submitted`、`chat.message.sent`、`intervention.acknowledged`、`classroom.interaction.responded` 和 `classroom.control.executed` 由对应业务接口通过统一服务写入。资源中心自由浏览和班级级课堂控制不生成学习机会。
 - `item.graded` 必须与同一机会、同一 `attempt_id` 的既有 `item.submitted` 对应。`pending` 只表示尚未形成成熟评分；首个成熟结果使用 `final`，后续修改必须使用 `revised` 并追加新版本。
 - `AssessmentResultFact` 不通过该接口直接提交，由服务端在接受 `item.graded` 时同事务生成。重复 `final`、无提交先评分或修订缺少成熟前序版本会整条拒绝，事件和机会状态不会留下半成品。
@@ -1184,7 +1184,7 @@ POST /api/v1/student/classroom/{session_id}/resources/{resource_id}/document-pro
 - `document-progress` 请求体包含真实 `page/page_count/visible_seconds`。只有本地查看器能可靠返回这些值时才调用；浏览器 PDF iframe 和当前 ONLYOFFICE 接入无法可靠返回页码时只写 `resource.opened`，禁止用固定 `1/1` 伪造进度。
 - 资源中心 `POST /student/resources/{id}/` 写入 `resource.center.opened`，表示课堂外自主浏览，不复用课堂机会。未来若建立推荐或教师指派，必须另建指派事实；当前不将自由浏览放入必做完成率分母。
 
-历史 V1 回填命令：
+历史旧记录回填命令：
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py backfill_learning_event_v2 --dry-run --batch-size 500
@@ -1192,7 +1192,7 @@ POST /api/v1/student/classroom/{session_id}/resources/{resource_id}/document-pro
 .\.venv\Scripts\python.exe manage.py reconcile_learning_event_writes --check
 ```
 
-命令支持 `--school`、`--before`、`--batch-size`、`--resume` 和 `--dry-run`。事件 UUID 由 V1 主键和映射版本确定生成；无法证明语义、上下文或机会的旧记录写为 `legacy.unmapped`，不创建学习机会、不进入后续能力证据。
+命令支持 `--school`、`--before`、`--batch-size`、`--resume` 和 `--dry-run`。事件 UUID 由旧记录主键和转换版本确定生成；不能明确转换上下文或学习任务关联的旧记录写入内部兼容状态 `legacy.unmapped`，界面和导出统一显示“旧事件未转换”，且不创建学习任务关联、不进入后续学生分析。
 
 响应包含批次计数和逐条结果：
 
@@ -1217,13 +1217,13 @@ POST /api/v1/student/classroom/{session_id}/resources/{resource_id}/document-pro
 
 课堂积分流水不开放通用客户端写入 API。抢答评分、随机点名评分和聊天审核扣分已在原有受权限控制的业务接口内同时写入新旧记录；客户端只能提交本次操作，不能提交余额、冲正引用或修改历史流水。重复设置相同评分不重复记账，替换评分只记录实际余额变化。
 
-服务端业务双写模式由本地环境配置控制：
+服务端新旧记录兼容写入模式由本地环境配置控制：
 
 ```env
 LEARNING_EVENT_WRITE_MODE=dual_required
 ```
 
-- `dual_required`：V1、V2 和派生积分/评分事实必须在同一事务中成功，任一失败整体回滚。
+- `dual_required`：旧业务记录、新版记录和派生积分/评分记录必须在同一事务中成功，任一失败整体回滚。
 - `v1_only`：紧急回滚模式，只保留旧 `LearningEvent` 业务写入；不得用于研究数据覆盖率声明。
 - 客户端不能通过请求参数切换写入模式。
 
@@ -1299,7 +1299,7 @@ POST /api/v1/student/classroom/{id}/evaluation/submit/
 - 互评项可以先在课程中设计；学生端只有在课堂开启小组分组合作并生成小组后才显示互评，且只允许评价同组成员，不能评价自己。
 - 师评可在课程中按班级填写，也可在课堂控制台填写。课程师评不绑定具体课堂，课堂师评绑定当前 `ClassroomSession`。
 - 自评、互评、师评每次修改都追加新的 `ClassroomEvaluationSubmission`，响应默认展示最新版本；历史版本通过 `submission_version/supersedes` 保留。
-- 三类评价统一双写 `evaluation.rating.submitted@1.0`。载荷只包含评价版本、评价项 ID、1-5 星和评价者角色；备注只保留在业务提交表。
+- 三类评价统一写入新版 `evaluation.rating.submitted@1.0`，并保留旧业务兼容记录。载荷只包含评价版本、评价项 ID、1-5 星和评价者角色；备注只保留在业务提交表。
 - 自评机会归本人；师评和互评机会归被评价学生。互评 API 先校验同组关系，再由服务端可信来源写入；`POST /learning-events/batch/` 仍禁止学生直接指定其他目标学生。
 - 开启评价生成非必做机会；关闭评价或结束课堂撤回未提交机会，已经提交的评价及版本链保留。
 - `ai-generate` 使用教师自己的 DeepSeek 配置生成评价项草稿；草稿必须由教师确认保存后才对学生生效。课程端生成基于课程上下文，课堂端生成会额外参考当前课堂环节。
@@ -1342,7 +1342,7 @@ POST /api/v1/student/learning-pages/{id}/submit/
 - `GET` 支持 `presentation=embedded|popout`，学生打开页面会写 `learning_page.opened`；教师预览不生成学生行为。
 - `blocks/viewed` 请求体为 `{block_id, block_type, visible_ms, visibility_ratio}`。后端必须校验区块属于当前页面版本；不得上传区块正文、交互代码或表单值。
 - iframe 仅在区块至少 50% 可见且单段持续不少于 250ms 后上报；采集请求失败不能阻断页面浏览和表单提交。
-- 每次表单提交追加 `LearningWebPageResponse` 和 `learning_page.form_submitted`。V2 仅保存响应编号、页面/表单版本、字段数量和尝试 UUID，完整答案只在业务响应表中保存。
+- 每次表单提交追加 `LearningWebPageResponse` 和 `learning_page.form_submitted`。新版事件仅保存响应编号、页面/表单版本、字段数量和尝试 UUID，完整答案只在业务响应表中保存。
 - 教师统计接口返回表单提交人数、提交次数、选项分布、数值摘要和近期文本回答。
 - 传入 `classroom_session` 时只统计该教师、该班级、该课堂场次的回答，并返回班级人数、已完成/进行中/未开始人数、完成率及逐学生进度；网页必须属于该课堂绑定的课程和课时。
 ## 测试与共享题库 API

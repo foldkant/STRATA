@@ -80,7 +80,7 @@
 - 小组分组第一版采用默认分组：按 A/B/C 层级优先组内同层，未分层学生均衡补齐；随机分组可选；`ai_layer` 策略已预留，当前仍回退到同层优先规则。
 - 小组协作文档按组生成一份独立 Word/PPT/Excel 文件。STRATA 负责账号和权限，ONLYOFFICE 负责在线编辑；无 ONLYOFFICE 时仍保留文件下载和共享文件上传能力。
 - `ClassroomGroupDocumentVersion` 保存小组协作文档的不可变版本号、文件副本、SHA-256、大小、来源、回调状态、文档 key 和经过 JWT 校验的编辑者 ID。编辑者列表只用于组级审计，不直接归因个人贡献。
-- `ClassroomGroupFile` 使用 `public_id`、`analytics_attempt_id` 和 `version_no` 标识一次共享区提交；业务表保留文件名与描述，V2 事件不复制这些正文信息。
+- `ClassroomGroupFile` 使用 `public_id`、`analytics_attempt_id` 和 `version_no` 标识一次共享区提交；业务表保留文件名与描述，新版事件不复制这些正文信息。
 - 小组共享空间按组限制容量，第一版由教师设置 MB 配额，上传文件只允许 Office、PDF、压缩包、图片、音视频和常见文本格式。
 - `LessonStep.question_items` 第一版保存在 JSON 中，题目可包含 `target_layer`、`use_layer_scores` 和 `layer_scores`，用于学生端自动分层过滤和分值适配。
 - `target_layer` 支持 `all`、`A`、`B`、`C`、`A/B`、`B/C`、`A/B/C`；第一版不支持 `A/C`。
@@ -125,7 +125,7 @@
 - 附件每次上传追加 `StudentWorkAttachment` 并写 `task.submitted`；教师首次批阅形成 `final`，复评形成 `revised`，评分事实通过 `supersedes` 保留历史。
 - `LearningEventV2` 仅保存对象版本、机会 UUID、尝试 UUID 和统计契约，不保存答案正文、聊天原文或文件地址。
 - 小组文档和共享区分别生成非必做 `document/task` 学习机会，并通过 `content.released@1.1.target_student_ids` 只投放给当前组员。
-- 学生打开小组协作文档时统一双写 `group.document.opened`；学生上传共享文件时统一双写 `group.file.shared`。
+- 学生打开小组协作文档时通过统一服务兼容写入 `group.document.opened`；学生上传共享文件时按同一方式写入 `group.file.shared`。
 - ONLYOFFICE 保存回调通过 JWT、文档 key、下载来源和大小校验后追加文档版本及 `group.document.saved`。该事件分析单位是 `group`，不能据此推断某位学生完成了多少内容。
 - 协作关闭和课堂结束撤回未完成机会；有打开、保存或上传证据后禁止重新分组，防止删除成员关系和文件证据。
 - 自评、互评、课堂师评和课程师评统一记录为 `evaluation.rating.submitted`；兼容记录只保留动作和星级，新版分析事件不复制评价备注。
@@ -153,7 +153,7 @@
 
 分层建议规则：
 
-- 当前 `StratificationDecision` 只是 V1 骨架；目标模型拆分为候选建议、教师决定观测和有效 `StudentSubjectBand`。
+- 当前 `StratificationDecision` 只是初版骨架；目标模型拆分为候选建议、教师决定观测和有效 `StudentSubjectBand`。
 - 模型不能直接修改 `StudentProfile.current_layer` 或 `StudentSubjectBand`；教师确认后才生成新的有效内容带版本。
 - 教师拒绝、保持、手动调整或延后建议必须写审计日志，且只允许查看本人任教班级。
 - A/B/C、概率、排名和分组依据只向任课教师显示；学生接口只返回已分配的任务、资源和支持。
@@ -171,10 +171,10 @@
 - `AnalyticsOperatingMode`：每校一条分析安全运行状态，状态为 `collect_only/shadow/teacher_review/active/suspended`；不能从仅采集直接跳到正式投放，暂停必须记录原因。
 - `SensitiveInferenceAccessLog`：内容带、个体解释和分组依据的敏感访问审计。保存访问者角色、学校/班级作用域、用途、字段类别、导出标记、允许/拒绝和原因；创建后不可修改。
 - `EventSchemaDefinition`：版本化事件模式登记表。保存事件名、模式版本、Pydantic 生成的 JSON Schema、上下文要求、允许来源、隐私类别、分析单位和 SHA-256；启用后不可覆盖，只能停用并发布新版本。
-- `LearningEventV2`：研究级不可变事件信封。分别保存执行人和证据归属学生、学校/班级/学科/课程/课时/课堂/环节上下文、对象与尝试/机会 UUID、客户端发生和服务端接收时间、载荷、隐私类别及质量状态。
+- `LearningEventV2`：新版不可变学习事件。分别保存执行人和记录归属学生、学校/班级/学科/课程/课时/课堂/环节上下文、对象与尝试/学习任务 UUID、客户端发生和服务端接收时间、载荷、隐私类别及记录状态。
 - `LearningEventV2.idempotency_key`：服务端按学校、执行人、来源和客户端会话/序号计算的 SHA-256；与 `event_id` 共同防止离线重试重复写入。
 - `LearningEventV2.event_fingerprint`：不包含服务器接收时间和事件 UUID 的规范化事实摘要。相同幂等键但指纹不同会拒绝为 `idempotency_conflict`。
-- `LearningEventV2.legacy_event`：统一业务写入产生的 V1 `LearningEvent` 一对一追溯键。V2 使用教师作为操作人、学生作为证据归属对象时，允许与为兼容旧页面而保留学生 `actor` 的 V1 记录语义不同。
+- `LearningEventV2.legacy_event`：新版记录与旧业务 `LearningEvent` 的一对一追溯键。该字段名称属于内部兼容契约；新文档和界面统一称“旧记录”。新版记录使用教师作为操作人、学生作为记录归属对象时，允许与旧页面为兼容而保留学生 `actor` 的记录不同。
 - `LearningEventV2.payload`：只允许注册表中的严格字段，未知字段拒绝，规范化后不得超过 16KB；答卷正文、聊天原文、作品内容和文件明细继续保留在业务表。
 - `LearningEventV2.quality_status`：`received/schema_valid/context_valid/deduplicated/accepted/quarantined/legacy_unmapped`。批量服务在写入前完成模式、上下文和幂等检查；超过 24 小时/7 天及客户端时钟超前写入质量标记，不因离线乱序直接丢弃。
 - `LearningEventV2.opportunity_id/opportunity_record`：迁移期同时保留旧 UUID 和新机会外键。新接受事件必须让两者指向同一条可验证机会；仅 `legacy_unmapped` 可暂时保留 UUID 而无外键，便于增量迁移而不破坏历史信封。
@@ -186,13 +186,13 @@
 - `ParticipationPointLedger` 单次增减绝对值不超过 100，普通扣分和冲正后余额不能低于 0；冲正值必须与原流水方向相反且绝对值相同，同一原流水只能冲正一次。
 - `learning_analytics.services.participation_points.reconcile_participation_point_cache`：以第一笔流水的迁移期起始余额和全部增量重算 `StudentProfile.score`。旧字段只是显示缓存，不是学业成绩、核心素养或 AI 主模型特征。
 - `learning_analytics.services.dual_write.record_learning_event`：统一服务端写入入口。`dual_required` 模式下新旧记录在同一数据库事务中创建并互相追溯，新版记录校验失败时旧记录同步回滚；`v1_only` 只保留旧业务写入，用于紧急回退。
-- `learning_analytics.services.dual_write.record_classroom_point_adjustment`：统一计算“旧评分替换为新评分”产生的实际积分增量，锁定学生缓存后写 V1、V2 和积分流水；重复相同评分不重复记账。
-- `learning_analytics.services.dual_write.reconcile_v1_v2_events`：检查所有标记为双写的 V1 记录是否存在唯一 V2 映射，并验证事件 UUID 和事件名。
+- `learning_analytics.services.dual_write.record_classroom_point_adjustment`：统一计算“旧评分替换为新评分”产生的实际积分增量，锁定学生缓存后写入旧业务记录、新版记录和积分流水；重复相同评分不重复记账。
+- `learning_analytics.services.dual_write.reconcile_v1_v2_events`：底层兼容函数，检查旧记录是否存在唯一新版映射，并验证事件 UUID 和事件名。自动检查保存的阶段名称统一为 `compare_old_new_records`。
 - `LearningEventRejection`：无效或冲突事件的短期隔离审计。原始 JSON 信封使用 Fernet 加密，保存 SHA-256、错误码、可重放状态和保留期限；超过 64KB 时只加密保存摘要并标记不可重放。
 - `learning_analytics.services.access_audit.teacher_has_class_scope`：按学校和有效任课关系判断教师是否可查看班级个体分析，单纯教师角色不足以授权。
 - `sync_learning_event_schemas`：将代码中 35 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
 - `purge_expired_event_rejections`：删除超过本地保留期限的加密拒绝记录；正式环境后续由 Celery beat 定时调用。
-- 当前 app 已完成 M0 和 `DATA-01A/01B/01C/02A/02B`。所有生产 V1 写入已通过统一服务双写；历史 V1 使用确定性 UUID 回填，无法证明语义或机会的记录以 `legacy.unmapped` 隔离。质量自动流程、特征生成和模型训练尚未完成。
+- 当前 app 已完成 M0、`DATA-01A/01B/01C/02A/02B/03A/03B` 和评价管理工程底座。所有旧业务写入已通过统一服务兼容写入新版记录；历史旧记录使用确定性 UUID 回填，不能明确转换的记录以内部状态 `legacy.unmapped` 隔离，界面统一显示“旧事件未转换”。学习数据检查已经完成；特征生成和模型训练尚未完成。
 
 机会状态当前只支持立即投放：`content.released` 的发生时间即实际开放时间。未来定时任务必须先增加 `content.assigned`，到点后再追加 `released`；不能把未来计划时间提前记成已开放。
 
@@ -313,9 +313,9 @@
 
 检查报告不可原地修改或直接删除；重新检查必须产生新运行和新报告。检查结果只控制后续分析是否继续，禁止写入学生能力特征、核心素养得分、积分或奖章。
 
-## 合成数据研究轨道
+## 模拟数据开发
 
-- `School.is_synthetic`：区分正式运营学校与合成研究学校，默认 `false`。
+- `School.is_synthetic`：区分正式运营学校与模拟数据学校，默认 `false`。
 - `SyntheticDatasetRun`：保存 `isolated_school/school_overlay` 模式、生成器版本、数据集指纹、随机种子、窗口、配置、计数、状态、清理摘要和清单 SHA-256。
 - `SyntheticStudentTruth`：保存模拟生成所需的连续隐藏潜变量；不进入正式特征、API 或学生档案。
 - `LearningEventV2.synthetic_run`：模拟事件到生成批次的不可变来源关联。

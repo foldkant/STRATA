@@ -69,7 +69,7 @@ draft -> published -> open -> closed
 
 ## 7. 行为数据
 
-测试链路已经接入 V1/V2 事务双写：
+测试链路已经接入新旧记录事务兼容写入：
 
 - 开启测试时，按目标班级和题目快照生成学生级 `LearningOpportunity`。
 - `TestAttempt.analytics_attempt_id` 为逐题提交和评分提供稳定 UUID。
