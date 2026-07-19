@@ -31,6 +31,7 @@ from learning.models import (
     PretestQuestion,
     StudentWorkAttachment,
 )
+from learning_analytics.privacy import sanitize_student_payload
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 from .protected_files import protected_file_url
@@ -1473,6 +1474,7 @@ def classroom_activity_row(
                         "occurred_at": score_event.occurred_at,
                     },
                 }
+        metadata = sanitize_student_payload(metadata)
     return {
         "id": activity.id,
         "session": activity.session_id,

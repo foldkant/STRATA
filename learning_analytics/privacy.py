@@ -80,3 +80,26 @@ def find_student_privacy_violations(value, *, path: str = "") -> list[str]:
 
 def is_student_safe_payload(value) -> bool:
     return not find_student_privacy_violations(value)
+
+
+def sanitize_student_payload(value):
+    """Remove hidden inference evidence from a student-specific DTO copy."""
+    if isinstance(value, Mapping):
+        sanitized = {}
+        for raw_key, nested in value.items():
+            key = str(raw_key)
+            if key in STUDENT_HIDDEN_FIELD_NAMES:
+                continue
+            if (
+                isinstance(nested, str)
+                and key.lower().endswith(_DISPLAY_FIELD_SUFFIXES)
+                and _ABILITY_LABEL_PATTERN.search(nested)
+            ):
+                continue
+            sanitized[raw_key] = sanitize_student_payload(nested)
+        return sanitized
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        return [sanitize_student_payload(nested) for nested in value]
+    return value

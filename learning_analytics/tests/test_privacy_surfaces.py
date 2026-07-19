@@ -12,6 +12,7 @@ from rest_framework.test import APIClient
 from accounts.models import User
 from api.renderers import StudentPrivacyJSONRenderer
 from courses.models import (
+    ClassroomActivity,
     ClassroomSession,
     Course,
     CourseClass,
@@ -207,6 +208,22 @@ class StudentRestSurfacePrivacyTests(TestCase):
             current_step=self.step,
             current_step_status=ClassroomSession.StepStatus.OPEN,
             started_at=timezone.now(),
+        )
+        ClassroomActivity.objects.create(
+            session=self.session,
+            activity_type=ClassroomActivity.ActivityType.QUESTION,
+            title="历史随机点名",
+            metadata={
+                "command": "random_pick",
+                "picked_student": {
+                    "user_id": self.student.id,
+                    "display_name": self.student.display_name,
+                    "current_layer": StudentProfile.Layer.A,
+                    "current_layer_label": "拓展挑战层",
+                },
+            },
+            status=ClassroomActivity.Status.OPEN,
+            opened_at=timezone.now(),
         )
         self.client = APIClient()
         self.client.force_authenticate(self.student)

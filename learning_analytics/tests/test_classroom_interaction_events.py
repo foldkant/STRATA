@@ -178,6 +178,9 @@ class ClassroomInteractionEventTests(TestCase):
             picked_user_id=self.students[0].id,
         )
         first = LearningEventV2.objects.get(event_name="random_call.selected")
+        self.assertNotIn(
+            "current_layer", first_activity.metadata["picked_student"]
+        )
         self.assertEqual(first.actor, self.teacher)
         self.assertEqual(first.target_student, self.students[0])
         self.assertEqual(first.source, "server")

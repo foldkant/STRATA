@@ -5712,7 +5712,6 @@ def _command_random_pick_payload(
             "username": profile.user.username,
             "display_name": profile.user.display_name or profile.user.username,
             "student_no": profile.student_no,
-            "current_layer": profile.current_layer or "",
         }
     }
 
