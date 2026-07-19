@@ -721,9 +721,17 @@ class ClassroomEvaluationStandardUse(models.Model):
     evaluation_config_version = models.ForeignKey(
         "courses.ClassroomEvaluationConfigVersion",
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="standard_uses",
     )
     criteria_snapshot = models.JSONField(default=list)
+    configuration_snapshot = models.JSONField(default=dict)
+    content_hash = models.CharField(max_length=64, db_index=True, default="")
+    enable_self = models.BooleanField(default=False)
+    enable_peer = models.BooleanField(default=False)
+    enable_teacher = models.BooleanField(default=True)
+    legacy_compatible = models.BooleanField(default=False, editable=False)
     opened_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -757,6 +765,12 @@ class ClassroomEvaluationStandardUse(models.Model):
             errors["opened_by"] = "只有课堂教师可以开启评价标准。"
         if not isinstance(self.criteria_snapshot, list):
             errors["criteria_snapshot"] = "评价指标快照必须是列表。"
+        if not isinstance(self.configuration_snapshot, dict):
+            errors["configuration_snapshot"] = "课堂评价配置快照必须是对象。"
+        if not (self.enable_self or self.enable_peer or self.enable_teacher):
+            errors["enable_teacher"] = "课堂评价至少需要一种评价方式。"
+        if self.content_hash and len(self.content_hash) != 64:
+            errors["content_hash"] = "课堂评价快照校验码格式不正确。"
         if errors:
             raise ValidationError(errors)
 
@@ -771,6 +785,42 @@ class ClassroomEvaluationStandardUse(models.Model):
 
     def __str__(self) -> str:
         return f"session:{self.session_id}:standard:{self.standard_version_id}"
+
+    @property
+    def course_id(self):
+        return self.standard_version.course_id
+
+    @property
+    def version_no(self):
+        return self.standard_version.version_no
+
+    @property
+    def config_hash(self):
+        return self.content_hash
+
+    @property
+    def self_criteria(self):
+        return self.configuration_snapshot.get("self_criteria", [])
+
+    @property
+    def peer_criteria(self):
+        return self.configuration_snapshot.get("peer_criteria", [])
+
+    @property
+    def teacher_criteria(self):
+        return self.configuration_snapshot.get("teacher_criteria", [])
+
+    @property
+    def standard_title(self):
+        return self.standard_version.title
+
+    @property
+    def frozen(self):
+        return True
+
+    @property
+    def opened_at(self):
+        return self.created_at
 
 
 class EvaluationSubmissionEvidence(models.Model):

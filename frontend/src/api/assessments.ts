@@ -12,6 +12,18 @@ export type AssessmentOptions = {
   difficulties: Array<{ value: string; label: string }>
   question_statuses: Array<{ value: BankQuestionStatus; label: string }>
   question_sources: Array<{ value: BankQuestionSource; label: string }>
+  item_roles: Array<{ value: string; label: string }>
+  layer_scopes: Array<{ value: string; label: string }>
+  common_question_sets: Array<{
+    id: number
+    title: string
+    subject: number
+    grade_scope: string
+    term: string
+    version_no: number
+    question_count: number
+    items: Array<{ question_id: number; comparison_code: string; required: boolean }>
+  }>
 }
 
 export type BankQuestionStatus = 'draft' | 'pending_review' | 'trial' | 'active' | 'disabled'
@@ -38,6 +50,11 @@ export type BankQuestion = {
   source_label: string
   library_scope: BankQuestionLibraryScope
   library_scope_label: string
+  item_role: 'regular' | 'common' | 'layered'
+  item_role_label: string
+  layer_scope: string
+  layer_scope_label: string
+  comparison_code: string
   version_no: number
   content_hash: string
   usage_count: number
@@ -92,6 +109,8 @@ export type BankQuestionPayload = {
   difficulty: string
   knowledge_point: string
   default_score: number
+  item_role?: 'regular' | 'layered'
+  layer_scope?: string
 }
 
 export type AiQuestionDraft = BankQuestionPayload & {
@@ -121,6 +140,9 @@ export type AssessmentQuestion = {
   source_question?: number | null
   source_version?: number | null
   source_status?: BankQuestionStatus
+  item_role?: 'regular' | 'common' | 'layered'
+  layer_scope?: string
+  comparison_code?: string
   question_type: string
   question_type_label: string
   stem: string
@@ -162,6 +184,7 @@ export type TestAssessment = {
   instruction: string
   subject: SubjectOption
   course: { id: number; title: string } | null
+  common_question_set: { id: number; title: string; version_no: number; content_hash: string } | null
   teacher: { id: number; username: string; display_name: string }
   target_classes: ClassOption[]
   duration_minutes: number
@@ -197,6 +220,7 @@ export type TestPayload = {
   show_score_after_submit: boolean
   randomize_question_order: boolean
   randomize_option_order: boolean
+  common_question_set: number | string
 }
 
 export function getAssessmentOptions() {
@@ -267,6 +291,55 @@ export function reviewQuestion(
 
 export const questionReviewsExportUrl = '/api/v1/school-admin/question-reviews/export/'
 
+export type CommonQuestionSetRow = {
+  id: number
+  subject: SubjectOption
+  title: string
+  grade_scope: string
+  term: string
+  version_no: number
+  content_hash: string
+  status: string
+  status_label: string
+  question_count: number
+  items: Array<{
+    id: number
+    question_id: number
+    question_version: number
+    question_version_no: number
+    stem: string
+    comparison_code: string
+    required: boolean
+    sort_order: number
+  }>
+  published_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export function getCommonQuestionSets() {
+  return apiRequest<CommonQuestionSetRow[]>('/api/v1/school-admin/common-question-sets/')
+}
+
+export function createCommonQuestionSet(payload: {
+  subject: number | string
+  title: string
+  grade_scope: string
+  term: string
+  items: Array<{ question_id: number; comparison_code: string; required: boolean }>
+}) {
+  return apiRequest<CommonQuestionSetRow>('/api/v1/school-admin/common-question-sets/', {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function archiveCommonQuestionSet(id: number) {
+  return apiRequest<Record<string, never>>(`/api/v1/school-admin/common-question-sets/${id}/archive/`, { method: 'POST' })
+}
+
+export const commonQuestionSetsExportUrl = '/api/v1/school-admin/common-question-sets/export/'
+
 export function generateQuestionBankDrafts(payload: AiQuestionGenerationPayload) {
   return apiRequest<AiQuestionGenerationResult>('/api/v1/teacher/question-bank/ai-generate/', {
     method: 'POST',
@@ -328,7 +401,30 @@ export type AssessmentResults = {
   assessment: TestAssessment
   summary: { assigned_count: number; started_count: number; submitted_count: number; pending_grade_count: number; average_score: number }
   attempts: TestAttempt[]
-  question_stats: Array<{ question: AssessmentQuestion; answered_count: number; correct_count: number; correct_rate: number; average_score: number }>
+  question_stats: Array<{
+    question: AssessmentQuestion
+    sample_size: number
+    answered_count: number
+    correct_count: number
+    correct_rate: number | null
+    difficulty: number | null
+    discrimination: number | null
+    option_distribution: Array<{ option: string; count: number }>
+    data_status: string
+    data_status_label: string
+    average_score: number
+  }>
+  comparisons: Array<{
+    id: number
+    assessment: number
+    status: string
+    status_label: string
+    common_question_count: number
+    exact_version_match_count: number
+    left_sample_size: number
+    right_sample_size: number
+    reasons: string[]
+  }>
 }
 
 export function getAssessmentResults(id: number) {

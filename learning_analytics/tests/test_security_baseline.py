@@ -11,7 +11,6 @@ from rest_framework.test import APIClient
 from accounts.models import User
 from api.serializers import classroom_group_collaboration_row
 from courses.models import (
-    ClassroomEvaluationConfig,
     ClassroomGroup,
     ClassroomGroupCollaboration,
     ClassroomGroupMember,
@@ -24,7 +23,10 @@ from courses.models import (
 )
 from learning_analytics.models import (
     AnalyticsOperatingMode,
+    EvaluationPlan,
+    EvaluationStandard,
     EventSchemaDefinition,
+    LessonStepEvaluationBinding,
     LearningOpportunity,
     LearningEventV2,
     SensitiveInferenceAccessLog,
@@ -35,6 +37,7 @@ from learning_analytics.schemas.registry import (
     validate_event_payload,
 )
 from learning_analytics.services.access_audit import audit_teacher_class_scope
+from learning_analytics.services.evaluation import publish_plan, publish_standard
 from learning_analytics.services.operating_mode import transition_operating_mode
 from learning_analytics.services.opportunities import release_learning_opportunities
 from learning_analytics.services.schema_registry import (
@@ -450,18 +453,98 @@ class StudentHiddenStratificationContractTests(TestCase):
             student=self.peer,
             student_profile=self.peer_profile,
         )
-        ClassroomEvaluationConfig.objects.create(
+        plan = EvaluationPlan.objects.create(
+            school=self.school,
+            subject=self.subject,
             course=self.course,
-            enable_peer=True,
-            peer_criteria=[
+            title="协作评价方案",
+            content_version="1.0",
+            target_students="本课堂学生",
+            learning_goal="学生能够参与小组协作。",
+            learning_goals=[
                 {
-                    "id": "cooperation",
+                    "code": "G1",
+                    "title": "参与协作",
+                    "description": "学生能够主动参与小组任务并回应同伴。",
+                }
+            ],
+            evaluation_basis=[
+                {
+                    "code": "E1",
+                    "goal_codes": ["G1"],
+                    "description": "以课堂协作过程为依据。",
+                    "source_types": ["课堂观察"],
+                }
+            ],
+            learning_tasks=[
+                {
+                    "code": "T1",
+                    "title": "小组任务",
+                    "basis_codes": ["E1"],
+                    "description": "共同完成小组任务。",
+                }
+            ],
+            content_scope=["小组任务"],
+            thinking_requirements=["apply"],
+            support_options=[],
+            scoring_rules={"approach": "分项评价", "decision_rule": "缺少材料时暂不评价。"},
+            follow_up_suggestion="根据协作情况提供支持。",
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        publish_plan(plan, published_by=self.teacher)
+        standard = EvaluationStandard.objects.create(
+            school=self.school,
+            subject=self.subject,
+            course=self.course,
+            plan=plan,
+            title="协作评价标准",
+            evaluation_target="学生小组协作过程",
+            criteria=[
+                {
+                    "code": "cooperation",
+                    "dimension": "collaboration",
                     "title": "协作表现",
-                    "description": "参与小组任务",
-                    "sort_order": 10,
+                    "evaluation_target": "学生小组协作过程",
+                    "evaluation_sources": ["课堂观察"],
+                    "expected_performance": "学生参与任务并回应同伴。",
+                    "skip_condition": "未安排协作时暂不评价。",
+                    "support_options": [],
+                    "common_problems": ["未参与小组交流。"],
+                    "level_descriptions": {
+                        str(level): f"协作表现等级 {level}" for level in range(1, 6)
+                    },
+                    "scoring_examples": [
+                        {
+                            "level": 2,
+                            "title": "参与有限",
+                            "example_description": "偶尔参与，回应较少。",
+                            "file_reference": "",
+                        },
+                        {
+                            "level": 4,
+                            "title": "有效协作",
+                            "example_description": "持续参与并回应同伴。",
+                            "file_reference": "",
+                        },
+                    ],
+                    "follow_up_suggestion": "教师根据观察结果进一步明确协作分工。",
                 }
             ],
             created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        standard_version = publish_standard(
+            standard, published_by=self.teacher
+        ).version
+        LessonStepEvaluationBinding.objects.create(
+            lesson_step=self.step,
+            standard_version=standard_version,
+            enable_self=False,
+            enable_peer=True,
+            enable_teacher=False,
+            created_by=self.teacher,
+            updated_by=self.teacher,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.student)

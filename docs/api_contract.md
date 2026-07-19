@@ -887,16 +887,14 @@ GET /api/v1/teacher/resources/export/
 ### 分层建议
 
 ```text
-GET /api/v1/teacher/stratification/?class=&status=&page=1
-GET /api/v1/teacher/stratification/{id}/
-POST /api/v1/teacher/stratification/{id}/accept/
-POST /api/v1/teacher/stratification/{id}/reject/
-POST /api/v1/teacher/stratification/bulk-accept/
-POST /api/v1/teacher/stratification/bulk-reject/
-POST /api/v1/teacher/stratification/manual-adjust/
+GET  /api/v1/teacher/analytics/learning-summaries/?window=day|7d|30d|unit&class_group=&course=
+GET  /api/v1/teacher/analytics/learning-summaries/export/?window=day|7d|30d|unit&class_group=&course=
+POST /api/v1/teacher/analytics/learning-summaries/refresh/
+GET  /api/v1/teacher/analytics/stratification/?status=&class_group=&course=
+POST /api/v1/teacher/analytics/stratification/{id}/review/
 ```
 
-AI 分层建议必须教师确认后才生效。拒绝建议和手动调整都要写入审计日志。
+`review` 请求的 `action` 为 `accept|keep|adjust|defer`；`adjust` 另传 `layer=A|B|C`。教师只能读取本人课程和任教班级。采纳和调整只保存教师审核结果，不直接改写学生档案层级。学生不能访问这些接口，学生响应不包含层级、参考强度、原因或排名。
 
 ### 公告
 
@@ -1260,9 +1258,9 @@ WebSocket 必须校验登录态和班级权限。
 
 ## 课程评价与课堂评价 API
 
-评价项配置属于 `Course`，不属于单次 `ClassroomSession`，也不写入课时模板。自评、互评、师评均由教师在课程/课时设计阶段选择性开启，评价方式固定为 1-5 星，不使用分数、权重或百分制。单次课堂是否对学生开放评价属于 `ClassroomSession.evaluation_enabled` 运行状态，新建课堂默认关闭，重新开始课堂也重置为关闭。
+正式评价内容由“评价标准”接口制定并发布；课时环节只绑定已发布版本和评价方式；课堂只负责开启、提交师评和查看结果。评价方式固定为 1-5 星或“暂不评价”，不使用百分制。
 
-课程端：
+旧课程端接口仅为兼容路由，统一返回 `410 Gone`，不得创建 `ClassroomEvaluationConfig` 或 `ClassroomEvaluationConfigVersion`：
 
 ```text
 GET /api/v1/teacher/courses/{id}/evaluation/?class_group={class_group_id}
@@ -1289,23 +1287,21 @@ POST /api/v1/student/classroom/{id}/evaluation/submit/
 
 规则：
 
-- 课程端 `PATCH evaluation` 保存课程级 `enable_self`、`enable_peer`、`enable_teacher` 和三类 `criteria`。
-- 每次保存课程评价配置按规范化内容计算 SHA-256；内容变化才发布新的 `ClassroomEvaluationConfigVersion`，相同内容不重复生成版本。
-- 课堂端 `PATCH evaluation` 只接受 `evaluation_enabled`，用于开启或关闭本课堂评价可见性，不修改课程评价项配置；只有进行中课堂允许开启评价。
-- 课堂第一次开启评价时冻结当前评价版本；之后修改课程评价项不会改变这节课堂。关闭后再次开启仍使用原冻结版本。
-- 评价内容设置入口放在教师课时设计页；课堂控制台只调用已保存配置，不提供评价项编辑和 AI 生成。
+- 评价标准页负责制定和发布；课时绑定接口选择 `standard_version` 和 `enable_self/enable_peer/enable_teacher`。
+- 课堂端 `PATCH evaluation` 只接受 `evaluation_enabled`，不修改标准、指标或评价方式；只有进行中课堂允许开启。
+- 课堂第一次开启评价时创建唯一 `ClassroomEvaluationStandardUse`，冻结标准版本、三类开关、全部指标、1-5 星说明和内容哈希。关闭后再次开启仍使用原快照。
+- 课堂控制台只执行评价和查看结果，不提供标准编辑或 AI 生成。
 - 学生端只有在 `ClassroomSession.evaluation_enabled=true` 时才显示课堂评价入口；课堂默认关闭评价，适合教师在课堂收尾时手动开启。
-- 每类评价项最多 20 个；某类评价只要已有评价项，就视为该类可用于课堂开启。
 - 互评项可以先在课程中设计；学生端只有在课堂开启小组分组合作并生成小组后才显示互评，且只允许评价同组成员，不能评价自己。
-- 师评可在课程中按班级填写，也可在课堂控制台填写。课程师评不绑定具体课堂，课堂师评绑定当前 `ClassroomSession`。
-- 自评、互评、师评每次修改都追加新的 `ClassroomEvaluationSubmission`，响应默认展示最新版本；历史版本通过 `submission_version/supersedes` 保留。
+- 自评、互评、师评分开保存；每次修改都追加新的 `ClassroomEvaluationSubmission`，历史版本通过 `submission_version/supersedes` 保留。
 - 每个评价项必须二选一：在 `ratings` 中提交 1-5 星，或在 `not_assessed` 中提交原因。两者不能同时包含同一指标；原因 `other` 必须填写最多 200 字说明。
+- 新提交必须关联 `standard_use`；旧 `evaluation_version` 只为历史兼容。可确认来源的旧提交已迁移关联，无法确认的记录保留兼容标记，不伪造标准版本。
 - 三类评价统一写入 `evaluation.rating.submitted@1.1`，并保留旧业务兼容记录。载荷只包含评价版本、评价项 ID、1-5 星、暂不评价原因代码和评价者角色；备注及暂不评价补充说明只保留在业务提交表。
 - 历史 `evaluation.rating.submitted@1.0` 保持原字段和哈希，禁止覆盖。当前 `item.graded` 写入同样使用 `1.1`，历史评分事件继续保留在 `1.0`。
 - 汇总中的平均星级排除暂不评价项，并返回 `rated_item_count`、`not_assessed_item_count`、`unanswered_item_count` 和 `total_item_count`。页面必须同时展示提交人数，不能只显示平均值。
 - 自评机会归本人；师评和互评机会归被评价学生。互评 API 先校验同组关系，再由服务端可信来源写入；`POST /learning-events/batch/` 仍禁止学生直接指定其他目标学生。
 - 开启评价生成非必做机会；关闭评价或结束课堂撤回未提交机会，已经提交的评价及版本链保留。
-- `ai-generate` 使用教师自己的 DeepSeek 配置生成评价项草稿；草稿必须由教师确认保存后才对学生生效。课程端生成基于课程上下文，课堂端生成会额外参考当前课堂环节。
+- 正式评价标准中的 AI 草稿仍必须由教师确认、发布并在课时中绑定后才可进入课堂。
 
 提交示例：
 
@@ -1385,7 +1381,7 @@ POST /api/v1/student/learning-pages/{id}/submit/
 - `POST /api/v1/teacher/assessments/{id}/publish/`：发布并锁定试卷。
 - `POST /api/v1/teacher/assessments/{id}/open/`：开启学生作答。
 - `POST /api/v1/teacher/assessments/{id}/close/`：结束测试并自动收交未提交答卷。
-- `GET /api/v1/teacher/assessments/{id}/results/`：完成情况、成绩和逐题统计。
+- `GET /api/v1/teacher/assessments/{id}/results/`：完成情况、成绩、逐题答对率、难度、区分度、选项分布和其他测试版本的可比记录。有效作答少于 30 时派生指标为 `null`，`data_status=insufficient`。
 - `GET /api/v1/teacher/assessments/{id}/results/export/`：导出测试汇总、学生成绩和逐题统计 XLSX。
 - `GET|PATCH /api/v1/teacher/test-attempts/{id}/grade/`：读取完整答卷或保存主观题评分；存在未评分简答题时拒绝结束批阅，整次评分事务回滚。
 - `GET|PATCH /api/v1/teacher/test-attempts/{id}/grade/`：查看答卷和保存人工评分。
@@ -1396,6 +1392,9 @@ POST /api/v1/student/learning-pages/{id}/submit/
 - `GET /api/v1/school-admin/question-reviews/export/`：导出本校题目状态、版本、试用情况和审核说明 XLSX。
 - `GET /api/v1/school-admin/question-reviews/{id}/`：题目完整内容、真实使用统计、选项分布、版本记录和状态变化记录。
 - `POST /api/v1/school-admin/question-reviews/{id}/action/`：`action=approve_trial|return|activate|disable`。退回和停用必须填写 `note`；正式启用要求题目处于可试用状态且至少有 1 次真实试用作答。
+- `GET|POST /api/v1/school-admin/common-question-sets/`：查询或发布本校学科共同题集合。新增体包含学科、名称、年级、学期和共同题版本列表。
+- `GET /api/v1/school-admin/common-question-sets/export/`：导出集合版本、比较编号、题目版本和内容哈希。
+- `POST /api/v1/school-admin/common-question-sets/{id}/archive/`：归档集合，历史测试引用保留。
 
 题目创建、XLSX 导入和 AI 确认均以 `personal + draft` 开始，此时教师本人可直接组卷。只有主动申请共享才进入以下流程：
 
@@ -1404,6 +1403,8 @@ draft -> pending_review -> trial -> active -> disabled
 ```
 
 退回会从 `pending_review/trial` 回到 `school + draft` 等待修改；教师可从 `pending_review` 撤回并恢复为个人题目。试卷快照保存 `source_version` 和 `source_status`，题目后续停用或删除不改变历史答卷。
+
+题目另保存 `item_role=regular|common|layered`。共同题必须填写稳定 `comparison_code`；分层题必须填写 `layer_scope=A|B|C|A-B|B-C`。测试选择共同题集合后必须包含全部必备共同题，分层题不能替代共同题。学生接口只返回本人实际投放题目，不返回用途、层级范围、比较编号和其他层级题目。
 
 ### 学生
 

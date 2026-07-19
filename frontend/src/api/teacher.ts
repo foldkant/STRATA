@@ -906,33 +906,6 @@ export function saveTeacherCourseClasses(id: number, classGroups: Array<number |
   })
 }
 
-export function getCourseEvaluation(courseId: number, classGroup?: number | string) {
-  return apiRequest<ClassroomEvaluationPayload>(
-    `/api/v1/teacher/courses/${courseId}/evaluation/${queryString({ class_group: classGroup || '' })}`
-  )
-}
-
-export function saveCourseEvaluation(courseId: number, payload: ClassroomEvaluationConfigPayload & { class_group?: number | string }) {
-  return apiRequest<ClassroomEvaluationPayload>(`/api/v1/teacher/courses/${courseId}/evaluation/`, {
-    method: 'PATCH',
-    body: toJsonBody(payload)
-  })
-}
-
-export function generateCourseEvaluationCriteria(courseId: number, payload: ClassroomEvaluationAiPayload) {
-  return apiRequest<ClassroomEvaluationAiResult>(`/api/v1/teacher/courses/${courseId}/evaluation/ai-generate/`, {
-    method: 'POST',
-    body: toJsonBody(payload)
-  })
-}
-
-export function submitCourseTeacherEvaluation(courseId: number, payload: ClassroomTeacherEvaluationSubmitPayload & { class_group?: number | string }) {
-  return apiRequest<ClassroomEvaluationPayload>(`/api/v1/teacher/courses/${courseId}/evaluation/teacher-submit/`, {
-    method: 'POST',
-    body: toJsonBody(payload)
-  })
-}
-
 export function getTeacherLessons(courseId: number) {
   return apiRequest<LessonRow[]>(`/api/v1/teacher/courses/${courseId}/lessons/`)
 }

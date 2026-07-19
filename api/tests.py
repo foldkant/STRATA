@@ -20,7 +20,15 @@ from courses.models import (
     Resource,
     Subject,
 )
-from learning.models import LearningEvent, QuestionBankItem, TestAssessment, TestAssessmentQuestion, TestAttempt, TestAttemptAnswer
+from learning.models import (
+    AssessmentComparabilityRecord,
+    LearningEvent,
+    QuestionBankItem,
+    TestAssessment,
+    TestAssessmentQuestion,
+    TestAttempt,
+    TestAttemptAnswer,
+)
 from learning_analytics.models import (
     AssessmentResultFact,
     LearningEventV2,
@@ -775,6 +783,177 @@ class AssessmentWorkflowTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(QuestionBankItem.objects.filter(stem="无效 AI 题").exists())
+
+    def test_common_and_layered_questions_keep_common_measurement_base(self):
+        common_question = QuestionBankItem.objects.create(
+            school=self.school,
+            subject=self.subject,
+            creator=self.teacher,
+            stem="共同测量题：二进制 10 表示十进制几？",
+            question_type=QuestionBankItem.QuestionType.SINGLE,
+            options=["1", "2", "3"],
+            answer=["2"],
+            default_score=2,
+            status=QuestionBankItem.Status.ACTIVE,
+            library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+        )
+        self.client.force_authenticate(self.school_admin)
+        common_set_response = self.client.post(
+            "/api/v1/school-admin/common-question-sets/",
+            {
+                "subject": self.subject.id,
+                "title": "高一第一单元共同题",
+                "grade_scope": "高一",
+                "term": "第一学期",
+                "items": [
+                    {
+                        "question_id": common_question.id,
+                        "comparison_code": "IT-G10-U1-Q01",
+                        "required": True,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(common_set_response.status_code, 201, common_set_response.data)
+        common_set_id = common_set_response.data["data"]["id"]
+
+        self.client.force_authenticate(self.teacher)
+        layered = self.client.post(
+            "/api/v1/teacher/question-bank/",
+            {
+                "subject": self.subject.id,
+                "stem": "A 层拓展题：写出另一种等值表示。",
+                "question_type": "text",
+                "options": [],
+                "answer": [],
+                "analysis": "说明转换过程。",
+                "difficulty": "hard",
+                "knowledge_point": "二进制转换",
+                "default_score": 4,
+                "item_role": "layered",
+                "layer_scope": "a",
+            },
+            format="json",
+        )
+        self.assertEqual(layered.status_code, 201, layered.data)
+        assessment = self.client.post(
+            "/api/v1/teacher/assessments/",
+            {
+                "title": "共同题与分层题测试",
+                "subject": self.subject.id,
+                "course": "",
+                "common_question_set": common_set_id,
+                "class_ids": [self.class_group.id],
+                "instruction": "独立完成",
+                "duration_minutes": 30,
+                "start_at": "",
+                "end_at": "",
+                "show_score_after_submit": True,
+            },
+            format="json",
+        ).data["data"]
+        saved = self.client.put(
+            f"/api/v1/teacher/assessments/{assessment['id']}/questions/",
+            {
+                "questions": [
+                    {"question_id": common_question.id, "score": 2},
+                    {"question_id": layered.data["data"]["id"], "score": 4},
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(saved.status_code, 200, saved.data)
+        snapshots = list(
+            TestAssessmentQuestion.objects.filter(assessment_id=assessment["id"])
+            .order_by("sort_order")
+        )
+        self.assertEqual(
+            [item.item_role for item in snapshots],
+            [QuestionBankItem.ItemRole.COMMON, QuestionBankItem.ItemRole.LAYERED],
+        )
+        self.client.post(f"/api/v1/teacher/assessments/{assessment['id']}/publish/")
+        self.client.post(f"/api/v1/teacher/assessments/{assessment['id']}/open/")
+
+        StudentProfile.objects.filter(user=self.student).update(current_layer="A")
+        c_student = User.objects.create_user(
+            username="student_c",
+            password="123456",
+            role=User.Role.STUDENT,
+            school=self.school,
+            display_name="学生C",
+        )
+        StudentProfile.objects.create(
+            user=c_student,
+            class_group=self.class_group,
+            current_layer="C",
+            is_first_use=False,
+        )
+        self.client.force_authenticate(self.student)
+        self.client.post(f"/api/v1/student/assessments/{assessment['id']}/start/")
+        a_questions = self.client.get(
+            f"/api/v1/student/assessments/{assessment['id']}/"
+        ).data["data"]["questions"]
+        self.assertEqual(len(a_questions), 2)
+        self.assertTrue(all("item_role" not in item for item in a_questions))
+
+        self.client.force_authenticate(c_student)
+        self.client.post(f"/api/v1/student/assessments/{assessment['id']}/start/")
+        c_questions = self.client.get(
+            f"/api/v1/student/assessments/{assessment['id']}/"
+        ).data["data"]["questions"]
+        self.assertEqual(len(c_questions), 1)
+        hidden_answer = self.client.patch(
+            f"/api/v1/student/assessments/{assessment['id']}/answer/",
+            {"question_id": snapshots[1].id, "answer": ["越权作答"]},
+            format="json",
+        )
+        self.assertEqual(hidden_answer.status_code, 400)
+
+        self.client.force_authenticate(self.teacher)
+        second = self.client.post(
+            "/api/v1/teacher/assessments/",
+            {
+                "title": "共同题复测",
+                "subject": self.subject.id,
+                "course": "",
+                "common_question_set": common_set_id,
+                "class_ids": [self.class_group.id],
+                "instruction": "",
+                "duration_minutes": 30,
+                "start_at": "",
+                "end_at": "",
+                "show_score_after_submit": False,
+            },
+            format="json",
+        ).data["data"]
+        self.client.put(
+            f"/api/v1/teacher/assessments/{second['id']}/questions/",
+            {"questions": [{"question_id": common_question.id, "score": 2}]},
+            format="json",
+        )
+        self.client.post(f"/api/v1/teacher/assessments/{second['id']}/publish/")
+        results = self.client.get(
+            f"/api/v1/teacher/assessments/{assessment['id']}/results/"
+        )
+        self.assertEqual(results.status_code, 200, results.data)
+        self.assertTrue(
+            all(item["data_status"] == "insufficient" for item in results.data["data"]["question_stats"])
+        )
+        self.assertTrue(
+            all(item["correct_rate"] is None for item in results.data["data"]["question_stats"])
+        )
+        text_stats = next(
+            item
+            for item in results.data["data"]["question_stats"]
+            if item["question"]["question_type"] == QuestionBankItem.QuestionType.TEXT
+        )
+        self.assertEqual(text_stats["option_distribution"], [])
+        comparison = AssessmentComparabilityRecord.objects.get(
+            left_assessment_id=min(assessment["id"], second["id"]),
+            right_assessment_id=max(assessment["id"], second["id"]),
+        )
+        self.assertEqual(comparison.status, AssessmentComparabilityRecord.Status.INSUFFICIENT)
 
 
 class StudentArchiveTests(TestCase):

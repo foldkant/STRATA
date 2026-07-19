@@ -28,6 +28,7 @@ const TeacherResourcesView = () => import('@/views/teacher/ResourcesView.vue')
 const TeacherQuestionBankView = () => import('@/views/teacher/QuestionBankView.vue')
 const TeacherAssessmentsView = () => import('@/views/teacher/AssessmentsView.vue')
 const TeacherEvaluationManagementView = () => import('@/views/teacher/EvaluationManagementView.vue')
+const TeacherStratificationView = () => import('@/views/teacher/StratificationView.vue')
 const TeacherModulePlaceholder = () => import('@/views/teacher/ModulePlaceholderView.vue')
 const StudentDashboard = () => import('@/views/student/DashboardView.vue')
 const StudentCoursesView = () => import('@/views/student/CoursesView.vue')
@@ -99,8 +100,8 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/teacher/stratification',
-    component: TeacherModulePlaceholder,
-    meta: { role: 'teacher', title: '分层建议', description: '查看学生学习安排建议和参考原因，由教师确认后生效。' }
+    component: TeacherStratificationView,
+    meta: { role: 'teacher' }
   },
   {
     path: '/teacher/notices',

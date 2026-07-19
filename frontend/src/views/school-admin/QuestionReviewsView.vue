@@ -1,14 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ApiError } from '@/api/client'
 import {
+  archiveCommonQuestionSet,
+  commonQuestionSetsExportUrl,
+  createCommonQuestionSet,
+  getCommonQuestionSets,
   getQuestionReviewDetail,
   getQuestionReviews,
   questionReviewsExportUrl,
   reviewQuestion,
   type BankQuestion,
   type BankQuestionSource,
-  type BankQuestionStatus
+  type BankQuestionStatus,
+  type CommonQuestionSetRow
 } from '@/api/assessments'
 import { getSubjects, type SubjectRow } from '@/api/management'
 import AppShell from '@/layouts/AppShell.vue'
@@ -32,6 +37,11 @@ const detail = ref<BankQuestion | null>(null)
 const detailLoading = ref(false)
 const noteAction = ref<'return' | 'disable' | null>(null)
 const note = ref('')
+const commonSetOpen = ref(false)
+const commonSetSaving = ref(false)
+const commonSets = ref<CommonQuestionSetRow[]>([])
+const commonCandidates = ref<Array<{ question: BankQuestion; selected: boolean; comparison_code: string; required: boolean }>>([])
+const commonSetForm = reactive({ subject: '', title: '', grade_scope: '', term: '' })
 
 const statusTabs: Array<{ value: BankQuestionStatus | ''; label: string }> = [
   { value: 'pending_review', label: '待审核' },
@@ -152,6 +162,81 @@ async function changePage(next: number) {
   await loadRows()
 }
 
+async function loadCommonCandidates() {
+  commonCandidates.value = []
+  if (!commonSetForm.subject) return
+  const result = await getQuestionReviews({
+    page: 1,
+    page_size: 200,
+    status: 'active',
+    subject: commonSetForm.subject
+  })
+  commonCandidates.value = result.results.map((question) => ({
+    question,
+    selected: false,
+    comparison_code: question.comparison_code || '',
+    required: true
+  }))
+}
+
+async function openCommonSetManager() {
+  commonSetOpen.value = true
+  commonSetForm.subject = subject.value || String(subjects.value[0]?.id || '')
+  commonSetForm.title = ''
+  commonSetForm.grade_scope = ''
+  commonSetForm.term = ''
+  try {
+    commonSets.value = await getCommonQuestionSets()
+    await loadCommonCandidates()
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '共同题集合加载失败。'
+  }
+}
+
+async function saveCommonSet() {
+  const selected = commonCandidates.value.filter((item) => item.selected)
+  if (commonSetForm.title.trim().length < 2 || !selected.length) {
+    notice.value = '请填写集合名称并选择共同题。'
+    return
+  }
+  if (selected.some((item) => !item.comparison_code.trim())) {
+    notice.value = '每道共同题都要填写比较编号。'
+    return
+  }
+  commonSetSaving.value = true
+  try {
+    await createCommonQuestionSet({
+      subject: commonSetForm.subject,
+      title: commonSetForm.title.trim(),
+      grade_scope: commonSetForm.grade_scope.trim(),
+      term: commonSetForm.term.trim(),
+      items: selected.map((item) => ({
+        question_id: item.question.id,
+        comparison_code: item.comparison_code.trim().toUpperCase(),
+        required: item.required
+      }))
+    })
+    commonSets.value = await getCommonQuestionSets()
+    notice.value = '共同题集合已发布。'
+    await loadCommonCandidates()
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '共同题集合保存失败。'
+  } finally {
+    commonSetSaving.value = false
+  }
+}
+
+async function archiveSet(row: CommonQuestionSetRow) {
+  if (!window.confirm(`确认归档“${row.title}”版本 ${row.version_no}？`)) return
+  try {
+    await archiveCommonQuestionSet(row.id)
+    commonSets.value = await getCommonQuestionSets()
+    notice.value = '共同题集合已归档。'
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '归档失败。'
+  }
+}
+
 onMounted(async () => {
   try {
     subjects.value = await getSubjects()
@@ -171,7 +256,10 @@ onMounted(async () => {
         <h2>学校题库审核</h2>
         <p>教师负责出题和修改，学校管理员负责审核、试用确认和共享范围管理。</p>
       </div>
-      <a class="secondary-button" :href="questionReviewsExportUrl">导出 XLSX</a>
+      <div class="heading-actions">
+        <button class="primary-button" type="button" @click="openCommonSetManager">共同题集合</button>
+        <a class="secondary-button" :href="questionReviewsExportUrl">导出 XLSX</a>
+      </div>
     </section>
 
     <nav class="question-review-tabs" aria-label="题目状态">
@@ -309,6 +397,43 @@ onMounted(async () => {
           <label><span>{{ noteAction === 'return' ? '修改说明' : '停用原因' }} <b class="required-mark">*</b></span><textarea v-model.trim="note" rows="5" maxlength="1000" placeholder="请填写明确原因，教师可在题目记录中查看。"></textarea></label>
         </div>
         <footer class="modal-actions"><button class="secondary-button" type="button" @click="noteAction = null">取消</button><button class="primary-button" type="button" :disabled="reviewing" @click="submitNoteAction">确认</button></footer>
+      </section>
+    </div>
+
+    <div v-if="commonSetOpen" class="modal-backdrop" role="presentation" @click.self="commonSetOpen = false">
+      <section class="entity-modal common-question-set-modal" role="dialog" aria-modal="true" aria-labelledby="common-set-title">
+        <header class="modal-header">
+          <div><h2 id="common-set-title">共同题集合</h2><p>共同题用于跨班级、跨学期和跨学校保持相同的比较基础。</p></div>
+          <div class="heading-actions"><a class="secondary-button" :href="commonQuestionSetsExportUrl">导出 XLSX</a><button class="icon-button" type="button" aria-label="关闭" @click="commonSetOpen = false">×</button></div>
+        </header>
+        <div class="common-set-body">
+          <section class="common-set-form">
+            <div class="assessment-form-grid">
+              <label><span>学科 <b class="required-mark">*</b></span><select v-model="commonSetForm.subject" @change="loadCommonCandidates"><option v-for="item in subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+              <label><span>集合名称 <b class="required-mark">*</b></span><input v-model.trim="commonSetForm.title" maxlength="128" placeholder="例如 高一第一单元共同题" /></label>
+              <label><span>年级范围</span><input v-model.trim="commonSetForm.grade_scope" maxlength="32" placeholder="例如 高一" /></label>
+              <label><span>学期</span><input v-model.trim="commonSetForm.term" maxlength="32" placeholder="例如 第一学期" /></label>
+            </div>
+            <header class="common-candidate-head"><strong>选择已启用题目</strong><span>{{ commonCandidates.filter((item) => item.selected).length }} / {{ commonCandidates.length }}</span></header>
+            <div class="common-candidate-list">
+              <article v-for="item in commonCandidates" :key="item.question.id" :class="{ selected: item.selected }">
+                <label class="common-candidate-select"><input v-model="item.selected" type="checkbox" /><span>{{ item.question.stem }}</span></label>
+                <div><input v-model.trim="item.comparison_code" :disabled="!item.selected" maxlength="64" placeholder="比较编号，例如 IT-G10-U1-Q01" /><label><input v-model="item.required" :disabled="!item.selected" type="checkbox" />必备题</label></div>
+              </article>
+              <p v-if="!commonCandidates.length" class="empty">当前学科还没有已启用的共享题目。</p>
+            </div>
+          </section>
+          <aside class="common-set-history">
+            <h3>已发布版本</h3>
+            <article v-for="item in commonSets.filter((row) => !commonSetForm.subject || row.subject.id === Number(commonSetForm.subject))" :key="item.id">
+              <div><strong>{{ item.title }}</strong><span>v{{ item.version_no }} · {{ item.question_count }} 题</span></div>
+              <small>{{ item.grade_scope || '全部年级' }} · {{ item.term || '未限定学期' }} · {{ item.status_label }}</small>
+              <button v-if="item.status === 'active'" type="button" @click="archiveSet(item)">归档</button>
+            </article>
+            <p v-if="!commonSets.length" class="empty">暂无已发布集合。</p>
+          </aside>
+        </div>
+        <footer class="modal-actions"><button class="secondary-button" type="button" @click="commonSetOpen = false">关闭</button><button class="primary-button" type="button" :disabled="commonSetSaving" @click="saveCommonSet">{{ commonSetSaving ? '发布中' : '发布新版本' }}</button></footer>
       </section>
     </div>
   </AppShell>

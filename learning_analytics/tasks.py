@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta
+
 from celery import shared_task
 from django.db import IntegrityError
 from django.utils import timezone
 from learning_analytics.models import AnalyticsPipelineRun
 from learning_analytics.services.quality import (
+    QualityCheckError,
     create_quality_pipeline_run,
     execute_quality_pipeline,
     previous_local_day_window,
+    require_quality_checks,
+)
+from learning_analytics.services.learning_summaries import (
+    rebuild_school_learning_summaries,
 )
 from school.models import School
 
@@ -133,3 +140,55 @@ def run_nightly_data_quality():
                 }
             )
     return dispatched
+
+
+@shared_task
+def rebuild_school_learning_summaries_task(
+    school_id: int, as_of_iso: str | None = None, require_quality: bool = True
+):
+    school = School.objects.get(pk=school_id)
+    as_of = (
+        datetime.fromisoformat(as_of_iso).date()
+        if as_of_iso
+        else timezone.localdate() - timedelta(days=1)
+    )
+    if require_quality:
+        window_end = timezone.make_aware(
+            datetime.combine(as_of + timedelta(days=1), time.min),
+            timezone.get_current_timezone(),
+        )
+        require_quality_checks(school=school, as_of=window_end)
+    return rebuild_school_learning_summaries(school=school, as_of=as_of)
+
+
+@shared_task
+def run_nightly_learning_summaries():
+    as_of = timezone.localdate() - timedelta(days=1)
+    rows = []
+    for school in School.objects.filter(
+        status=School.Status.ACTIVE,
+        is_synthetic=False,
+    ).iterator():
+        try:
+            result = rebuild_school_learning_summaries_task(
+                school.id, as_of.isoformat(), True
+            )
+        except QualityCheckError as exc:
+            rows.append(
+                {
+                    "school_id": school.id,
+                    "status": "skipped",
+                    "reason": exc.code,
+                }
+            )
+        except Exception as exc:
+            rows.append(
+                {
+                    "school_id": school.id,
+                    "status": "failed",
+                    "reason": type(exc).__name__,
+                }
+            )
+        else:
+            rows.append({"school_id": school.id, "status": "completed", **result})
+    return rows

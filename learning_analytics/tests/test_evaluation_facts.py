@@ -171,9 +171,12 @@ class EvaluationFactTests(TestCase):
         self, student, evaluation_type, target=None, rating=4, criterion_id=None
     ):
         self.client.force_authenticate(student)
-        criterion_id = criterion_id or (
-            "self-process" if evaluation_type == "self" else "peer-collaboration"
-        )
+        if criterion_id is None:
+            standard_use = ClassroomEvaluationStandardUse.objects.get(
+                session=self.session
+            )
+            criteria = getattr(standard_use, f"{evaluation_type}_criteria")
+            criterion_id = criteria[0]["id"]
         payload = {
             "evaluation_type": evaluation_type,
             "ratings": {criterion_id: rating},
@@ -187,7 +190,7 @@ class EvaluationFactTests(TestCase):
             format="json",
         )
 
-    def create_formal_binding(self):
+    def create_formal_binding(self, *, include_second_criterion=False):
         plan = EvaluationPlan.objects.create(
             school=self.school,
             subject=self.subject,
@@ -231,6 +234,73 @@ class EvaluationFactTests(TestCase):
             updated_by=self.teacher,
         )
         publish_plan(plan, published_by=self.teacher)
+        criteria = [
+            {
+                "code": "D1",
+                "dimension": "subject_practice",
+                "title": "任务达成",
+                "evaluation_target": "学生课堂作答和上传作品",
+                "evaluation_sources": ["课堂作答", "学生作品"],
+                "expected_performance": "学生完成任务并能说明关键步骤。",
+                "skip_condition": "没有作答或作品时不评价。",
+                "support_options": [],
+                "common_problems": ["只提交结果，没有过程说明。"],
+                "level_descriptions": {
+                    "1": "尚未完成任务，也没有提供可评价的过程说明。",
+                    "2": "只完成少量内容，关键步骤和理由仍然缺失。",
+                    "3": "基本完成任务，并能说明一个主要解决步骤。",
+                    "4": "完整完成任务，能够连贯说明主要步骤和理由。",
+                    "5": "高质量完成任务，并能比较不同方案及其取舍。",
+                },
+                "scoring_examples": [
+                    {
+                        "level": 2,
+                        "title": "过程说明不足",
+                        "example_description": "只提交部分结果，缺少关键步骤说明。",
+                        "file_reference": "classroom-D1-L2",
+                    },
+                    {
+                        "level": 4,
+                        "title": "完整过程说明",
+                        "example_description": "完整提交结果并说明主要步骤。",
+                        "file_reference": "classroom-D1-L4",
+                    },
+                ],
+                "follow_up_suggestion": "针对缺失步骤给出补充提示。",
+            }
+        ]
+        if include_second_criterion:
+            criteria.append(
+                {
+                    "code": "D2",
+                    "dimension": "collaboration",
+                    "title": "协作表现",
+                    "evaluation_target": "学生小组协作过程",
+                    "evaluation_sources": ["课堂观察"],
+                    "expected_performance": "学生能参与协作并回应同伴。",
+                    "skip_condition": "本节未安排协作时不评价。",
+                    "support_options": [],
+                    "common_problems": ["缺少可观察的协作过程。"],
+                    "level_descriptions": {
+                        str(level): f"协作表现等级 {level}" for level in range(1, 6)
+                    },
+                    "scoring_examples": [
+                        {
+                            "level": 2,
+                            "title": "参与有限",
+                            "example_description": "偶尔参与，但缺少对同伴的回应。",
+                            "file_reference": "classroom-D2-L2",
+                        },
+                        {
+                            "level": 4,
+                            "title": "有效协作",
+                            "example_description": "持续参与并能回应同伴。",
+                            "file_reference": "classroom-D2-L4",
+                        },
+                    ],
+                    "follow_up_suggestion": "提供明确的协作分工。",
+                }
+            )
         standard = EvaluationStandard.objects.create(
             school=self.school,
             subject=self.subject,
@@ -238,41 +308,7 @@ class EvaluationFactTests(TestCase):
             plan=plan,
             title="课堂作品评价标准",
             evaluation_target="学生课堂作答和上传作品",
-            criteria=[
-                {
-                    "code": "D1",
-                    "dimension": "subject_practice",
-                    "title": "任务达成",
-                    "evaluation_target": "学生课堂作答和上传作品",
-                    "evaluation_sources": ["课堂作答", "学生作品"],
-                    "expected_performance": "学生完成任务并能说明关键步骤。",
-                    "skip_condition": "没有作答或作品时不评价。",
-                    "support_options": [],
-                    "common_problems": ["只提交结果，没有过程说明。"],
-                    "level_descriptions": {
-                        "1": "尚未完成任务，也没有提供可评价的过程说明。",
-                        "2": "只完成少量内容，关键步骤和理由仍然缺失。",
-                        "3": "基本完成任务，并能说明一个主要解决步骤。",
-                        "4": "完整完成任务，能够连贯说明主要步骤和理由。",
-                        "5": "高质量完成任务，并能比较不同方案及其取舍。",
-                    },
-                    "scoring_examples": [
-                        {
-                            "level": 2,
-                            "title": "过程说明不足",
-                            "example_description": "学生提交了部分结果，但没有说明关键步骤和选择理由。",
-                            "file_reference": "classroom-D1-L2",
-                        },
-                        {
-                            "level": 4,
-                            "title": "完整过程说明",
-                            "example_description": "学生完整提交结果，并连贯说明主要步骤和选择理由。",
-                            "file_reference": "classroom-D1-L4",
-                        },
-                    ],
-                    "follow_up_suggestion": "针对缺失步骤给出补充提示。",
-                }
-            ],
+            criteria=criteria,
             created_by=self.teacher,
             updated_by=self.teacher,
         )
@@ -281,7 +317,7 @@ class EvaluationFactTests(TestCase):
             lesson_step=self.lesson_step,
             standard_version=version,
             enable_self=True,
-            enable_peer=False,
+            enable_peer=True,
             enable_teacher=True,
             created_by=self.teacher,
             updated_by=self.teacher,
@@ -351,12 +387,13 @@ class EvaluationFactTests(TestCase):
         return first_attempt, latest_attempt, first_work, latest_work
 
     def test_classroom_evaluation_is_frozen_and_submissions_are_versioned(self):
+        _standard, standard_version, _binding = self.create_formal_binding()
         enabled = self.enable_evaluation()
         self.assertEqual(enabled.status_code, 200, enabled.data)
         self.session.refresh_from_db()
-        frozen_version = self.session.evaluation_config_version
-        self.assertIsNotNone(frozen_version)
-        self.assertEqual(frozen_version.version_no, 1)
+        frozen_use = ClassroomEvaluationStandardUse.objects.get(session=self.session)
+        self.assertIsNone(self.session.evaluation_config_version)
+        self.assertEqual(frozen_use.standard_version, standard_version)
         self.assertEqual(
             LearningEventV2.objects.filter(
                 event_name="content.released",
@@ -374,11 +411,12 @@ class EvaluationFactTests(TestCase):
             self.students[0], "peer", target=self.students[1], rating=5
         )
         self.client.force_authenticate(self.teacher)
+        teacher_criterion_id = frozen_use.teacher_criteria[0]["id"]
         teacher_response = self.client.post(
             f"/api/v1/teacher/classroom/sessions/{self.session.id}/evaluation/teacher-submit/",
             {
                 "target": self.students[0].id,
-                "ratings": {"teacher-outcome": 3},
+                "ratings": {teacher_criterion_id: 3},
                 "comment": "教师评价正文",
             },
             format="json",
@@ -396,7 +434,8 @@ class EvaluationFactTests(TestCase):
         )
         self.assertEqual([item.submission_version for item in self_submissions], [1, 2])
         self.assertEqual(self_submissions[1].supersedes, self_submissions[0])
-        self.assertEqual(self_submissions[0].evaluation_version, frozen_version)
+        self.assertEqual(self_submissions[0].standard_use, frozen_use)
+        self.assertIsNone(self_submissions[0].evaluation_version)
         self.assertNotEqual(
             self_submissions[0].analytics_attempt_id,
             self_submissions[1].analytics_attempt_id,
@@ -412,38 +451,12 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(peer_event.opportunity_record.student, self.students[1])
         self.assertEqual(
             peer_event.payload["criterion_ratings"],
-            [{"criterion_id": "peer-collaboration", "rating": 5}],
+            [{"criterion_id": frozen_use.peer_criteria[0]["id"], "rating": 5}],
         )
-
-        self.config.self_criteria = [
-            {
-                "id": "new-self-item",
-                "title": "新评价项",
-                "description": "只用于后续课堂",
-                "sort_order": 10,
-            }
-        ]
-        self.config.save(update_fields=["self_criteria", "updated_at"])
-        self.client.force_authenticate(self.teacher)
-        saved = self.client.post(
-            f"/api/v1/teacher/courses/{self.course.id}/evaluation/",
-            {
-                "enable_self": True,
-                "enable_peer": True,
-                "enable_teacher": True,
-                "self_criteria": self.config.self_criteria,
-                "peer_criteria": self.config.peer_criteria,
-                "teacher_criteria": self.config.teacher_criteria,
-            },
-            format="json",
-        )
-        self.assertEqual(saved.status_code, 200, saved.data)
         self.assertEqual(
             ClassroomEvaluationConfigVersion.objects.filter(course=self.course).count(),
-            2,
+            0,
         )
-        self.session.refresh_from_db()
-        self.assertEqual(self.session.evaluation_config_version, frozen_version)
         still_frozen = self.submit_student(self.students[1], "self", rating=4)
         self.assertEqual(still_frozen.status_code, 200, still_frozen.data)
 
@@ -458,7 +471,7 @@ class EvaluationFactTests(TestCase):
             LearningOpportunityTransitionFact.objects.filter(state="withdrawn").exists()
         )
         self.assertTrue(reconcile_v1_v2_events(school=self.school)["consistent"])
-        self.assertFalse(EvaluationSubmissionEvidence.objects.exists())
+        self.assertTrue(EvaluationSubmissionEvidence.objects.exists())
 
     def test_formal_standard_is_frozen_and_submission_links_latest_evidence(self):
         standard, standard_version, binding = self.create_formal_binding()
@@ -478,7 +491,7 @@ class EvaluationFactTests(TestCase):
         )
         criterion_id = f"std_{standard_version.id}_D1"
         self.assertEqual(
-            self.session.evaluation_config_version.self_criteria[0]["criterion_code"],
+            standard_use.self_criteria[0]["criterion_code"],
             "D1",
         )
 
@@ -523,7 +536,7 @@ class EvaluationFactTests(TestCase):
             {
                 "standard_version": standard_version.id,
                 "enable_self": True,
-                "enable_peer": True,
+                "enable_peer": False,
                 "enable_teacher": True,
             },
             format="json",
@@ -532,27 +545,22 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(self.client.delete(binding_url).status_code, 409)
 
     def test_not_assessed_criterion_is_excluded_from_average_and_keeps_reason(self):
-        self.config.self_criteria = [
-            *self.config.self_criteria,
-            {
-                "id": "self-collaboration",
-                "title": "协作表现",
-                "description": "根据本节课实际协作材料评价",
-                "sort_order": 20,
-            },
-        ]
-        self.config.save(update_fields=["self_criteria", "updated_at"])
+        _standard, _version, _binding = self.create_formal_binding(
+            include_second_criterion=True
+        )
         enabled = self.enable_evaluation()
         self.assertEqual(enabled.status_code, 200, enabled.data)
+        standard_use = ClassroomEvaluationStandardUse.objects.get(session=self.session)
+        first_id, second_id = [item["id"] for item in standard_use.self_criteria]
 
         self.client.force_authenticate(self.students[0])
         response = self.client.post(
             f"/api/v1/student/classroom/{self.session.id}/evaluation/submit/",
             {
                 "evaluation_type": "self",
-                "ratings": {"self-process": 4},
+                "ratings": {first_id: 4},
                 "not_assessed": {
-                    "self-collaboration": {
+                    second_id: {
                         "reason": "not_observed",
                         "note": "本节课没有安排小组活动。",
                     }
@@ -565,14 +573,14 @@ class EvaluationFactTests(TestCase):
         submission = ClassroomEvaluationSubmission.objects.get(
             evaluation_type="self", evaluator=self.students[0]
         )
-        self.assertEqual(submission.ratings, {"self-process": 4})
+        self.assertEqual(submission.ratings, {first_id: 4})
         self.assertEqual(
-            submission.not_assessed["self-collaboration"]["reason"],
+            submission.not_assessed[second_id]["reason"],
             "not_observed",
         )
         serialized = response.data["data"]["self_submission"]
         self.assertEqual(
-            serialized["not_assessed"]["self-collaboration"]["reason_label"],
+            serialized["not_assessed"][second_id]["reason_label"],
             "本节未安排或未观察到",
         )
 
@@ -582,13 +590,13 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(event.schema_version, "1.1")
         self.assertEqual(
             event.payload["criterion_ratings"],
-            [{"criterion_id": "self-process", "rating": 4}],
+            [{"criterion_id": first_id, "rating": 4}],
         )
         self.assertEqual(
             event.payload["not_assessed_criteria"],
             [
                 {
-                    "criterion_id": "self-collaboration",
+                    "criterion_id": second_id,
                     "reason_code": "not_observed",
                 }
             ],
@@ -606,8 +614,12 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(summary["total_item_count"], 2)
 
     def test_evaluation_requires_rating_or_valid_not_assessed_reason_per_criterion(self):
+        self.create_formal_binding()
         enabled = self.enable_evaluation()
         self.assertEqual(enabled.status_code, 200, enabled.data)
+        criterion_id = ClassroomEvaluationStandardUse.objects.get(
+            session=self.session
+        ).self_criteria[0]["id"]
         url = f"/api/v1/student/classroom/{self.session.id}/evaluation/submit/"
         self.client.force_authenticate(self.students[0])
 
@@ -622,9 +634,9 @@ class EvaluationFactTests(TestCase):
             url,
             {
                 "evaluation_type": "self",
-                "ratings": {"self-process": 3},
+                "ratings": {criterion_id: 3},
                 "not_assessed": {
-                    "self-process": {"reason": "no_evidence", "note": ""}
+                    criterion_id: {"reason": "no_evidence", "note": ""}
                 },
             },
             format="json",
@@ -637,7 +649,7 @@ class EvaluationFactTests(TestCase):
                 "evaluation_type": "self",
                 "ratings": {},
                 "not_assessed": {
-                    "self-process": {"reason": "other", "note": ""}
+                    criterion_id: {"reason": "other", "note": ""}
                 },
             },
             format="json",
@@ -650,7 +662,7 @@ class EvaluationFactTests(TestCase):
                 "evaluation_type": "self",
                 "ratings": {},
                 "not_assessed": {
-                    "self-process": {
+                    criterion_id: {
                         "reason": "no_evidence",
                         "note": "本节未形成可评价作品。",
                     }
@@ -661,10 +673,11 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(valid_skip.status_code, 200, valid_skip.data)
 
     def test_student_batch_cannot_forge_peer_rating_for_another_student(self):
+        self.create_formal_binding()
         enabled = self.enable_evaluation()
         self.assertEqual(enabled.status_code, 200, enabled.data)
         self.session.refresh_from_db()
-        version = self.session.evaluation_config_version
+        standard_use = ClassroomEvaluationStandardUse.objects.get(session=self.session)
         opportunity = LearningOpportunity.objects.get(
             student=self.students[1],
             object_id=f"classroom-evaluation:{self.session.id}:peer",
@@ -685,17 +698,22 @@ class EvaluationFactTests(TestCase):
                         "session_id": self.session.id,
                         "object_type": "evaluation_standard",
                         "object_id": f"classroom-evaluation:{self.session.id}:peer",
-                        "object_version": version.config_hash,
+                        "object_version": (
+                            f"standard:{standard_use.standard_version_id}:"
+                            f"v{standard_use.standard_version.version_no}:"
+                            f"{standard_use.standard_version.content_hash[:12]}"
+                        ),
                         "opportunity_id": str(opportunity.opportunity_id),
                         "client_occurred_at": timezone.now().isoformat(),
                         "payload": {
                             "evaluation_version": (
-                                f"course:{self.course.id}:v{version.version_no}:"
-                                f"{version.config_hash[:12]}"
+                                f"standard:{standard_use.standard_version_id}:"
+                                f"v{standard_use.standard_version.version_no}:"
+                                f"{standard_use.standard_version.content_hash[:12]}"
                             ),
                             "criterion_ratings": [
                                 {
-                                    "criterion_id": "peer-collaboration",
+                                    "criterion_id": standard_use.peer_criteria[0]["id"],
                                     "rating": 5,
                                 }
                             ],

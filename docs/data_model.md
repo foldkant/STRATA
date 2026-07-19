@@ -95,16 +95,15 @@
 
 - `LearningEvent`：统一学习行为事件表，是 AI 特征工程的数据源。
 - `StudentFeatureSnapshot`：夜间聚合后的学生特征快照。
-- `StratificationDecision`：AI 分层建议与教师确认记录。
+- `StratificationDecision`：教师可见的隐性学习安排建议与审核记录，按学生、课程、窗口结束时间和规则版本去重；采纳、保持、调整和暂缓均不直接改写学生层级。
 - `PretestPaper`：学科前测套卷。按学校、学科、前测类型和版本管理。
 - `PretestQuestion`：前测题目。支持单选、多选、量表和简答。
 - `PretestSubmission`：学生前测作答记录。后续学生端提交前测时写入。
 - `StudentWorkAttachment`：学生课堂附件提交版本。除教学上下文、文件和批阅缓存外，包含唯一 `submission_id`、`upload_version` 和 `supersedes`；重新上传追加记录，不删除旧文件。
 - `LessonStepAttempt`：学生一次课堂环节提交。使用唯一 `attempt_id` 和递增 `attempt_no`，保存课堂/环节上下文、正文、题目计数和客观题汇总。
 - `LessonStepAttemptAnswer`：课堂提交的逐题业务答案，保存题目版本、题型、响应正文、自动评分和可选附件版本引用；分析事件只引用该业务记录，不复制答案正文。
-- `ClassroomEvaluationConfig`：课程评价设置。与 `Course` 一对一，记录教师当前使用的自评、互评、师评三类 5 星评价项；保存后按内容生成评价版本。
-- `ClassroomEvaluationConfigVersion`：不可修改的课程评价版本。保存课程内递增版本号、内容摘要、三类开关和评价项快照；相同内容不重复发布。课堂首次开启评价时把版本固定到 `ClassroomSession.evaluation_config_version`。
-- `ClassroomEvaluationSubmission`：不可修改的评价提交版本。记录课程、可选课堂、班级、评价者、被评价者、小组、评价版本、逐项星级、逐项暂不评价原因和备注；修订生成新版本，不能覆盖或删除旧记录。同一指标不能同时评分和暂不评价。
+- `ClassroomEvaluationConfig` / `ClassroomEvaluationConfigVersion`：旧课程级评价结构，仅保留历史读取和旧提交追溯，`legacy_only=true`。新页面、新课时和新课堂不得创建这两类数据。
+- `ClassroomEvaluationSubmission`：不可修改的评价提交版本。新提交通过 `standard_use` 关联课堂冻结标准；旧 `evaluation_version` 仅为可空兼容字段。记录评价者、被评价者、小组、逐项星级、逐项暂不评价原因和备注；修订生成新版本，不能覆盖或删除旧记录。
 - `TeacherNote`：建议新增，教师对任教班级学生的教学备注和干预记录。
 - `StudentLearningLog`：建议新增，学生学习日志。由系统根据 `LearningEvent` 自动生成，也可由学生反思或教师补充。
 - `ClassLearningLog`：建议新增，班级学习日志。记录课堂运行、任务推进、项目阶段、共性问题、教师干预和课后复盘。
@@ -184,6 +183,7 @@
 - `AssessmentResultFact`：按学习机会和 `attempt_id` 保存不可变评分版本，成熟状态为 `pending/final/revised`。最终和修订评分必须有实际得分；修订必须引用同一次作答的既有成熟版本。当前成熟版本按最大 `grade_version` 派生，不通过修改旧行维护 `is_current`。
 - `AssessmentResultFact` 只在同一 `attempt_id` 已存在 `submitted` 事实后生成。主观题 `pending` 可保留空得分，不计为 0；`item.graded` 事件、机会的 `graded` 状态与评分事实处于同一事务，失败时整体回滚。
 - `ParticipationPointLedger`：课堂激励积分不可变流水。保存来源事件、学生、班级/课程/课堂、结构化原因、执行教师、增量、记账前后余额和冲正引用；同一来源事件只能生成一条，原流水不能编辑或删除。
+- `StudentLearningSummary`：按学生、学科、课程和固定时间范围保存可重复计算的学习情况。范围为当日、近 7 日、近 30 日和单元；分别保存任务分母、提交、评分、资源、互动、自评/互评/师评、记录异常和缺少材料。没有任务或没有评分时比例保持空值，不写成 0。
 - `ParticipationPointLedger` 单次增减绝对值不超过 100，普通扣分和冲正后余额不能低于 0；冲正值必须与原流水方向相反且绝对值相同，同一原流水只能冲正一次。
 - `learning_analytics.services.participation_points.reconcile_participation_point_cache`：以第一笔流水的迁移期起始余额和全部增量重算 `StudentProfile.score`。旧字段只是显示缓存，不是学业成绩、核心素养或 AI 主模型特征。
 - `learning_analytics.services.dual_write.record_learning_event`：统一服务端写入入口。`dual_required` 模式下新旧记录在同一数据库事务中创建并互相追溯，新版记录校验失败时旧记录同步回滚；`v1_only` 只保留旧业务写入，用于紧急回退。
@@ -193,7 +193,7 @@
 - `learning_analytics.services.access_audit.teacher_has_class_scope`：按学校和有效任课关系判断教师是否可查看班级个体分析，单纯教师角色不足以授权。
 - `sync_learning_event_schemas`：将代码中 35 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
 - `purge_expired_event_rejections`：删除超过本地保留期限的加密拒绝记录；正式环境后续由 Celery beat 定时调用。
-- 当前 app 已完成隐私权限、学习记录、学习任务关联、评分积分、新旧记录兼容写入和学习数据检查。历史旧记录使用确定性 UUID 回填，不能明确转换的记录以内部状态 `legacy.unmapped` 隔离，界面统一显示“旧事件未转换”。评价管理和试用记录已经完成；学习情况汇总和模型训练尚未完成。
+- 当前 app 已完成隐私权限、学习记录、学习任务关联、评分积分、新旧记录兼容写入、学习数据检查、评价版本冻结、共同题比较、四类学习情况汇总和教师审核规则版建议。历史旧记录使用确定性 UUID 回填，不能明确转换的记录以内部状态 `legacy.unmapped` 隔离，界面统一显示“旧事件未转换”。完整研究特征和机器学习模型尚未完成。
 
 机会状态当前只支持立即投放：`content.released` 的发生时间即实际开放时间。未来定时任务必须先增加 `content.assigned`，到点后再追加 `released`；不能把未来计划时间提前记成已开放。
 
@@ -275,11 +275,16 @@
 - `QuestionBankItemVersion`：不可修改的题目内容版本，保留原题编号、版本号、内容哈希、创建人、来源和创建时状态。教师修改草稿后创建新版本，旧版本不覆盖。
 - `QuestionBankItemLifecycleRecord`：题目状态变化记录，保存原状态、新状态、操作、处理人、时间和说明。
 - `TestAssessment`：教师创建的测试，关联学科、可选课程和多个任教班级，包含时长、时间窗口、运行状态和成绩显示策略。
-- `TestAssessmentQuestion`：试卷题目快照。保存来源题目、来源版本和组卷时状态，但不依赖来源内容，历史试卷不受题库修改、停用或删除影响。
+- `CommonQuestionSet`：学校管理员按学科、年级和学期发布的共同题集合版本，保存内容哈希和启用状态。
+- `CommonQuestionSetItem`：共同题集合内的题目版本、稳定比较编号、是否必备及顺序。
+- `TestAssessmentQuestion`：试卷题目快照。保存来源题目、来源版本、组卷时状态、普通/共同/分层用途、适用内容带和比较编号，但不依赖来源内容，历史试卷不受题库修改、停用或删除影响。
 - `TestAttempt`：学生唯一答卷，记录答题、提交、评分状态和客观/主观/总分。
 - `TestAttemptAnswer`：逐题答案、自动得分、人工得分、正确状态和教师评语。
+- `AssessmentComparabilityRecord`：两次测试间的共同测量核对记录，保存状态、共同题数量、完全同版本数量、两侧样本量、原因和核对时间。
 
 题目使用次数、作答人数、正确数、正确率、试用次数和试用正确率均由 `TestAssessmentQuestion` 与 `TestAttemptAnswer` 计算，不在题目表中维护递增计数。`personal + draft` 保存后创建教师即可组卷；`school + trial` 只有创建教师能试用；`school + active` 才对同校其他教师共享。学校管理员审核查询只读取 `library_scope=school`，不会读取未申请共享的个人题目。
+
+题目用途为 `regular/common/layered`。分层题另保存 `A/B/C/A-B/B-C` 范围，不能替代共同题；共同题使用稳定比较编号。有效作答少于 30 时，难度、正确率和区分度保持空值，接口和导出显示“数据不足”。
 
 ## realtime 课堂聊天
 
@@ -338,10 +343,10 @@
 - `EvaluationScoringExample`：评价指标的评分示例，登记星级、示例说明和可选材料引用。
 - `EvaluationTrialRecord`：评价试用与审核记录，绑定已发布评价标准版本，保存记录类型、日期、参与人数、状态、评分一致率、处理结论、问题和后续安排。
 - `LessonStepEvaluationBinding`：一个课时环节选择一个已发布评价标准版本，并设置自评、互评和教师评价。绑定一旦被课堂使用即不可原地修改或删除。
-- `ClassroomEvaluationStandardUse`：某次课堂首次开启评价时冻结环节、标准版本、评价方式和完整指标快照，后续切换环节或编辑工作稿不改变历史记录。
+- `ClassroomEvaluationStandardUse`：某次课堂首次开启评价时冻结环节、标准版本、自评/互评/师评开关、完整指标快照和内容哈希，后续切换环节或编辑工作稿不改变历史记录。旧 `evaluation_config_version` 仅用于兼容历史来源。
 - `EvaluationSubmissionEvidence`：把课堂评价提交关联到同一课堂、同一环节、同一被评价学生的最新 `LessonStepAttempt` 和最新 `StudentWorkAttachment`。没有匹配材料时允许为空，不以低星代替缺失材料。
 - `ClassroomEvaluationSubmission.not_assessed`：按评价指标 ID 保存原因代码和最多 200 字说明；原因是“其他”时说明必填。该字段与 `ratings` 互斥，平均值不读取暂不评价项。
 
-实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录，迁移 `0019` 新增课时评价绑定和课堂证据链，`courses.0025` 新增暂不评价结构，`learning_analytics.0020` 修复旧事件登记哈希。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
+实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录，迁移 `0019` 新增课时评价绑定和课堂证据链，`courses.0025` 新增暂不评价结构，`learning_analytics.0020` 修复旧事件登记哈希。`courses.0026` 把旧课程评价结构标记为兼容数据，`learning_analytics.0021` 将新课堂完整冻结到标准使用快照并迁移可确认来源的旧提交。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
 
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

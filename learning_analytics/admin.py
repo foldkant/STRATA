@@ -24,6 +24,7 @@ from .models import (
     EvaluationSubmissionEvidence,
     EvaluationTrialRecord,
     SensitiveInferenceAccessLog,
+    StudentLearningSummary,
     SyntheticDatasetRun,
 )
 
@@ -537,3 +538,25 @@ class EvaluationSubmissionEvidenceAdmin(ReadOnlyAnalyticsAdmin):
     readonly_fields = tuple(
         field.name for field in EvaluationSubmissionEvidence._meta.fields
     )
+
+
+@admin.register(StudentLearningSummary)
+class StudentLearningSummaryAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "student",
+        "class_group",
+        "subject",
+        "course",
+        "window_type",
+        "data_status",
+        "window_end",
+        "generated_at",
+    )
+    list_filter = ("window_type", "data_status", "school", "subject")
+    search_fields = (
+        "student__username",
+        "student__display_name",
+        "class_group__name",
+        "course__title",
+    )
+    readonly_fields = tuple(field.name for field in StudentLearningSummary._meta.fields)

@@ -1192,7 +1192,7 @@ def classroom_evaluation_criteria_rows(items) -> list[dict]:
 
 
 def classroom_evaluation_config_row(
-    config: ClassroomEvaluationConfig | ClassroomEvaluationConfigVersion | None,
+    config: ClassroomEvaluationConfig | ClassroomEvaluationConfigVersion | dict | None,
 ) -> dict:
     if config is None:
         return {
@@ -1211,24 +1211,38 @@ def classroom_evaluation_config_row(
             "version_no": None,
             "config_hash": "",
         }
-    self_criteria = classroom_evaluation_criteria_rows(config.self_criteria)
-    peer_criteria = classroom_evaluation_criteria_rows(config.peer_criteria)
-    teacher_criteria = classroom_evaluation_criteria_rows(config.teacher_criteria)
+    if isinstance(config, dict):
+        get_value = config.get
+        config_id = config.get("id")
+        course_id = config.get("course") or config.get("course_id")
+    else:
+        def get_value(key, default=None):
+            return getattr(config, key, default)
+
+        config_id = config.id
+        course_id = config.course_id
+    self_criteria = classroom_evaluation_criteria_rows(get_value("self_criteria", []))
+    peer_criteria = classroom_evaluation_criteria_rows(get_value("peer_criteria", []))
+    teacher_criteria = classroom_evaluation_criteria_rows(get_value("teacher_criteria", []))
     return {
-        "id": config.id,
-        "course": config.course_id,
-        "session": None,
-        "enable_self": bool(config.enable_self or self_criteria),
-        "enable_peer": bool(config.enable_peer or peer_criteria),
-        "enable_teacher": bool(config.enable_teacher or teacher_criteria),
+        "id": config_id,
+        "course": course_id,
+        "session": get_value("session_id"),
+        "enable_self": bool(get_value("enable_self", False) and self_criteria),
+        "enable_peer": bool(get_value("enable_peer", False) and peer_criteria),
+        "enable_teacher": bool(get_value("enable_teacher", False) and teacher_criteria),
         "self_criteria": self_criteria,
         "peer_criteria": peer_criteria,
         "teacher_criteria": teacher_criteria,
-        "opened_at": getattr(config, "opened_at", None),
-        "created_at": config.created_at,
-        "updated_at": getattr(config, "updated_at", config.created_at),
-        "version_no": getattr(config, "version_no", None),
-        "config_hash": getattr(config, "config_hash", ""),
+        "opened_at": get_value("opened_at"),
+        "created_at": get_value("created_at"),
+        "updated_at": get_value("updated_at", get_value("created_at")),
+        "version_no": get_value("version_no"),
+        "config_hash": get_value("config_hash", ""),
+        "standard_version": get_value("standard_version_id"),
+        "standard_title": get_value("standard_title", ""),
+        "frozen": bool(get_value("frozen", False)),
+        "legacy_compatible": bool(get_value("legacy_compatible", False)),
     }
 
 
@@ -1253,7 +1267,18 @@ def classroom_evaluation_submission_row(
         "target": account_row(submission.target),
         "group": submission.group_id,
         "evaluation_version": submission.evaluation_version_id,
-        "evaluation_version_no": submission.evaluation_version.version_no,
+        "evaluation_version_no": (
+            submission.evaluation_version.version_no
+            if submission.evaluation_version_id
+            else None
+        ),
+        "standard_use": submission.standard_use_id,
+        "standard_version": (
+            submission.standard_use.standard_version_id
+            if submission.standard_use_id
+            else None
+        ),
+        "legacy_compatible": submission.legacy_compatible,
         "submission_id": str(submission.submission_id),
         "submission_version": submission.submission_version,
         "supersedes": submission.supersedes_id,

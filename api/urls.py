@@ -323,6 +323,21 @@ urlpatterns = [
         assessment_views.school_admin_question_review_action,
         name="api_school_admin_question_review_action",
     ),
+    path(
+        "school-admin/common-question-sets/",
+        assessment_views.school_admin_common_question_sets,
+        name="api_school_admin_common_question_sets",
+    ),
+    path(
+        "school-admin/common-question-sets/export/",
+        assessment_views.school_admin_common_question_sets_export,
+        name="api_school_admin_common_question_sets_export",
+    ),
+    path(
+        "school-admin/common-question-sets/<int:pk>/archive/",
+        assessment_views.school_admin_common_question_set_archive,
+        name="api_school_admin_common_question_set_archive",
+    ),
     path("teacher/dashboard/", views.teacher_dashboard, name="api_teacher_dashboard"),
     path("teacher/classes/", views.teacher_classes, name="api_teacher_classes"),
     path(

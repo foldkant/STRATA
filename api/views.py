@@ -108,11 +108,14 @@ from learning_analytics.services.evaluation_events import (
     EvaluationEventError,
     append_evaluation_submission,
     freeze_classroom_evaluation_standard,
-    publish_evaluation_config_version,
     release_classroom_evaluation_opportunities,
+    standard_binding_criteria,
     withdraw_classroom_evaluation_opportunities,
 )
-from learning_analytics.models import LessonStepEvaluationBinding
+from learning_analytics.models import (
+    ClassroomEvaluationStandardUse,
+    LessonStepEvaluationBinding,
+)
 from learning_analytics.services.group_collaboration_events import (
     GroupCollaborationEventError,
     group_collaboration_has_student_activity,
@@ -215,7 +218,6 @@ from .services import (
     import_students_from_xlsx,
     import_teachers_from_xlsx,
     get_teacher_ai_provider,
-    generate_classroom_evaluation_criteria_with_ai,
     generate_lesson_step_questions_with_ai,
     generate_learning_web_page_schema,
     publish_pretest_paper,
@@ -4750,21 +4752,63 @@ def _peer_possible_count(session: ClassroomSession) -> int:
     return count
 
 
+def _classroom_evaluation_source(session: ClassroomSession):
+    standard_use = (
+        ClassroomEvaluationStandardUse.objects.select_related(
+            "standard_version", "binding", "lesson_step"
+        )
+        .filter(session=session)
+        .first()
+    )
+    if standard_use is not None:
+        return standard_use
+    binding = (
+        LessonStepEvaluationBinding.objects.select_related("standard_version")
+        .prefetch_related("standard_version__criteria")
+        .filter(lesson_step_id=session.current_step_id)
+        .first()
+    )
+    if binding is not None:
+        criteria = standard_binding_criteria(binding)
+        return {
+            "id": binding.id,
+            "course_id": session.course_id,
+            "session_id": session.id,
+            "enable_self": binding.enable_self,
+            "enable_peer": binding.enable_peer,
+            "enable_teacher": binding.enable_teacher,
+            "self_criteria": criteria if binding.enable_self else [],
+            "peer_criteria": criteria if binding.enable_peer else [],
+            "teacher_criteria": criteria if binding.enable_teacher else [],
+            "version_no": binding.standard_version.version_no,
+            "config_hash": binding.standard_version.content_hash,
+            "standard_version_id": binding.standard_version_id,
+            "standard_title": binding.standard_version.title,
+            "created_at": binding.created_at,
+            "updated_at": binding.updated_at,
+            "frozen": False,
+            "legacy_compatible": False,
+        }
+    if session.evaluation_config_version_id:
+        return session.evaluation_config_version
+    return None
+
+
 def _teacher_evaluation_payload(
     session: ClassroomSession,
-    config: ClassroomEvaluationConfig | ClassroomEvaluationConfigVersion | None = None,
+    config=None,
 ) -> dict:
-    config = (
-        config
-        or session.evaluation_config_version
-        or ClassroomEvaluationConfig.objects.filter(course=session.course).first()
-    )
+    config = config or _classroom_evaluation_source(session)
     config_row = classroom_evaluation_config_row(config)
     runtime_enabled = bool(session.evaluation_enabled)
     profiles = _classroom_student_profiles(session)
     submissions = list(
         ClassroomEvaluationSubmission.objects.select_related(
-            "evaluator", "target", "group", "evaluation_version"
+            "evaluator",
+            "target",
+            "group",
+            "evaluation_version",
+            "standard_use__standard_version",
         )
         .filter(course=session.course, session=session)
         .order_by("-updated_at", "-id")
@@ -4959,52 +5003,10 @@ def _teacher_course_evaluation_payload(
 def _save_course_evaluation_config(
     request, course: Course, data
 ) -> ClassroomEvaluationConfig:
-    enable_self = _bool_value(data.get("enable_self", False))
-    enable_peer = _bool_value(data.get("enable_peer", False))
-    enable_teacher = _bool_value(data.get("enable_teacher", False))
-    self_criteria = _clean_evaluation_criteria(
-        data.get("self_criteria"), required=enable_self, label="自评"
+    raise ServiceError(
+        "课程级评价设置已停止使用，请在评价标准页面制定标准，并在课时设计中选择。",
+        status=410,
     )
-    peer_criteria = _clean_evaluation_criteria(
-        data.get("peer_criteria"), required=enable_peer, label="互评"
-    )
-    teacher_criteria = _clean_evaluation_criteria(
-        data.get("teacher_criteria"), required=enable_teacher, label="师评"
-    )
-    enable_self = bool(enable_self or self_criteria)
-    enable_peer = bool(enable_peer or peer_criteria)
-    enable_teacher = bool(enable_teacher or teacher_criteria)
-
-    config, _ = ClassroomEvaluationConfig.objects.get_or_create(
-        course=course,
-        defaults={"created_by": request.user},
-    )
-    config.enable_self = enable_self
-    config.enable_peer = enable_peer
-    config.enable_teacher = enable_teacher
-    config.self_criteria = self_criteria
-    config.peer_criteria = peer_criteria
-    config.teacher_criteria = teacher_criteria
-    if (enable_self or enable_peer or enable_teacher) and config.opened_at is None:
-        config.opened_at = timezone.now()
-    config.save()
-    publish_evaluation_config_version(config=config, actor=request.user)
-    write_audit(
-        request,
-        "teacher.course.evaluation.save",
-        school=request.user.school,
-        target_type="course",
-        target_id=course.id,
-        detail={
-            "enable_self": enable_self,
-            "enable_peer": enable_peer,
-            "enable_teacher": enable_teacher,
-            "self_count": len(self_criteria),
-            "peer_count": len(peer_criteria),
-            "teacher_count": len(teacher_criteria),
-        },
-    )
-    return config
 
 
 def _configured_evaluation_type_count(config: ClassroomEvaluationConfig | None) -> int:
@@ -5024,13 +5026,11 @@ def teacher_classroom_evaluation(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
         if request.method in {"POST", "PATCH"}:
-            config = ClassroomEvaluationConfig.objects.filter(
-                course=session.course
-            ).first()
             binding = (
                 LessonStepEvaluationBinding.objects.select_related(
                     "standard_version", "lesson_step__lesson__course"
                 )
+                .prefetch_related("standard_version__criteria")
                 .filter(lesson_step_id=session.current_step_id)
                 .first()
             )
@@ -5038,44 +5038,25 @@ def teacher_classroom_evaluation(request, pk):
                 enabled = _bool_value(request.data.get("evaluation_enabled", False))
                 if enabled and session.status != ClassroomSession.Status.RUNNING:
                     raise ServiceError("请先开启课堂，再开放评价。", status=400)
-                binding_type_count = (
-                    sum(
-                        [
-                            binding.enable_self,
-                            binding.enable_peer,
-                            binding.enable_teacher,
-                        ]
-                    )
-                    if binding
-                    else 0
-                )
-                if enabled and binding_type_count == 0 and _configured_evaluation_type_count(config) == 0:
+                if enabled and binding is None:
                     raise ServiceError(
-                        "请先回到课时设计设置并启用至少一类评价项。", status=400
+                        "当前环节尚未选择评价标准，请先在课时设计中完成设置。",
+                        status=400,
                     )
                 with transaction.atomic():
                     session = ClassroomSession.objects.select_for_update().get(
                         pk=session.pk
                     )
                     was_enabled = session.evaluation_enabled
-                    version = session.evaluation_config_version
-                    if enabled and version is None:
-                        if binding:
-                            standard_use = freeze_classroom_evaluation_standard(
-                                session=session, binding=binding, actor=request.user
-                            )
-                            version = standard_use.evaluation_config_version
-                        else:
-                            version = publish_evaluation_config_version(
-                                config=config, actor=request.user
-                            )
-                        session.evaluation_config_version = version
+                    standard_use = ClassroomEvaluationStandardUse.objects.filter(
+                        session=session
+                    ).first()
+                    if enabled and standard_use is None:
+                        standard_use = freeze_classroom_evaluation_standard(
+                            session=session, binding=binding, actor=request.user
+                        )
                     session.evaluation_enabled = enabled
-                    update_fields = [
-                        "evaluation_enabled",
-                        "evaluation_config_version",
-                        "updated_at",
-                    ]
+                    update_fields = ["evaluation_enabled", "updated_at"]
                     if enabled and not was_enabled:
                         session.evaluation_opened_at = timezone.now()
                         update_fields.append("evaluation_opened_at")
@@ -5084,7 +5065,7 @@ def teacher_classroom_evaluation(request, pk):
                         release_classroom_evaluation_opportunities(
                             session=session,
                             actor=request.user,
-                            version=version,
+                            version=standard_use,
                             occurred_at=session.evaluation_opened_at,
                         )
                     elif was_enabled:
@@ -5107,19 +5088,12 @@ def teacher_classroom_evaluation(request, pk):
                     },
                 )
                 return ok(
-                    _teacher_evaluation_payload(
-                        session, session.evaluation_config_version or config
-                    ),
+                    _teacher_evaluation_payload(session, standard_use),
                     "课堂评价已开启。" if enabled else "课堂评价已关闭。",
                 )
-            config = _save_course_evaluation_config(
-                request, session.course, request.data
-            )
-            return ok(
-                _teacher_evaluation_payload(
-                    session, session.evaluation_config_version or config
-                ),
-                "课堂评价设置已保存。",
+            raise ServiceError(
+                "评价内容请在评价标准页面维护，课堂只负责开启和执行。",
+                status=400,
             )
     except ServiceError as exc:
         return _service_fail(exc)
@@ -5131,14 +5105,7 @@ def teacher_classroom_evaluation(request, pk):
 @api_view(["POST"])
 @permission_classes([IsTeacher])
 def teacher_classroom_evaluation_ai_generate(request, pk):
-    try:
-        session = _teacher_classroom_session(request, pk)
-        payload = generate_classroom_evaluation_criteria_with_ai(
-            request, session, request.data
-        )
-    except ServiceError as exc:
-        return _service_fail(exc)
-    return ok(payload, "AI 已生成评价项草稿，请教师确认后保存。")
+    return fail("课堂中不能修改评价内容，请在评价标准页面维护。", status=410)
 
 
 @api_view(["POST"])
@@ -5146,10 +5113,12 @@ def teacher_classroom_evaluation_ai_generate(request, pk):
 def teacher_classroom_evaluation_submit(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
-        version = session.evaluation_config_version
-        if not session.evaluation_enabled or version is None:
+        standard_use = ClassroomEvaluationStandardUse.objects.select_related(
+            "standard_version"
+        ).filter(session=session).first()
+        if not session.evaluation_enabled or standard_use is None:
             raise ServiceError("本课堂尚未开启评价。", status=400)
-        config_row = classroom_evaluation_config_row(version)
+        config_row = classroom_evaluation_config_row(standard_use)
         if not config_row["enable_teacher"]:
             raise ServiceError("本课堂尚未开启师评。", status=400)
         try:
@@ -5168,7 +5137,7 @@ def teacher_classroom_evaluation_submit(request, pk):
         if profile is None:
             raise ServiceError("学生不属于当前课堂班级。", status=404)
         ratings, not_assessed = _validate_evaluation_response(
-            version,
+            standard_use,
             ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             request.data.get("ratings"),
             request.data.get("not_assessed"),
@@ -5187,7 +5156,7 @@ def teacher_classroom_evaluation_submit(request, pk):
             evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             evaluator=request.user,
             target=profile.user,
-            evaluation_version=version,
+            standard_use=standard_use,
             ratings=ratings,
             not_assessed=not_assessed,
             comment=comment,
@@ -5197,7 +5166,7 @@ def teacher_classroom_evaluation_submit(request, pk):
         return _service_fail(exc)
     except EvaluationEventError as exc:
         return fail(exc.message, status=400)
-    return ok(_teacher_evaluation_payload(session, version), "师评已保存。")
+    return ok(_teacher_evaluation_payload(session, standard_use), "师评已保存。")
 
 
 def _teacher_course_evaluation_class_group(
@@ -5212,101 +5181,22 @@ def _teacher_course_evaluation_class_group(
 @api_view(["GET", "POST", "PATCH"])
 @permission_classes([IsTeacher])
 def teacher_course_evaluation(request, pk):
-    try:
-        course = _teacher_course(request, pk)
-        class_group = _teacher_course_evaluation_class_group(request, course)
-        if request.method in {"POST", "PATCH"}:
-            config = _save_course_evaluation_config(request, course, request.data)
-            return ok(
-                _teacher_course_evaluation_payload(
-                    course, class_group=class_group, config=config
-                ),
-                "课程评价设置已保存。",
-            )
-    except ServiceError as exc:
-        return _service_fail(exc)
-    return ok(_teacher_course_evaluation_payload(course, class_group=class_group))
+    return fail(
+        "课程级评价入口已停止使用。评价标准在评价标准页面维护，课堂结果在课堂教学中查看。",
+        status=410,
+    )
 
 
 @api_view(["POST"])
 @permission_classes([IsTeacher])
 def teacher_course_evaluation_ai_generate(request, pk):
-    try:
-        course = _teacher_course(request, pk)
-        payload = generate_classroom_evaluation_criteria_with_ai(
-            request, None, request.data, course=course
-        )
-    except ServiceError as exc:
-        return _service_fail(exc)
-    return ok(payload, "AI 已生成评价项草稿，请教师确认后保存。")
+    return fail("请在评价标准页面维护评价内容。", status=410)
 
 
 @api_view(["POST"])
 @permission_classes([IsTeacher])
 def teacher_course_evaluation_submit(request, pk):
-    try:
-        course = _teacher_course(request, pk)
-        class_group = _teacher_course_evaluation_class_group(request, course)
-        if class_group is None:
-            raise ServiceError(
-                "请先为课程绑定班级。",
-                errors={"class_group": ["课程暂无可评价班级。"]},
-                status=400,
-            )
-        config = ClassroomEvaluationConfig.objects.filter(course=course).first()
-        config_row = classroom_evaluation_config_row(config)
-        if config is None or not config_row["enable_teacher"]:
-            raise ServiceError("本课程尚未开启师评。", status=400)
-        try:
-            target_id = int(request.data.get("target"))
-        except (TypeError, ValueError):
-            raise ServiceError(
-                "请选择要评价的学生。", errors={"target": ["请选择学生。"]}, status=400
-            )
-        profile = (
-            StudentProfile.objects.select_related("user")
-            .filter(user_id=target_id, class_group=class_group, user__is_active=True)
-            .first()
-        )
-        if profile is None:
-            raise ServiceError("学生不属于当前课程班级。", status=404)
-        version = publish_evaluation_config_version(config=config, actor=request.user)
-        ratings, not_assessed = _validate_evaluation_response(
-            version,
-            ClassroomEvaluationSubmission.EvaluationType.TEACHER,
-            request.data.get("ratings"),
-            request.data.get("not_assessed"),
-        )
-        comment = str(request.data.get("comment") or "").strip()
-        if len(comment) > 1000:
-            raise ServiceError(
-                "评价备注不能超过 1000 个字符。",
-                errors={"comment": ["评价备注不能超过 1000 个字符。"]},
-                status=400,
-            )
-        append_evaluation_submission(
-            course=course,
-            class_group=class_group,
-            session=None,
-            evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
-            evaluator=request.user,
-            target=profile.user,
-            evaluation_version=version,
-            ratings=ratings,
-            not_assessed=not_assessed,
-            comment=comment,
-            group=None,
-        )
-    except ServiceError as exc:
-        return _service_fail(exc)
-    except EvaluationEventError as exc:
-        return fail(exc.message, status=400)
-    return ok(
-        _teacher_course_evaluation_payload(
-            course, class_group=class_group, config=config
-        ),
-        "师评已保存。",
-    )
+    return fail("课程级师评已停止使用，请在具体课堂中执行师评。", status=410)
 
 
 def _student_evaluation_context(request, session_id):
@@ -5318,6 +5208,7 @@ def _student_evaluation_context(request, session_id):
             "lesson",
             "class_group",
             "evaluation_config_version",
+            "evaluation_standard_use__standard_version",
         )
         .filter(
             pk=session_id, school=request.user.school, class_group=profile.class_group
@@ -5328,10 +5219,7 @@ def _student_evaluation_context(request, session_id):
         raise ServiceError("课堂不存在或无权进入。", status=404)
     if session.status != ClassroomSession.Status.RUNNING:
         raise ServiceError("课堂尚未开始，暂不能评价。", status=403)
-    config = (
-        session.evaluation_config_version
-        or ClassroomEvaluationConfig.objects.filter(course=session.course).first()
-    )
+    config = _classroom_evaluation_source(session)
     collaboration = _open_group_collaboration(session)
     group = None
     if collaboration is not None:
@@ -5347,7 +5235,7 @@ def _student_evaluation_context(request, session_id):
 def _student_evaluation_payload(
     request,
     session: ClassroomSession,
-    config: ClassroomEvaluationConfig | None,
+    config,
     group: ClassroomGroup | None,
 ) -> dict:
     config_row = classroom_evaluation_config_row(config)
@@ -5371,7 +5259,11 @@ def _student_evaluation_payload(
     runtime_enabled = bool(session.evaluation_enabled)
     submissions = list(
         ClassroomEvaluationSubmission.objects.select_related(
-            "evaluator", "target", "group", "evaluation_version"
+            "evaluator",
+            "target",
+            "group",
+            "evaluation_version",
+            "standard_use__standard_version",
         )
         .filter(course=session.course, session=session, evaluator=request.user)
         .order_by("-updated_at", "-id")
@@ -5467,7 +5359,13 @@ def student_classroom_evaluation_submit(request, pk):
         )
         if not session.evaluation_enabled:
             raise ServiceError("教师尚未开放课堂评价。", status=400)
-        if config is None or not isinstance(config, ClassroomEvaluationConfigVersion):
+        standard_use = (
+            config if isinstance(config, ClassroomEvaluationStandardUse) else None
+        )
+        legacy_version = (
+            config if isinstance(config, ClassroomEvaluationConfigVersion) else None
+        )
+        if standard_use is None and legacy_version is None:
             raise ServiceError("教师尚未开启课堂评价。", status=400)
         evaluation_type = str(request.data.get("evaluation_type") or "").strip()
         if evaluation_type not in {
@@ -5533,7 +5431,8 @@ def student_classroom_evaluation_submit(request, pk):
             evaluation_type=evaluation_type,
             evaluator=request.user,
             target=target,
-            evaluation_version=config,
+            evaluation_version=legacy_version,
+            standard_use=standard_use,
             ratings=ratings,
             not_assessed=not_assessed,
             comment=comment,

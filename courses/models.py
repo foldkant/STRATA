@@ -846,6 +846,8 @@ class ClassroomGroupFile(models.Model):
 
 
 class ClassroomEvaluationConfig(models.Model):
+    """Legacy course-level evaluation configuration kept for historical reads only."""
+
     course = models.OneToOneField(
         Course,
         on_delete=models.CASCADE,
@@ -865,6 +867,7 @@ class ClassroomEvaluationConfig(models.Model):
         related_name="created_course_evaluation_configs",
     )
     opened_at = models.DateTimeField(null=True, blank=True)
+    legacy_only = models.BooleanField(default=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -880,6 +883,8 @@ class ClassroomEvaluationConfig(models.Model):
 
 
 class ClassroomEvaluationConfigVersion(models.Model):
+    """Legacy immutable snapshot kept for submissions created before standard binding."""
+
     course = models.ForeignKey(
         Course,
         on_delete=models.CASCADE,
@@ -893,6 +898,7 @@ class ClassroomEvaluationConfigVersion(models.Model):
     self_criteria = models.JSONField(default=list, blank=True)
     peer_criteria = models.JSONField(default=list, blank=True)
     teacher_criteria = models.JSONField(default=list, blank=True)
+    legacy_only = models.BooleanField(default=True, editable=False)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -979,8 +985,18 @@ class ClassroomEvaluationSubmission(models.Model):
     evaluation_version = models.ForeignKey(
         ClassroomEvaluationConfigVersion,
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="submissions",
     )
+    standard_use = models.ForeignKey(
+        "learning_analytics.ClassroomEvaluationStandardUse",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="submissions",
+    )
+    legacy_compatible = models.BooleanField(default=False, editable=False)
     submission_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     submission_version = models.PositiveIntegerField(default=1)
     analytics_attempt_id = models.UUIDField(
@@ -1030,6 +1046,7 @@ class ClassroomEvaluationSubmission(models.Model):
             models.Index(fields=["session", "evaluation_type", "updated_at"]),
             models.Index(fields=["target", "updated_at"]),
             models.Index(fields=["group", "evaluation_type"]),
+            models.Index(fields=["standard_use", "evaluation_type", "updated_at"]),
         ]
         ordering = ["-updated_at", "-id"]
 

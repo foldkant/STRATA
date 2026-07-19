@@ -4159,6 +4159,7 @@ def _teacher_classroom_session(request, session_id) -> ClassroomSession:
                 "current_step",
                 "current_step__lesson",
                 "evaluation_config_version",
+                "evaluation_standard_use__standard_version",
             )
             .filter(
                 pk=int(session_id), school=request.user.school, teacher=request.user
@@ -6050,7 +6051,11 @@ def finish_classroom_session(request, session: ClassroomSession) -> ClassroomSes
         )
     except ClassroomInteractionEventError as exc:
         raise ServiceError(exc.message, status=400) from exc
-    if evaluation_was_enabled or session.evaluation_config_version_id:
+    if (
+        evaluation_was_enabled
+        or session.evaluation_config_version_id
+        or hasattr(session, "evaluation_standard_use")
+    ):
         try:
             withdraw_classroom_evaluation_opportunities(
                 session=session,

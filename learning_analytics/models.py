@@ -1182,6 +1182,88 @@ class ParticipationPointLedger(models.Model):
         return f"{self.student_id}:{self.delta}:{self.reason_code}"
 
 
+class StudentLearningSummary(models.Model):
+    class WindowType(models.TextChoices):
+        DAY = "day", "当日"
+        DAYS_7 = "7d", "近 7 日"
+        DAYS_30 = "30d", "近 30 日"
+        UNIT = "unit", "单元"
+
+    class DataStatus(models.TextChoices):
+        AVAILABLE = "available", "材料可用"
+        INSUFFICIENT = "insufficient", "材料不足"
+        NO_OPPORTUNITY = "no_opportunity", "没有学习任务"
+        QUALITY_BLOCKED = "quality_blocked", "学习记录需检查"
+
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="student_learning_summaries"
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="learning_summaries"
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup", on_delete=models.PROTECT, related_name="student_learning_summaries"
+    )
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="student_learning_summaries"
+    )
+    course = models.ForeignKey(
+        "courses.Course", on_delete=models.PROTECT, null=True, blank=True, related_name="student_learning_summaries"
+    )
+    window_type = models.CharField(max_length=16, choices=WindowType.choices)
+    period_key = models.CharField(max_length=128)
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    data_status = models.CharField(max_length=24, choices=DataStatus.choices)
+    metrics = models.JSONField(default=dict)
+    missing_data = models.JSONField(default=list, blank=True)
+    source_hash = models.CharField(max_length=64)
+    generator_version = models.CharField(max_length=32, default="summary-v1")
+    generated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "subject", "course", "window_type", "period_key"],
+                name="uniq_student_learning_summary_scope",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["school", "class_group", "window_type", "window_end"]),
+            models.Index(fields=["student", "subject", "window_end"]),
+            models.Index(fields=["data_status", "generated_at"]),
+        ]
+        ordering = ["-window_end", "student_id", "subject_id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.window_end <= self.window_start:
+            errors["window_end"] = "汇总结束时间必须晚于开始时间。"
+        if self.student_id and self.student.role != self.student.Role.STUDENT:
+            errors["student"] = "学习情况汇总只能属于学生。"
+        if self.student_id and self.student.school_id != self.school_id:
+            errors["student"] = "学生与汇总学校不一致。"
+        if self.class_group_id and self.class_group.school_id != self.school_id:
+            errors["class_group"] = "班级与汇总学校不一致。"
+        if self.subject_id and self.subject.school_id != self.school_id:
+            errors["subject"] = "学科与汇总学校不一致。"
+        if self.course_id and self.course.subject_id != self.subject_id:
+            errors["course"] = "课程与汇总学科不一致。"
+        if not isinstance(self.metrics, dict):
+            errors["metrics"] = "学习情况必须是对象。"
+        if not isinstance(self.missing_data, list):
+            errors["missing_data"] = "材料说明必须是列表。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.student_id}:{self.subject_id}:{self.window_type}:{self.period_key}"
+
+
 class LearningEventRejection(models.Model):
     class ReplayStatus(models.TextChoices):
         PENDING = "pending", "待处理"

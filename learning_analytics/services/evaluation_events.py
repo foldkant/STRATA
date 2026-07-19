@@ -173,6 +173,9 @@ def freeze_classroom_evaluation_standard(
     if not criteria:
         raise EvaluationEventError("evaluation_standard_empty", "评价标准没有可用评价指标。")
     snapshot = {
+        "standard_version_id": binding.standard_version_id,
+        "standard_version_no": binding.standard_version.version_no,
+        "standard_content_hash": binding.standard_version.content_hash,
         "enable_self": binding.enable_self,
         "enable_peer": binding.enable_peer,
         "enable_teacher": binding.enable_teacher,
@@ -181,31 +184,19 @@ def freeze_classroom_evaluation_standard(
         "teacher_criteria": criteria if binding.enable_teacher else [],
     }
     config_hash = evaluation_config_hash(snapshot)
-    version = ClassroomEvaluationConfigVersion.objects.filter(
-        course=session.course,
-        config_hash=config_hash,
-    ).first()
-    if version is None:
-        latest_no = (
-            ClassroomEvaluationConfigVersion.objects.filter(course=session.course).aggregate(
-                value=Max("version_no")
-            )["value"]
-            or 0
-        )
-        version = ClassroomEvaluationConfigVersion.objects.create(
-            course=session.course,
-            version_no=latest_no + 1,
-            config_hash=config_hash,
-            created_by=actor,
-            **snapshot,
-        )
     return ClassroomEvaluationStandardUse.objects.create(
         session=session,
         binding=binding,
         lesson_step=binding.lesson_step,
         standard_version=binding.standard_version,
-        evaluation_config_version=version,
+        evaluation_config_version=None,
         criteria_snapshot=criteria,
+        configuration_snapshot=snapshot,
+        content_hash=config_hash,
+        enable_self=binding.enable_self,
+        enable_peer=binding.enable_peer,
+        enable_teacher=binding.enable_teacher,
+        legacy_compatible=False,
         opened_by=actor,
     )
 
@@ -244,7 +235,9 @@ def capture_evaluation_submission_evidence(submission):
     )
 
 
-def evaluation_version_label(version: ClassroomEvaluationConfigVersion) -> str:
+def evaluation_version_label(version: ClassroomEvaluationConfigVersion | None) -> str:
+    if version is None:
+        return "legacy:unknown"
     return (
         f"course:{version.course_id}:v{version.version_no}:{version.config_hash[:12]}"
     )
@@ -259,7 +252,11 @@ def classroom_evaluation_object_version(*, session, version) -> str:
     standard_use = ClassroomEvaluationStandardUse.objects.filter(
         session_id=session.id
     ).select_related("standard_version").first()
-    return standard_use_version_label(standard_use) if standard_use else version.config_hash
+    return (
+        standard_use_version_label(standard_use)
+        if standard_use
+        else getattr(version, "config_hash", "legacy:unknown")
+    )
 
 
 def _criteria_for_type(version, evaluation_type: str) -> list[dict]:
@@ -520,15 +517,24 @@ def append_evaluation_submission(
     evaluation_type: str,
     evaluator,
     target,
-    evaluation_version: ClassroomEvaluationConfigVersion,
+    evaluation_version: ClassroomEvaluationConfigVersion | None = None,
+    standard_use: ClassroomEvaluationStandardUse | None = None,
     ratings: dict,
     not_assessed: dict,
     comment: str,
     session=None,
     group=None,
 ) -> ClassroomEvaluationSubmission:
-    if evaluation_version.course_id != course.id:
+    runtime_config = standard_use or evaluation_version
+    if runtime_config is None:
+        raise EvaluationEventError("evaluation_version_missing", "评价提交缺少课堂冻结版本。")
+    if runtime_config.course_id != course.id:
         raise EvaluationEventError("evaluation_course_mismatch", "评价评价标准不属于当前课程。")
+    if session and standard_use is None:
+        standard_use = ClassroomEvaluationStandardUse.objects.filter(session=session).first()
+        runtime_config = standard_use or evaluation_version
+    if standard_use and session and standard_use.session_id != session.id:
+        raise EvaluationEventError("evaluation_session_mismatch", "课堂冻结版本不属于当前课堂。")
     query = ClassroomEvaluationSubmission.objects.select_for_update().filter(
         course=course,
         session=session,
@@ -546,6 +552,8 @@ def append_evaluation_submission(
         target=target,
         group=group,
         evaluation_version=evaluation_version,
+        standard_use=standard_use,
+        legacy_compatible=standard_use is None,
         submission_version=(previous.submission_version + 1 if previous else 1),
         supersedes=previous,
         ratings=ratings,
@@ -557,7 +565,7 @@ def append_evaluation_submission(
         release_classroom_evaluation_opportunities(
             session=session,
             actor=session.teacher,
-            version=evaluation_version,
+            version=runtime_config,
         )
         object_id = classroom_evaluation_object_id(session, evaluation_type)
     else:
@@ -572,7 +580,7 @@ def append_evaluation_submission(
     object_version = (
         standard_use_version_label(evidence.standard_use)
         if evidence
-        else evaluation_version.config_hash
+        else getattr(runtime_config, "config_hash", "legacy:unknown")
     )
     opportunity = _active_evaluation_opportunity(
         student=target,
@@ -582,7 +590,7 @@ def append_evaluation_submission(
     criterion_order = {
         item["id"]: index
         for index, item in enumerate(
-            _criteria_for_type(evaluation_version, evaluation_type)
+            _criteria_for_type(runtime_config, evaluation_type)
         )
     }
     criterion_ratings = [
@@ -641,6 +649,7 @@ def append_evaluation_submission(
                 "target_id": target.id,
                 "group_id": group.id if group else None,
                 "evaluation_version": evaluation_version_label(evaluation_version),
+                "standard_use": standard_use.id if standard_use else None,
                 "ratings": ratings,
                 "not_assessed": not_assessed,
             },

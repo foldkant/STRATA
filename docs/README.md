@@ -25,6 +25,7 @@
 - [学生学习分析与分层教学开发计划](student_behavior_ai_stratification_development_roadmap.md)：用通俗阶段说明当前进度、固定开发顺序、模拟数据用途和每阶段验收要求。
 - [当前开发进度](implementation_progress_audit.md)：按 Git、迁移、测试和真实组件运行结果说明已经完成、正在开发和尚未开始的工作。
 - [教师评价标准管理](evaluation_management.md)：记录教师课程评价方案、评价标准、评价指标、评分示例、试用记录、版本管理和权限边界。
+- [测试与共同题集合](assessment_module_design.md)：记录普通题、共同题、分层题、题目版本、组卷快照、共同测量比较和小样本提示规则。
 - [学习数据检查](data_quality_pipeline.md)：定义七项检查指标、完整日窗口、重试状态、本校 API、夜间任务和学校管理员页面。
 - [学习事件新旧记录迁移清单](learning_event_write_inventory.md)：盘点测试、课堂、资源、评价、聊天和小组业务的现有写入入口、新版记录映射与兼容写入验收要求。
 - [学生评价、积分与奖章设计](student_evaluation_incentive_design.md)：规定成绩、五星评价标准、核心素养证据、课堂积分/奖章和 AI 内部建议的隔离、可见性与实施顺序。

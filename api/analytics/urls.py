@@ -1,9 +1,34 @@
 from django.urls import path
 
-from . import evaluation_views, event_views, school_admin_views
+from . import evaluation_views, event_views, school_admin_views, teacher_views
 
 app_name = "analytics_api"
 urlpatterns = [
+    path(
+        "teacher/analytics/learning-summaries/",
+        teacher_views.learning_summaries,
+        name="teacher_learning_summaries",
+    ),
+    path(
+        "teacher/analytics/learning-summaries/refresh/",
+        teacher_views.refresh_learning_summaries,
+        name="teacher_learning_summaries_refresh",
+    ),
+    path(
+        "teacher/analytics/learning-summaries/export/",
+        teacher_views.export_learning_summaries,
+        name="teacher_learning_summaries_export",
+    ),
+    path(
+        "teacher/analytics/stratification/",
+        teacher_views.stratification_suggestions,
+        name="teacher_stratification_suggestions",
+    ),
+    path(
+        "teacher/analytics/stratification/<int:pk>/review/",
+        teacher_views.review_stratification_suggestion,
+        name="teacher_stratification_review",
+    ),
     path(
         "teacher/evaluations/options/",
         evaluation_views.evaluation_options,

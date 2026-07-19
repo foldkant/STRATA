@@ -1,6 +1,9 @@
 from django.contrib import admin
 
 from .models import (
+    AssessmentComparabilityRecord,
+    CommonQuestionSet,
+    CommonQuestionSetItem,
     LearningEvent,
     QuestionBankItem,
     QuestionBankItemLifecycleRecord,
@@ -133,5 +136,44 @@ class TestAttemptAdmin(admin.ModelAdmin):
     list_filter = ("status", "class_group", "assessment")
     search_fields = ("student__username", "student__display_name", "assessment__title")
     inlines = (TestAttemptAnswerInline,)
+
+
+class CommonQuestionSetItemInline(admin.TabularInline):
+    model = CommonQuestionSetItem
+    extra = 0
+    readonly_fields = ("question_version", "comparison_code", "required", "sort_order")
+
+
+@admin.register(CommonQuestionSet)
+class CommonQuestionSetAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "school",
+        "subject",
+        "grade_scope",
+        "term",
+        "version_no",
+        "status",
+        "updated_at",
+    )
+    list_filter = ("status", "school", "subject", "grade_scope", "term")
+    search_fields = ("title", "subject__name", "created_by__username")
+    inlines = (CommonQuestionSetItemInline,)
+
+
+@admin.register(AssessmentComparabilityRecord)
+class AssessmentComparabilityRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "left_assessment",
+        "right_assessment",
+        "status",
+        "common_question_count",
+        "left_sample_size",
+        "right_sample_size",
+        "compared_at",
+    )
+    list_filter = ("status", "school")
+    search_fields = ("left_assessment__title", "right_assessment__title")
+    readonly_fields = [field.name for field in AssessmentComparabilityRecord._meta.fields]
 
 # Register your models here.

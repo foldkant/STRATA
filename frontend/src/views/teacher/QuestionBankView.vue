@@ -36,6 +36,7 @@ const questionType = ref('')
 const difficulty = ref('')
 const status = ref('')
 const source = ref('')
+const itemRole = ref('')
 const modalOpen = ref(false)
 const editing = ref<BankQuestion | null>(null)
 const errors = ref<FieldErrors>({})
@@ -67,7 +68,9 @@ const form = reactive<BankQuestionPayload>({
   analysis: '',
   difficulty: 'normal',
   knowledge_point: '',
-  default_score: 2
+  default_score: 2,
+  item_role: 'regular',
+  layer_scope: 'all'
 })
 
 const isChoice = computed(() => ['single', 'multiple'].includes(form.question_type))
@@ -226,6 +229,8 @@ function resetForm() {
   form.difficulty = 'normal'
   form.knowledge_point = ''
   form.default_score = 2
+  form.item_role = 'regular'
+  form.layer_scope = 'all'
   optionDrafts.value = ['', '', '', '']
   answerDrafts.value = []
 }
@@ -246,7 +251,9 @@ function openEdit(row: BankQuestion) {
     analysis: row.analysis,
     difficulty: row.difficulty,
     knowledge_point: row.knowledge_point,
-    default_score: row.default_score
+    default_score: row.default_score,
+    item_role: row.item_role === 'layered' ? 'layered' : 'regular',
+    layer_scope: row.layer_scope
   })
   optionDrafts.value = row.question_type === 'judge' ? ['正确', '错误'] : [...row.options, '', '', '', ''].slice(0, Math.max(row.options.length, 4))
   answerDrafts.value = [...row.answer]
@@ -293,6 +300,7 @@ function validate() {
   if ((isChoice.value || isJudge.value) && cleaned.length < 2) next.options = ['至少设置两个选项。']
   if (form.question_type !== 'text' && !answerDrafts.value.length) next.answer = ['请设置参考答案。']
   if (form.default_score <= 0 || form.default_score > 100) next.default_score = ['分值应在 0-100 之间。']
+  if (form.item_role === 'layered' && form.layer_scope === 'all') next.layer_scope = ['请选择适用层级。']
   errors.value = next
   return !Object.keys(next).length
 }
@@ -392,7 +400,8 @@ async function load() {
       question_type: questionType.value,
       difficulty: difficulty.value,
       status: scope.value === 'mine' ? status.value : '',
-      source: source.value
+      source: source.value,
+      item_role: itemRole.value
     })
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '题库加载失败。'
@@ -442,6 +451,7 @@ onMounted(async () => {
         <select v-model="difficulty" aria-label="按难度筛选" @change="load"><option value="">全部难度</option><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select>
         <select v-if="scope === 'mine'" v-model="status" aria-label="按状态筛选" @change="load"><option value="">全部状态</option><option v-for="item in options?.question_statuses" :key="item.value" :value="item.value">{{ item.value === 'draft' ? '个人可用 / 待修改' : item.label }}</option></select>
         <select v-model="source" aria-label="按来源筛选" @change="load"><option value="">全部来源</option><option v-for="item in options?.question_sources" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+        <select v-model="itemRole" aria-label="按题目用途筛选" @change="load"><option value="">全部用途</option><option v-for="item in options?.item_roles" :key="item.value" :value="item.value">{{ item.label }}</option></select>
         <button class="secondary-button" type="button" @click="load">查询</button>
       </div>
 
@@ -449,7 +459,7 @@ onMounted(async () => {
         <article v-for="item in rows" :key="item.id" class="assessment-bank-card lifecycle-bank-card" :class="`question-status-${item.status}`">
           <header>
             <div>
-              <span>{{ item.subject.name }} · {{ item.question_type_label }} · {{ item.difficulty_label }}</span>
+              <span>{{ item.subject.name }} · {{ item.question_type_label }} · {{ item.difficulty_label }} · {{ item.item_role_label }}<template v-if="item.item_role === 'layered'">（{{ item.layer_scope_label }}）</template></span>
               <strong>{{ item.stem }}</strong>
               <div class="question-lifecycle-meta">
                 <span class="question-status-badge" :class="`question-status-${item.status}`">{{ teacherStatusLabel(item) }}</span>
@@ -496,6 +506,8 @@ onMounted(async () => {
             <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><select v-model="form.subject" required><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select><small v-if="errors.subject" class="field-error">{{ errors.subject[0] }}</small></label>
             <label><span>题型 <b class="required-mark" aria-hidden="true">*</b></span><select :value="form.question_type" required @change="setType(($event.target as HTMLSelectElement).value)"><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
             <label><span>难度</span><select v-model="form.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+            <label><span>题目用途</span><select v-model="form.item_role" @change="form.layer_scope = form.item_role === 'layered' ? 'a' : 'all'"><option value="regular">普通题</option><option value="layered">分层题</option></select></label>
+            <label v-if="form.item_role === 'layered'"><span>适用层级 <b class="required-mark" aria-hidden="true">*</b></span><select v-model="form.layer_scope"><option v-for="item in options?.layer_scopes.filter((row) => row.value !== 'all')" :key="item.value" :value="item.value">{{ item.label }}</option></select><small v-if="errors.layer_scope" class="field-error">{{ errors.layer_scope[0] }}</small></label>
             <label><span>默认分值 <b class="required-mark" aria-hidden="true">*</b></span><input v-model.number="form.default_score" type="number" min="0.5" max="100" step="0.5" required /><small v-if="errors.default_score" class="field-error">{{ errors.default_score[0] }}</small></label>
           </div>
           <label class="assessment-wide-field"><span>题干 <b class="required-mark" aria-hidden="true">*</b></span><textarea v-model.trim="form.stem" rows="4" maxlength="2000" placeholder="请输入题目内容" required></textarea><small v-if="errors.stem" class="field-error">{{ errors.stem[0] }}</small></label>

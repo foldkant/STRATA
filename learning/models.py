@@ -89,6 +89,9 @@ class StratificationDecision(models.Model):
     class Status(models.TextChoices):
         PENDING = "pending", "待教师确认"
         ACCEPTED = "accepted", "已采纳"
+        KEPT = "kept", "保持当前安排"
+        ADJUSTED = "adjusted", "教师已调整"
+        DEFERRED = "deferred", "暂缓处理"
         REJECTED = "rejected", "已拒绝"
 
     student = models.ForeignKey(
@@ -97,10 +100,24 @@ class StratificationDecision(models.Model):
         related_name="layer_decisions",
     )
     class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT)
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, null=True, blank=True
+    )
+    course = models.ForeignKey(
+        "courses.Course", on_delete=models.PROTECT, null=True, blank=True
+    )
     previous_layer = models.CharField(max_length=1)
     suggested_layer = models.CharField(max_length=1)
     confidence = models.FloatField(default=0)
     reasons = models.JSONField(default=list, blank=True)
+    missing_data = models.JSONField(default=list, blank=True)
+    learning_summary = models.JSONField(default=dict, blank=True)
+    support_suggestion = models.TextField(blank=True)
+    window_start = models.DateTimeField(null=True, blank=True)
+    window_end = models.DateTimeField(null=True, blank=True)
+    rule_version = models.CharField(max_length=32, default="transparent-rules-v1")
+    teacher_selected_layer = models.CharField(max_length=1, blank=True)
+    review_note = models.TextField(blank=True)
     model_version = models.ForeignKey(
         "aiops.ModelVersion", on_delete=models.SET_NULL, null=True, blank=True
     )
@@ -118,8 +135,15 @@ class StratificationDecision(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "course", "window_end", "rule_version"],
+                name="uniq_stratification_suggestion_window",
+            )
+        ]
         indexes = [
             models.Index(fields=["class_group", "status", "created_at"]),
+            models.Index(fields=["subject", "status", "created_at"]),
         ]
 
 
@@ -265,6 +289,19 @@ class QuestionBankItem(models.Model):
         PERSONAL = "personal", "个人题目"
         SCHOOL = "school", "校内共享"
 
+    class ItemRole(models.TextChoices):
+        REGULAR = "regular", "普通题"
+        COMMON = "common", "共同题"
+        LAYERED = "layered", "分层题"
+
+    class LayerScope(models.TextChoices):
+        ALL = "all", "全体"
+        A = "a", "A"
+        B = "b", "B"
+        C = "c", "C"
+        AB = "ab", "A/B"
+        BC = "bc", "B/C"
+
     school = models.ForeignKey(
         "school.School", on_delete=models.CASCADE, related_name="question_bank_items"
     )
@@ -298,6 +335,17 @@ class QuestionBankItem(models.Model):
         choices=LibraryScope.choices,
         default=LibraryScope.PERSONAL,
     )
+    item_role = models.CharField(
+        max_length=16,
+        choices=ItemRole.choices,
+        default=ItemRole.REGULAR,
+    )
+    layer_scope = models.CharField(
+        max_length=8,
+        choices=LayerScope.choices,
+        default=LayerScope.ALL,
+    )
+    comparison_code = models.CharField(max_length=64, blank=True, db_index=True)
     version_no = models.PositiveIntegerField(default=1)
     content_hash = models.CharField(max_length=64, blank=True, db_index=True)
     submitted_for_review_at = models.DateTimeField(null=True, blank=True)
@@ -329,6 +377,7 @@ class QuestionBankItem(models.Model):
             models.Index(fields=["school", "library_scope", "status"]),
             models.Index(fields=["school", "status", "submitted_for_review_at"]),
             models.Index(fields=["question_type", "difficulty"]),
+            models.Index(fields=["school", "subject", "item_role", "comparison_code"]),
         ]
         ordering = ["-updated_at", "-id"]
 
@@ -383,6 +432,17 @@ class QuestionBankItemVersion(models.Model):
     )
     knowledge_point = models.CharField(max_length=128, blank=True)
     default_score = models.FloatField(default=2)
+    item_role = models.CharField(
+        max_length=16,
+        choices=QuestionBankItem.ItemRole.choices,
+        default=QuestionBankItem.ItemRole.REGULAR,
+    )
+    layer_scope = models.CharField(
+        max_length=8,
+        choices=QuestionBankItem.LayerScope.choices,
+        default=QuestionBankItem.LayerScope.ALL,
+    )
+    comparison_code = models.CharField(max_length=64, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -443,6 +503,88 @@ class QuestionBankItemLifecycleRecord(models.Model):
         return f"{self.original_question_id}:{self.from_status}->{self.to_status}"
 
 
+class CommonQuestionSet(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "草稿"
+        ACTIVE = "active", "启用"
+        ARCHIVED = "archived", "归档"
+
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="common_question_sets"
+    )
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="common_question_sets"
+    )
+    title = models.CharField(max_length=128)
+    grade_scope = models.CharField(max_length=32, blank=True)
+    term = models.CharField(max_length=32, blank=True)
+    version_no = models.PositiveIntegerField(default=1)
+    content_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_common_question_sets",
+    )
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="published_common_question_sets",
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "subject", "grade_scope", "term", "version_no"],
+                name="uniq_common_question_set_version",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["school", "subject", "status", "updated_at"]),
+        ]
+        ordering = ["subject_id", "grade_scope", "term", "-version_no"]
+
+    def __str__(self) -> str:
+        return f"{self.title} v{self.version_no}"
+
+
+class CommonQuestionSetItem(models.Model):
+    question_set = models.ForeignKey(
+        CommonQuestionSet, on_delete=models.CASCADE, related_name="items"
+    )
+    question_version = models.ForeignKey(
+        QuestionBankItemVersion,
+        on_delete=models.PROTECT,
+        related_name="common_set_items",
+    )
+    comparison_code = models.CharField(max_length=64)
+    required = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["question_set", "question_version"],
+                name="uniq_common_set_question_version",
+            ),
+            models.UniqueConstraint(
+                fields=["question_set", "comparison_code"],
+                name="uniq_common_set_comparison_code",
+            ),
+        ]
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.question_set_id}:{self.comparison_code}"
+
+
 class TestAssessment(models.Model):
     class Status(models.TextChoices):
         DRAFT = "draft", "草稿"
@@ -469,6 +611,15 @@ class TestAssessment(models.Model):
         blank=True,
         related_name="test_assessments",
     )
+    common_question_set = models.ForeignKey(
+        "CommonQuestionSet",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="assessments",
+    )
+    common_set_version = models.PositiveIntegerField(null=True, blank=True)
+    common_set_hash = models.CharField(max_length=64, blank=True)
     target_classes = models.ManyToManyField(
         "school.ClassGroup", related_name="test_assessments"
     )
@@ -533,6 +684,17 @@ class TestAssessmentQuestion(models.Model):
     knowledge_point = models.CharField(max_length=128, blank=True)
     score = models.FloatField(default=2)
     sort_order = models.PositiveIntegerField(default=0)
+    item_role = models.CharField(
+        max_length=16,
+        choices=QuestionBankItem.ItemRole.choices,
+        default=QuestionBankItem.ItemRole.REGULAR,
+    )
+    layer_scope = models.CharField(
+        max_length=8,
+        choices=QuestionBankItem.LayerScope.choices,
+        default=QuestionBankItem.LayerScope.ALL,
+    )
+    comparison_code = models.CharField(max_length=64, blank=True)
 
     class Meta:
         indexes = [models.Index(fields=["assessment", "sort_order", "id"])]
@@ -616,6 +778,49 @@ class TestAttemptAnswer(models.Model):
     @property
     def final_score(self) -> float:
         return self.manual_score if self.manual_score is not None else self.auto_score
+
+
+class AssessmentComparabilityRecord(models.Model):
+    class Status(models.TextChoices):
+        COMPARABLE = "comparable", "可以比较"
+        NOT_COMPARABLE = "not_comparable", "不可比较"
+        INSUFFICIENT = "insufficient", "数据不足"
+
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.CASCADE,
+        related_name="assessment_comparability_records",
+    )
+    left_assessment = models.ForeignKey(
+        TestAssessment,
+        on_delete=models.CASCADE,
+        related_name="comparisons_as_left",
+    )
+    right_assessment = models.ForeignKey(
+        TestAssessment,
+        on_delete=models.CASCADE,
+        related_name="comparisons_as_right",
+    )
+    status = models.CharField(max_length=24, choices=Status.choices)
+    common_question_count = models.PositiveIntegerField(default=0)
+    exact_version_match_count = models.PositiveIntegerField(default=0)
+    left_sample_size = models.PositiveIntegerField(default=0)
+    right_sample_size = models.PositiveIntegerField(default=0)
+    reasons = models.JSONField(default=list, blank=True)
+    compared_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["left_assessment", "right_assessment"],
+                name="uniq_assessment_comparison_pair",
+            )
+        ]
+        indexes = [models.Index(fields=["school", "status", "compared_at"])]
+        ordering = ["-compared_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.left_assessment_id}:{self.right_assessment_id}:{self.status}"
 
 
 class Notice(models.Model):

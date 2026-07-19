@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import random
 from datetime import timedelta
 
@@ -14,6 +17,9 @@ from api.responses import fail, ok
 from api.services import ServiceError, generate_question_bank_drafts_with_ai
 from courses.models import Course, Subject
 from learning.models import (
+    AssessmentComparabilityRecord,
+    CommonQuestionSet,
+    CommonQuestionSetItem,
     QuestionBankItem,
     TestAssessment,
     TestAssessmentQuestion,
@@ -53,6 +59,9 @@ def _service_error(exc: ServiceError):
     return fail(exc.message, errors=exc.errors, status=exc.status)
 
 
+MIN_QUESTION_STAT_SAMPLE = 30
+
+
 def _teacher_class_ids(user) -> list[int]:
     return list(
         TeachingAssignment.objects.filter(school=user.school, teacher=user).values_list("class_group_id", flat=True)
@@ -89,7 +98,7 @@ def _clean_answer_list(value) -> list[str]:
     return result
 
 
-def _clean_question_payload(data) -> dict:
+def _clean_question_payload(data, *, allow_common=False) -> dict:
     question_type = str(data.get("question_type") or "single").strip()
     allowed_types = {value for value, _ in QuestionBankItem.QuestionType.choices}
     if question_type not in allowed_types:
@@ -126,6 +135,29 @@ def _clean_question_payload(data) -> dict:
     difficulty = str(data.get("difficulty") or QuestionBankItem.Difficulty.NORMAL)
     if difficulty not in {value for value, _ in QuestionBankItem.Difficulty.choices}:
         difficulty = QuestionBankItem.Difficulty.NORMAL
+    item_role = str(data.get("item_role") or QuestionBankItem.ItemRole.REGULAR)
+    if item_role not in {value for value, _ in QuestionBankItem.ItemRole.choices}:
+        item_role = QuestionBankItem.ItemRole.REGULAR
+    if item_role == QuestionBankItem.ItemRole.COMMON and not allow_common:
+        item_role = QuestionBankItem.ItemRole.REGULAR
+    layer_scope = str(data.get("layer_scope") or QuestionBankItem.LayerScope.ALL)
+    if layer_scope not in {value for value, _ in QuestionBankItem.LayerScope.choices}:
+        layer_scope = QuestionBankItem.LayerScope.ALL
+    if item_role != QuestionBankItem.ItemRole.LAYERED:
+        layer_scope = QuestionBankItem.LayerScope.ALL
+    elif layer_scope == QuestionBankItem.LayerScope.ALL:
+        raise AssessmentError(
+            "分层题需要选择适用层级。",
+            errors={"layer_scope": ["请选择 A、B、C、A/B 或 B/C。"]},
+        )
+    comparison_code = _clean_text(data.get("comparison_code"), 64).upper()
+    if item_role != QuestionBankItem.ItemRole.COMMON:
+        comparison_code = ""
+    elif not comparison_code:
+        raise AssessmentError(
+            "共同题需要填写比较编号。",
+            errors={"comparison_code": ["比较编号用于跨班级和跨学期匹配同一道题。"]},
+        )
     return {
         "stem": stem,
         "question_type": question_type,
@@ -135,6 +167,9 @@ def _clean_question_payload(data) -> dict:
         "difficulty": difficulty,
         "knowledge_point": _clean_text(data.get("knowledge_point"), 128),
         "default_score": default_score,
+        "item_role": item_role,
+        "layer_scope": layer_scope,
+        "comparison_code": comparison_code,
     }
 
 
@@ -189,8 +224,11 @@ def _question_stats(question: QuestionBankItem) -> dict:
         "response_count": response_count,
         "correct_count": correct_count,
         "correct_rate": round(correct_count * 100 / response_count, 2)
-        if response_count
+        if response_count >= MIN_QUESTION_STAT_SAMPLE
         else None,
+        "data_status": (
+            "available" if response_count >= MIN_QUESTION_STAT_SAMPLE else "insufficient"
+        ),
         "trial_usage_count": int(getattr(question, "trial_use_count", 0) or 0),
         "trial_response_count": trial_response_count,
         "trial_correct_count": trial_correct_count,
@@ -198,7 +236,7 @@ def _question_stats(question: QuestionBankItem) -> dict:
             trial_correct_count * 100 / trial_response_count,
             2,
         )
-        if trial_response_count
+        if trial_response_count >= MIN_QUESTION_STAT_SAMPLE
         else None,
     }
 
@@ -223,6 +261,11 @@ def question_row(question: QuestionBankItem, *, include_answer: bool = True) -> 
         "source_label": question.get_source_display(),
         "library_scope": question.library_scope,
         "library_scope_label": question.get_library_scope_display(),
+        "item_role": question.item_role,
+        "item_role_label": question.get_item_role_display(),
+        "layer_scope": question.layer_scope,
+        "layer_scope_label": question.get_layer_scope_display(),
+        "comparison_code": question.comparison_code,
         "version_no": question.version_no,
         "content_hash": question.content_hash,
         "submitted_for_review_at": question.submitted_for_review_at,
@@ -294,9 +337,11 @@ def _question_detail_row(question: QuestionBankItem) -> dict:
     return row
 
 
-QUESTION_IMPORT_HEADERS = ["学科编号", "题型", "题干", "选项", "参考答案", "难度", "知识点", "默认分值", "答案解析"]
+QUESTION_IMPORT_HEADERS = ["学科编号", "题目用途", "适用层级", "题型", "题干", "选项", "参考答案", "难度", "知识点", "默认分值", "答案解析"]
 QUESTION_TYPE_IMPORT = {label: value for value, label in QuestionBankItem.QuestionType.choices}
 QUESTION_DIFFICULTY_IMPORT = {label: value for value, label in QuestionBankItem.Difficulty.choices}
+QUESTION_ROLE_IMPORT = {"普通题": QuestionBankItem.ItemRole.REGULAR, "分层题": QuestionBankItem.ItemRole.LAYERED}
+QUESTION_LAYER_IMPORT = {label: value for value, label in QuestionBankItem.LayerScope.choices}
 
 
 @api_view(["GET"])
@@ -306,16 +351,19 @@ def teacher_question_bank_template(request):
         "我的题目批量导入模板.xlsx",
         "我的题目",
         QUESTION_IMPORT_HEADERS,
-        [["IT", "单选", "十进制 2 的二进制表示是？", "10|11|01|00", "10", "基础", "二进制编码", "2", "2 对应二进制 10"]],
+        [["IT", "普通题", "全体", "单选", "十进制 2 的二进制表示是？", "10|11|01|00", "10", "基础", "二进制编码", "2", "2 对应二进制 10"]],
         instructions=[
             "学科编号必须使用学校管理员设置的学科编号。",
             "单选、多选、判断题的选项使用英文竖线 | 分隔；多选参考答案也使用 | 分隔。",
             "判断题选项可留空，系统自动使用“正确|错误”；简答题参考答案可留空。",
+            "题目用途可选普通题或分层题；分层题适用层级填写 A、B、C、A/B 或 B/C。",
             "导入成功后题目保存到“我的题目”，教师本人可直接组卷；需要校内共享时再申请审核。",
         ],
         dropdowns={
             "题型": [label for _, label in QuestionBankItem.QuestionType.choices],
             "难度": [label for _, label in QuestionBankItem.Difficulty.choices],
+            "题目用途": ["普通题", "分层题"],
+            "适用层级": ["全体", "A", "B", "C", "A/B", "B/C"],
         },
     )
 
@@ -333,9 +381,9 @@ def teacher_question_bank_export(request):
     return export_rows(
         f"{request.user.school.code}_题库导出_{timezone.localtime():%Y%m%d%H%M%S}.xlsx",
         "题库导出",
-        ["ID", "学科", "学科编号", "题型", "题干", "选项", "参考答案", "难度", "知识点", "默认分值", "答案解析", "创建教师", "来源", "题库范围", "状态", "版本", "试卷使用次数", "作答人数", "正确率", "审核说明", "更新时间"],
+        ["ID", "学科", "学科编号", "题目用途", "适用层级", "比较编号", "题型", "题干", "选项", "参考答案", "难度", "知识点", "默认分值", "答案解析", "创建教师", "来源", "题库范围", "状态", "版本", "试卷使用次数", "作答人数", "正确率", "审核说明", "更新时间"],
         [
-            [item.id, item.subject.name, item.subject.code, item.get_question_type_display(), item.stem, "|".join(item.options or []), "|".join(item.answer or []), item.get_difficulty_display(), item.knowledge_point, item.default_score, item.analysis, item.creator.display_name or item.creator.username, item.get_source_display(), item.get_library_scope_display(), item.get_status_display(), item.version_no, item.assessment_use_count, item.response_count, round(item.correct_count * 100 / item.response_count, 2) if item.response_count else "", item.review_note or item.disabled_reason, item.updated_at]
+            [item.id, item.subject.name, item.subject.code, item.get_item_role_display(), item.get_layer_scope_display(), item.comparison_code, item.get_question_type_display(), item.stem, "|".join(item.options or []), "|".join(item.answer or []), item.get_difficulty_display(), item.knowledge_point, item.default_score, item.analysis, item.creator.display_name or item.creator.username, item.get_source_display(), item.get_library_scope_display(), item.get_status_display(), item.version_no, item.assessment_use_count, item.response_count, round(item.correct_count * 100 / item.response_count, 2) if item.response_count >= MIN_QUESTION_STAT_SAMPLE else "数据不足", item.review_note or item.disabled_reason, item.updated_at]
             for item in questions
         ],
     )
@@ -377,6 +425,14 @@ def teacher_question_bank_import(request):
                 "difficulty": difficulty,
                 "knowledge_point": row.get("知识点"),
                 "default_score": row.get("默认分值") or 2,
+                "item_role": QUESTION_ROLE_IMPORT.get(
+                    str(row.get("题目用途") or "普通题").strip(),
+                    QuestionBankItem.ItemRole.REGULAR,
+                ),
+                "layer_scope": QUESTION_LAYER_IMPORT.get(
+                    str(row.get("适用层级") or "全体").strip(),
+                    QuestionBankItem.LayerScope.ALL,
+                ),
             })
             created.append(
                 QuestionBankItem(
@@ -421,6 +477,9 @@ def assessment_question_row(
                 "source_question": question.source_question_id,
                 "source_version": question.source_version_id,
                 "source_status": question.source_status,
+                "item_role": question.item_role,
+                "layer_scope": question.layer_scope,
+                "comparison_code": question.comparison_code,
             }
         )
     if include_answer:
@@ -443,6 +502,16 @@ def assessment_row(assessment: TestAssessment, *, detail: bool = False, include_
         "instruction": assessment.instruction,
         "subject": _subject_row(assessment.subject),
         "course": _course_row(assessment.course),
+        "common_question_set": (
+            {
+                "id": assessment.common_question_set_id,
+                "title": assessment.common_question_set.title,
+                "version_no": assessment.common_set_version,
+                "content_hash": assessment.common_set_hash,
+            }
+            if assessment.common_question_set_id
+            else None
+        ),
         "teacher": _user_row(assessment.teacher),
         "target_classes": [_class_row(item) for item in classes],
         "duration_minutes": assessment.duration_minutes,
@@ -499,7 +568,32 @@ def teacher_assessment_options(request):
         "question_types": [{"value": value, "label": label} for value, label in QuestionBankItem.QuestionType.choices],
         "difficulties": [{"value": value, "label": label} for value, label in QuestionBankItem.Difficulty.choices],
         "question_statuses": [{"value": value, "label": label} for value, label in QuestionBankItem.Status.choices],
-        "question_sources": [{"value": value, "label": label} for value, label in QuestionBankItem.Source.choices],
+            "question_sources": [{"value": value, "label": label} for value, label in QuestionBankItem.Source.choices],
+        "item_roles": [{"value": value, "label": label} for value, label in QuestionBankItem.ItemRole.choices],
+        "layer_scopes": [{"value": value, "label": label} for value, label in QuestionBankItem.LayerScope.choices],
+        "common_question_sets": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "subject": item.subject_id,
+                "grade_scope": item.grade_scope,
+                "term": item.term,
+                "version_no": item.version_no,
+                "question_count": item.items.count(),
+                "items": [
+                    {
+                        "question_id": row.question_version.original_question_id,
+                        "comparison_code": row.comparison_code,
+                        "required": row.required,
+                    }
+                    for row in item.items.all()
+                ],
+            }
+            for item in CommonQuestionSet.objects.filter(
+                school=request.user.school,
+                status=CommonQuestionSet.Status.ACTIVE,
+            ).select_related("subject").prefetch_related("items__question_version")
+        ],
     })
 
 
@@ -564,6 +658,7 @@ def teacher_question_bank(request):
     difficulty = request.query_params.get("difficulty")
     status_filter = str(request.query_params.get("status") or "").strip()
     source_filter = str(request.query_params.get("source") or "").strip()
+    item_role_filter = str(request.query_params.get("item_role") or "").strip()
     query = str(request.query_params.get("q") or "").strip()
     if subject_id:
         queryset = queryset.filter(subject_id=subject_id)
@@ -575,6 +670,8 @@ def teacher_question_bank(request):
         queryset = queryset.filter(status=status_filter)
     if source_filter:
         queryset = queryset.filter(source=source_filter)
+    if item_role_filter:
+        queryset = queryset.filter(item_role=item_role_filter)
     if query:
         queryset = queryset.filter(Q(stem__icontains=query) | Q(knowledge_point__icontains=query))
     rows = []
@@ -948,14 +1045,219 @@ def school_admin_question_reviews_export(request):
                 item.assessment_use_count,
                 item.trial_response_count,
                 round(item.trial_correct_count * 100 / item.trial_response_count, 2)
-                if item.trial_response_count
-                else "",
+                if item.trial_response_count >= MIN_QUESTION_STAT_SAMPLE
+                else "数据不足",
                 item.review_note or item.disabled_reason,
                 item.submitted_for_review_at,
                 item.updated_at,
             ]
             for item in questions.order_by("-updated_at", "-id")
         ],
+    )
+
+
+def _common_set_row(question_set) -> dict:
+    return {
+        "id": question_set.id,
+        "subject": _subject_row(question_set.subject),
+        "title": question_set.title,
+        "grade_scope": question_set.grade_scope,
+        "term": question_set.term,
+        "version_no": question_set.version_no,
+        "content_hash": question_set.content_hash,
+        "status": question_set.status,
+        "status_label": question_set.get_status_display(),
+        "question_count": len(getattr(question_set, "prefetched_items", [])),
+        "items": [
+            {
+                "id": item.id,
+                "question_id": item.question_version.original_question_id,
+                "question_version": item.question_version_id,
+                "question_version_no": item.question_version.version_no,
+                "stem": item.question_version.stem,
+                "comparison_code": item.comparison_code,
+                "required": item.required,
+                "sort_order": item.sort_order,
+            }
+            for item in getattr(question_set, "prefetched_items", [])
+        ],
+        "published_at": question_set.published_at,
+        "created_at": question_set.created_at,
+        "updated_at": question_set.updated_at,
+    }
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_common_question_sets(request):
+    if request.method == "GET":
+        rows = list(
+            CommonQuestionSet.objects.filter(school=request.user.school)
+            .select_related("subject")
+            .prefetch_related("items__question_version")
+        )
+        for row in rows:
+            row.prefetched_items = list(row.items.all())
+        return ok([_common_set_row(row) for row in rows])
+
+    subject = Subject.objects.filter(
+        pk=request.data.get("subject"), school=request.user.school, is_active=True
+    ).first()
+    if subject is None:
+        return fail("请选择本校有效学科。", status=400)
+    title = _clean_text(request.data.get("title"), 128)
+    grade_scope = _clean_text(request.data.get("grade_scope"), 32)
+    term = _clean_text(request.data.get("term"), 32)
+    raw_items = request.data.get("items") if isinstance(request.data.get("items"), list) else []
+    if len(title) < 2 or not raw_items:
+        return fail("请填写集合名称并至少选择一道共同题。", status=400)
+    question_ids = {
+        int(item.get("question_id"))
+        for item in raw_items
+        if isinstance(item, dict) and str(item.get("question_id")).isdigit()
+    }
+    questions = {
+        item.id: item
+        for item in QuestionBankItem.objects.filter(
+            id__in=question_ids,
+            school=request.user.school,
+            subject=subject,
+            library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+            status=QuestionBankItem.Status.ACTIVE,
+        )
+    }
+    if len(questions) != len(question_ids):
+        return fail("共同题只能选择本学科已启用的共享题目。", status=400)
+    cleaned_items = []
+    seen_codes = set()
+    for index, raw in enumerate(raw_items, start=1):
+        question = questions.get(int(raw.get("question_id") or 0)) if isinstance(raw, dict) else None
+        code = _clean_text(raw.get("comparison_code") if isinstance(raw, dict) else "", 64).upper()
+        if question is None or not code or code in seen_codes:
+            return fail("每道共同题都需要填写不重复的比较编号。", status=400)
+        seen_codes.add(code)
+        cleaned_items.append((question, code, bool(raw.get("required", True))))
+    with transaction.atomic():
+        latest = (
+            CommonQuestionSet.objects.select_for_update()
+            .filter(
+                school=request.user.school,
+                subject=subject,
+                grade_scope=grade_scope,
+                term=term,
+            )
+            .order_by("-version_no")
+            .first()
+        )
+        CommonQuestionSet.objects.filter(
+            school=request.user.school,
+            subject=subject,
+            grade_scope=grade_scope,
+            term=term,
+            status=CommonQuestionSet.Status.ACTIVE,
+        ).update(status=CommonQuestionSet.Status.ARCHIVED)
+        version_rows = []
+        for question, code, required in cleaned_items:
+            question.item_role = QuestionBankItem.ItemRole.COMMON
+            question.layer_scope = QuestionBankItem.LayerScope.ALL
+            question.comparison_code = code
+            question.save(
+                update_fields=[
+                    "item_role", "layer_scope", "comparison_code", "updated_at"
+                ]
+            )
+            version_rows.append(
+                (ensure_question_version(question, actor=request.user), code, required)
+            )
+        hash_payload = [
+            {
+                "comparison_code": code,
+                "question_hash": version.content_hash,
+                "required": required,
+            }
+            for version, code, required in version_rows
+        ]
+        content_hash = hashlib.sha256(
+            json.dumps(hash_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        question_set = CommonQuestionSet.objects.create(
+            school=request.user.school,
+            subject=subject,
+            title=title,
+            grade_scope=grade_scope,
+            term=term,
+            version_no=(latest.version_no + 1 if latest else 1),
+            content_hash=content_hash,
+            status=CommonQuestionSet.Status.ACTIVE,
+            created_by=request.user,
+            published_by=request.user,
+            published_at=timezone.now(),
+        )
+        CommonQuestionSetItem.objects.bulk_create(
+            [
+                CommonQuestionSetItem(
+                    question_set=question_set,
+                    question_version=version,
+                    comparison_code=code,
+                    required=required,
+                    sort_order=index * 10,
+                )
+                for index, (version, code, required) in enumerate(version_rows, start=1)
+            ]
+        )
+    question_set.prefetched_items = list(
+        question_set.items.select_related("question_version").all()
+    )
+    return ok(_common_set_row(question_set), "共同题集合已发布。", status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_common_question_set_archive(request, pk):
+    question_set = CommonQuestionSet.objects.filter(
+        pk=pk, school=request.user.school
+    ).first()
+    if question_set is None:
+        return fail("共同题集合不存在。", status=404)
+    if question_set.status == CommonQuestionSet.Status.ARCHIVED:
+        return ok({}, "共同题集合已经归档。")
+    question_set.status = CommonQuestionSet.Status.ARCHIVED
+    question_set.save(update_fields=["status", "updated_at"])
+    return ok({}, "共同题集合已归档；历史测试版本不受影响。")
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_common_question_sets_export(request):
+    rows = list(
+        CommonQuestionSet.objects.filter(school=request.user.school)
+        .select_related("subject")
+        .prefetch_related("items__question_version")
+    )
+    workbook = build_workbook(
+        [
+            {
+                "title": "共同题集合",
+                "headers": ["集合ID", "学科", "名称", "年级范围", "学期", "版本", "状态", "校验码", "发布时间"],
+                "rows": [
+                    [item.id, item.subject.name, item.title, item.grade_scope, item.term, item.version_no, item.get_status_display(), item.content_hash, item.published_at]
+                    for item in rows
+                ],
+            },
+            {
+                "title": "共同题明细",
+                "headers": ["集合ID", "集合名称", "集合版本", "比较编号", "题目版本", "题目校验码", "题干", "必备题"],
+                "rows": [
+                    [item.id, item.title, item.version_no, row.comparison_code, row.question_version.version_no, row.question_version.content_hash, row.question_version.stem, "是" if row.required else "否"]
+                    for item in rows
+                    for row in item.items.all()
+                ],
+            },
+        ]
+    )
+    return workbook_response(
+        workbook,
+        f"{request.user.school.code}_共同题集合_{timezone.localtime():%Y%m%d%H%M%S}.xlsx",
     )
 
 
@@ -983,6 +1285,23 @@ def _clean_assessment_payload(user, data, assessment=None) -> tuple[dict, list[C
         course = Course.objects.filter(pk=data.get("course"), teacher=user, subject=subject).first()
         if course is None:
             raise AssessmentError("课程与学科不匹配。", errors={"course": ["请选择本人该学科课程。"]})
+    common_set = None
+    if data.get("common_question_set"):
+        common_set = (
+            CommonQuestionSet.objects.filter(
+                pk=data.get("common_question_set"),
+                school=user.school,
+                subject=subject,
+                status=CommonQuestionSet.Status.ACTIVE,
+            )
+            .prefetch_related("items")
+            .first()
+        )
+        if common_set is None:
+            raise AssessmentError(
+                "共同题集合不存在、未启用或与学科不匹配。",
+                errors={"common_question_set": ["请选择本学科已启用的共同题集合。"]},
+            )
     start_at = data.get("start_at") or None
     end_at = data.get("end_at") or None
     from django.utils.dateparse import parse_datetime
@@ -998,6 +1317,9 @@ def _clean_assessment_payload(user, data, assessment=None) -> tuple[dict, list[C
         "title": title,
         "subject": subject,
         "course": course,
+        "common_question_set": common_set,
+        "common_set_version": common_set.version_no if common_set else None,
+        "common_set_hash": common_set.content_hash if common_set else "",
         "instruction": str(data.get("instruction") or "").strip()[:2000],
         "duration_minutes": duration,
         "start_at": start_at,
@@ -1062,6 +1384,32 @@ def teacher_assessment_detail(request, pk):
         return _error(exc)
 
 
+def _validate_assessment_question_mix(assessment, sources: list[QuestionBankItem]) -> None:
+    common_sources = [
+        item for item in sources if item.item_role == QuestionBankItem.ItemRole.COMMON
+    ]
+    layered_sources = [
+        item for item in sources if item.item_role == QuestionBankItem.ItemRole.LAYERED
+    ]
+    if common_sources and assessment.common_question_set_id is None:
+        raise AssessmentError("共同题必须来自已选择的共同题集合。")
+    if layered_sources and not common_sources:
+        raise AssessmentError("分层题不能替代共同题，请至少加入一道共同题。")
+    if assessment.common_question_set_id:
+        required_ids = set(
+            assessment.common_question_set.items.filter(required=True).values_list(
+                "question_version__original_question_id", flat=True
+            )
+        )
+        selected_ids = {item.id for item in common_sources}
+        missing = required_ids - selected_ids
+        if missing:
+            raise AssessmentError(
+                "共同测试缺少共同题集合中的必备题，请补齐后再保存。",
+                errors={"questions": [f"还缺少 {len(missing)} 道必备共同题。"]},
+            )
+
+
 @api_view(["PUT"])
 @permission_classes([IsTeacher])
 def teacher_assessment_questions(request, pk):
@@ -1095,6 +1443,8 @@ def teacher_assessment_questions(request, pk):
         }
         if len(source_map) != len(set(question_ids)):
             raise AssessmentError("部分题目未启用、不是本人可试用题目或学科不匹配。")
+        sources = [source_map[question_id] for question_id in question_ids]
+        _validate_assessment_question_mix(assessment, sources)
         snapshots = []
         total_score = 0.0
         for index, raw_item in enumerate(raw_items, start=1):
@@ -1122,6 +1472,9 @@ def teacher_assessment_questions(request, pk):
                 knowledge_point=source.knowledge_point,
                 score=score,
                 sort_order=index * 10,
+                item_role=source.item_role,
+                layer_scope=source.layer_scope,
+                comparison_code=source.comparison_code,
             ))
         if total_score > 1000:
             raise AssessmentError("试卷总分不能超过 1000 分。")
@@ -1144,6 +1497,24 @@ def _change_assessment_status(user, pk, action: str):
     if action == "publish":
         if assessment.status != TestAssessment.Status.DRAFT or not assessment.questions.exists():
             raise AssessmentError("请先完成组卷，再发布测试。")
+        snapshots = list(assessment.questions.all())
+        common_snapshots = [
+            item
+            for item in snapshots
+            if item.item_role == QuestionBankItem.ItemRole.COMMON
+        ]
+        if any(item.item_role == QuestionBankItem.ItemRole.LAYERED for item in snapshots) and not common_snapshots:
+            raise AssessmentError("分层题不能替代共同题，请至少加入一道共同题。")
+        if assessment.common_question_set_id:
+            required_ids = set(
+                assessment.common_question_set.items.filter(required=True).values_list(
+                    "question_version__original_question_id", flat=True
+                )
+            )
+            if required_ids - {item.source_question_id for item in common_snapshots}:
+                raise AssessmentError("共同测试仍缺少共同题集合中的必备题。")
+        elif common_snapshots:
+            raise AssessmentError("共同题必须绑定共同题集合。")
         assessment.status = TestAssessment.Status.PUBLISHED
     elif action == "open":
         if assessment.status not in {TestAssessment.Status.PUBLISHED, TestAssessment.Status.CLOSED}:
@@ -1240,6 +1611,147 @@ def _attempt_row(attempt: TestAttempt, *, include_answers=False) -> dict:
     return row
 
 
+def _pearson(xs: list[float], ys: list[float]) -> float | None:
+    if len(xs) < 2 or len(xs) != len(ys):
+        return None
+    x_mean = sum(xs) / len(xs)
+    y_mean = sum(ys) / len(ys)
+    numerator = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys))
+    x_var = sum((x - x_mean) ** 2 for x in xs)
+    y_var = sum((y - y_mean) ** 2 for y in ys)
+    if not x_var or not y_var:
+        return None
+    return round(numerator / math.sqrt(x_var * y_var), 3)
+
+
+def _assessment_question_statistics(question, submitted_attempts) -> dict:
+    answers = list(
+        TestAttemptAnswer.objects.filter(
+            question=question, attempt__in=submitted_attempts
+        ).select_related("attempt")
+    )
+    answered_rows = [row for row in answers if row.answer]
+    correct_count = sum(row.is_correct is True for row in answered_rows)
+    option_counts = {str(option): 0 for option in question.options or []}
+    if option_counts:
+        for row in answered_rows:
+            for option in row.answer if isinstance(row.answer, list) else []:
+                normalized_option = str(option)
+                if normalized_option in option_counts:
+                    option_counts[normalized_option] += 1
+    sample_size = len(answered_rows)
+    insufficient = sample_size < MIN_QUESTION_STAT_SAMPLE
+    discrimination = None
+    if not insufficient:
+        item_scores = [
+            float(row.manual_score if row.manual_score is not None else row.auto_score)
+            / float(question.score or 1)
+            for row in answered_rows
+        ]
+        total_scores = [
+            float(row.attempt.total_score)
+            - float(row.manual_score if row.manual_score is not None else row.auto_score)
+            for row in answered_rows
+        ]
+        discrimination = _pearson(item_scores, total_scores)
+    return {
+        "question": assessment_question_row(question, include_answer=True),
+        "sample_size": sample_size,
+        "answered_count": sample_size,
+        "correct_count": correct_count,
+        "correct_rate": None if insufficient else round(correct_count * 100 / sample_size, 1),
+        "difficulty": None if insufficient else round(correct_count / sample_size, 3),
+        "discrimination": discrimination,
+        "option_distribution": [
+            {"option": option, "count": count}
+            for option, count in option_counts.items()
+        ],
+        "data_status": "insufficient" if insufficient else "available",
+        "data_status_label": (
+            f"数据不足（至少需要 {MIN_QUESTION_STAT_SAMPLE} 份有效作答）"
+            if insufficient
+            else "数据可用"
+        ),
+        "average_score": round(
+            float(
+                TestAttemptAnswer.objects.filter(
+                    pk__in=[row.pk for row in answered_rows]
+                ).aggregate(value=Avg("auto_score"))["value"]
+                or 0
+            ),
+            2,
+        ),
+    }
+
+
+def _refresh_assessment_comparability(assessment):
+    other_assessments = TestAssessment.objects.filter(
+        school=assessment.school,
+        subject=assessment.subject,
+        is_active=True,
+    ).exclude(pk=assessment.pk).exclude(status=TestAssessment.Status.DRAFT)
+    current_map = {
+        item.comparison_code: item.source_version.content_hash
+        for item in assessment.questions.select_related("source_version")
+        if item.item_role == QuestionBankItem.ItemRole.COMMON
+        and item.comparison_code
+        and item.source_version_id
+    }
+    records = []
+    for other in other_assessments:
+        if assessment.id < other.id:
+            left, right = assessment, other
+            left_map, right_map = current_map, {
+                item.comparison_code: item.source_version.content_hash
+                for item in other.questions.select_related("source_version")
+                if item.item_role == QuestionBankItem.ItemRole.COMMON
+                and item.comparison_code
+                and item.source_version_id
+            }
+        else:
+            left, right = other, assessment
+            left_map = {
+                item.comparison_code: item.source_version.content_hash
+                for item in other.questions.select_related("source_version")
+                if item.item_role == QuestionBankItem.ItemRole.COMMON
+                and item.comparison_code
+                and item.source_version_id
+            }
+            right_map = current_map
+        overlap = set(left_map) & set(right_map)
+        exact = sum(left_map[code] == right_map[code] for code in overlap)
+        left_sample = left.attempts.exclude(status=TestAttempt.Status.IN_PROGRESS).count()
+        right_sample = right.attempts.exclude(status=TestAttempt.Status.IN_PROGRESS).count()
+        reasons = []
+        if not overlap:
+            status = AssessmentComparabilityRecord.Status.NOT_COMPARABLE
+            reasons.append("没有相同比较编号的共同题。")
+        elif exact != len(overlap):
+            status = AssessmentComparabilityRecord.Status.NOT_COMPARABLE
+            reasons.append("相同比较编号对应的题目版本不同。")
+        elif min(left_sample, right_sample) < MIN_QUESTION_STAT_SAMPLE:
+            status = AssessmentComparabilityRecord.Status.INSUFFICIENT
+            reasons.append(f"两份测试都需要至少 {MIN_QUESTION_STAT_SAMPLE} 份有效答卷。")
+        else:
+            status = AssessmentComparabilityRecord.Status.COMPARABLE
+            reasons.append("共同题版本和样本量满足比较条件。")
+        record, _ = AssessmentComparabilityRecord.objects.update_or_create(
+            school=assessment.school,
+            left_assessment=left,
+            right_assessment=right,
+            defaults={
+                "status": status,
+                "common_question_count": len(overlap),
+                "exact_version_match_count": exact,
+                "left_sample_size": left_sample,
+                "right_sample_size": right_sample,
+                "reasons": reasons,
+            },
+        )
+        records.append(record)
+    return records
+
+
 @api_view(["GET"])
 @permission_classes([IsTeacher])
 def teacher_assessment_results(request, pk):
@@ -1250,16 +1762,8 @@ def teacher_assessment_results(request, pk):
         submitted = [item for item in attempts if item.status != TestAttempt.Status.IN_PROGRESS]
         question_stats = []
         for question in assessment.questions.all():
-            answers = TestAttemptAnswer.objects.filter(question=question, attempt__in=submitted)
-            answered = answers.exclude(answer=[]).count()
-            correct = answers.filter(is_correct=True).count()
-            question_stats.append({
-                "question": assessment_question_row(question, include_answer=True),
-                "answered_count": answered,
-                "correct_count": correct,
-                "correct_rate": round(correct * 100 / answered, 1) if answered else 0,
-                "average_score": round(float(answers.aggregate(value=Avg("auto_score"))["value"] or 0), 2),
-            })
+            question_stats.append(_assessment_question_statistics(question, submitted))
+        comparison_records = _refresh_assessment_comparability(assessment)
         return ok({
             "assessment": assessment_row(assessment, detail=True),
             "summary": {
@@ -1271,6 +1775,22 @@ def teacher_assessment_results(request, pk):
             },
             "attempts": [_attempt_row(item) for item in attempts],
             "question_stats": question_stats,
+            "comparisons": [
+                {
+                    "id": record.id,
+                    "assessment": record.right_assessment_id
+                    if record.left_assessment_id == assessment.id
+                    else record.left_assessment_id,
+                    "status": record.status,
+                    "status_label": record.get_status_display(),
+                    "common_question_count": record.common_question_count,
+                    "exact_version_match_count": record.exact_version_match_count,
+                    "left_sample_size": record.left_sample_size,
+                    "right_sample_size": record.right_sample_size,
+                    "reasons": record.reasons,
+                }
+                for record in comparison_records
+            ],
         })
     except AssessmentError as exc:
         return _error(exc)
@@ -1288,19 +1808,23 @@ def teacher_assessment_results_export(request, pk):
     assigned_count = StudentProfile.objects.filter(class_group__in=assessment.target_classes.all(), user__is_active=True).count()
     question_rows = []
     for index, question in enumerate(assessment.questions.all(), start=1):
-        answers = TestAttemptAnswer.objects.filter(question=question, attempt__in=submitted)
-        answered = answers.exclude(answer=[]).count()
-        correct = answers.filter(is_correct=True).count()
+        stats = _assessment_question_statistics(question, submitted)
         question_rows.append([
             index,
             question.get_question_type_display(),
             question.stem,
             question.knowledge_point,
             question.score,
-            answered,
-            correct,
-            round(correct * 100 / answered, 1) if answered else 0,
-            round(float(answers.aggregate(value=Avg("auto_score"))["value"] or 0), 2),
+            stats["answered_count"],
+            stats["correct_count"],
+            stats["correct_rate"] if stats["correct_rate"] is not None else "数据不足",
+            stats["difficulty"] if stats["difficulty"] is not None else "数据不足",
+            stats["discrimination"] if stats["discrimination"] is not None else "数据不足",
+            " | ".join(
+                f"{item['option']}:{item['count']}"
+                for item in stats["option_distribution"]
+            ),
+            stats["average_score"],
         ])
     workbook = build_workbook([
         {
@@ -1326,7 +1850,7 @@ def teacher_assessment_results_export(request, pk):
         },
         {
             "title": "逐题统计",
-            "headers": ["题号", "题型", "题干", "知识点", "分值", "作答人数", "正确人数", "正确率(%)", "平均自动得分"],
+            "headers": ["题号", "题型", "题干", "知识点", "分值", "作答人数", "正确人数", "正确率(%)", "难度", "区分度", "选项分布", "平均自动得分"],
             "rows": question_rows,
         },
     ])
@@ -1433,8 +1957,29 @@ def _attempt_deadline(attempt) -> timezone.datetime:
     return deadline
 
 
+def _layer_scope_allows(layer_scope: str, current_layer: str | None) -> bool:
+    layer = str(current_layer or "").strip().lower()
+    return layer in {
+        QuestionBankItem.LayerScope.A: {"a"},
+        QuestionBankItem.LayerScope.B: {"b"},
+        QuestionBankItem.LayerScope.C: {"c"},
+        QuestionBankItem.LayerScope.AB: {"a", "b"},
+        QuestionBankItem.LayerScope.BC: {"b", "c"},
+    }.get(layer_scope, set())
+
+
+def _eligible_assessment_questions(assessment, profile) -> list[TestAssessmentQuestion]:
+    return [
+        question
+        for question in assessment.questions.all()
+        if question.item_role != QuestionBankItem.ItemRole.LAYERED
+        or _layer_scope_allows(question.layer_scope, getattr(profile, "current_layer", None))
+    ]
+
+
 def _ensure_attempt_randomization(attempt: TestAttempt) -> None:
-    questions = list(attempt.assessment.questions.all())
+    profile = StudentProfile.objects.filter(user_id=attempt.student_id).first()
+    questions = _eligible_assessment_questions(attempt.assessment, profile)
     question_ids = [item.id for item in questions]
     saved_question_ids = []
     if isinstance(attempt.question_order, list):
@@ -1604,7 +2149,7 @@ def student_assessment_answer(request, pk):
             _submit_attempt(attempt)
             raise AssessmentError("作答时间已结束，系统已自动交卷。")
         question = assessment.questions.filter(pk=request.data.get("question_id")).first()
-        if question is None:
+        if question is None or question.id not in set(attempt.question_order or []):
             raise AssessmentError("题目不存在。")
         answer = _normalize_student_answer(question, request.data.get("answer"))
         TestAttemptAnswer.objects.update_or_create(attempt=attempt, question=question, defaults={"answer": answer})
@@ -1648,7 +2193,16 @@ def _submit_attempt(attempt, *, source_override: str | None = "server"):
     has_subjective = False
     submitted_at = timezone.now()
     submitted_rows = []
-    for question in attempt.assessment.questions.all():
+    _ensure_attempt_randomization(attempt)
+    eligible_ids = [int(item) for item in attempt.question_order]
+    question_map = {
+        item.id: item
+        for item in attempt.assessment.questions.filter(id__in=eligible_ids)
+    }
+    for question_id in eligible_ids:
+        question = question_map.get(question_id)
+        if question is None:
+            continue
         row = existing.get(question.id)
         if row is None:
             row = TestAttemptAnswer.objects.create(attempt=attempt, question=question, answer=[])

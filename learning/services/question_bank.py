@@ -23,6 +23,9 @@ QUESTION_CONTENT_FIELDS = (
     "difficulty",
     "knowledge_point",
     "default_score",
+    "item_role",
+    "layer_scope",
+    "comparison_code",
 )
 
 
@@ -37,6 +40,9 @@ def question_content_payload(question: QuestionBankItem) -> dict:
         "difficulty": question.difficulty,
         "knowledge_point": question.knowledge_point,
         "default_score": float(question.default_score),
+        "item_role": question.item_role,
+        "layer_scope": question.layer_scope,
+        "comparison_code": question.comparison_code,
     }
 
 
@@ -102,6 +108,9 @@ def ensure_question_version(
         difficulty=question.difficulty,
         knowledge_point=question.knowledge_point,
         default_score=question.default_score,
+        item_role=question.item_role,
+        layer_scope=question.layer_scope,
+        comparison_code=question.comparison_code,
     )
     QuestionBankItem.objects.filter(pk=question.pk).update(
         version_no=version_no,
@@ -164,6 +173,9 @@ def create_question_items(
                 difficulty=question.difficulty,
                 knowledge_point=question.knowledge_point,
                 default_score=question.default_score,
+                item_role=question.item_role,
+                layer_scope=question.layer_scope,
+                comparison_code=question.comparison_code,
             )
             for question in created
         ]
