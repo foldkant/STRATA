@@ -16,6 +16,16 @@ from learning_analytics.services.quality import (
 from learning_analytics.services.learning_summaries import (
     rebuild_school_learning_summaries,
 )
+from learning_analytics.services.feature_registry import (
+    sync_feature_and_outcome_definitions,
+)
+from learning_analytics.services.feature_snapshots import (
+    freeze_due_decision_points,
+)
+from learning_analytics.services.outcomes import mature_due_outcomes
+from learning_analytics.services.longitudinal import build_longitudinal_analysis
+from learning_analytics.services.model_comparison import build_model_comparison
+from learning_analytics.feature_models import TrainingDatasetVersion
 from school.models import School
 
 
@@ -191,4 +201,63 @@ def run_nightly_learning_summaries():
             )
         else:
             rows.append({"school_id": school.id, "status": "completed", **result})
+    return rows
+
+
+@shared_task
+def run_nightly_feature_outcomes():
+    sync_feature_and_outcome_definitions()
+    frozen = freeze_due_decision_points()
+    schools = []
+    for school in School.objects.filter(
+        status=School.Status.ACTIVE,
+        is_synthetic=False,
+    ).iterator():
+        try:
+            counts = mature_due_outcomes(school=school)
+        except Exception as exc:
+            schools.append(
+                {
+                    "school_id": school.id,
+                    "status": "failed",
+                    "reason": type(exc).__name__,
+                }
+            )
+        else:
+            schools.append({"school_id": school.id, "status": "completed", **counts})
+    return {"decision_points": frozen, "schools": schools}
+
+
+@shared_task
+def run_nightly_model_validation():
+    """对已冻结正式数据做重复测量和基线比较；结果始终是影子结果。"""
+    rows = []
+    datasets = TrainingDatasetVersion.objects.filter(
+        synthetic_run__isnull=True,
+        status=TrainingDatasetVersion.Status.FROZEN,
+    ).select_related("school", "subject")
+    for dataset in datasets.iterator():
+        try:
+            longitudinal = build_longitudinal_analysis(dataset=dataset)
+            comparison = build_model_comparison(dataset=dataset)
+        except Exception as exc:
+            rows.append(
+                {
+                    "dataset_id": dataset.id,
+                    "school_id": dataset.school_id,
+                    "status": "failed",
+                    "reason": type(exc).__name__,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "dataset_id": dataset.id,
+                    "school_id": dataset.school_id,
+                    "status": "completed",
+                    "longitudinal_run_id": longitudinal.id,
+                    "comparison_run_id": comparison.id,
+                    "comparison_status": comparison.status,
+                }
+            )
     return rows

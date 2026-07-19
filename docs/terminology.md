@@ -35,6 +35,13 @@
 | 旧事件未转换 | `legacy.unmapped` / `legacy_unmapped` | 内部兼容事件名和状态值；界面、API 标签和导出统一显示“旧事件未转换” |
 | 自动检查记录 | `AnalyticsPipelineRun` | 保存定时、手动和重试检查；数据库状态 `blocked` 显示为“检查未通过” |
 | 自动检查阶段 | `AnalyticsTaskRun` | 当前阶段代码为 `collect_learning_data`、`compare_old_new_records`、`save_data_check_report` |
+| 分析时间点 | `DecisionPoint` | 固定班级、课程、学生范围和当时数据的时间 `T0`；界面不使用 landmark |
+| 当时可用数据 | `operational_available` | 行为发生和服务器接收都不晚于分析时间点的数据 |
+| 事后完整数据 | `reconstructed_complete` | 只用于补传影响检查的事后视图，不用于报告实际模型效果 |
+| 学习指标 | `FeatureDefinition` | 保存计算规则、窗口、分子、分母、缺失原因和版本的学习事实 |
+| 学生特征快照 | `StudentFeatureSnapshot` | 某学生在分析时间点的多窗口学习指标记录；普通界面简称“学习记录快照” |
+| 未来结果 | `OutcomeObservation` | 分析时间点之后预先指定的完成或逾期结果；未观察到时不记为 0 |
+| 数据版本 | `TrainingDatasetVersion` | 固定指标、未来结果、分组和来源摘要的匿名数据清单 |
 
 ## 角色用语
 

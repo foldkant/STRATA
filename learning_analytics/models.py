@@ -36,6 +36,25 @@ from .evaluation_models import (  # noqa: F401
     ClassroomEvaluationStandardUse,
     EvaluationSubmissionEvidence,
 )
+from .feature_models import (  # noqa: F401
+    DecisionPoint,
+    DecisionPointStudent,
+    FeatureDefinition,
+    FeatureSetVersion,
+    OutcomeDefinition,
+    OutcomeObservation,
+    StudentFeatureSnapshot,
+    TrainingDatasetRow,
+    TrainingDatasetVersion,
+)
+from .model_models import (  # noqa: F401
+    LongitudinalAnalysisRun,
+    LongitudinalFeatureResult,
+    ModelComparisonRun,
+    ModelEvaluationResult,
+    ModelPrediction,
+    NegativeControlResult,
+)
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 SCHEMA_VERSION_PATTERN = re.compile(r"^\d+\.\d+$")

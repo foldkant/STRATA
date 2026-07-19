@@ -193,6 +193,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "learning_analytics.tasks.run_nightly_learning_summaries",
         "schedule": crontab(hour=2, minute=30),
     },
+    "strata-nightly-feature-outcomes": {
+        "task": "learning_analytics.tasks.run_nightly_feature_outcomes",
+        "schedule": crontab(hour=2, minute=50),
+    },
+    "strata-nightly-model-validation": {
+        "task": "learning_analytics.tasks.run_nightly_model_validation",
+        "schedule": crontab(hour=3, minute=10),
+    },
 }
 
 MLFLOW_TRACKING_URI = env("MLFLOW_TRACKING_URI", f"file:{BASE_DIR / 'storage/mlruns'}")

@@ -14,6 +14,7 @@ const PretestsView = () => import('@/views/school-admin/PretestsView.vue')
 const SchoolAdminResourceReviewsView = () => import('@/views/school-admin/ResourceReviewsView.vue')
 const SchoolAdminQuestionReviewsView = () => import('@/views/school-admin/QuestionReviewsView.vue')
 const SchoolAdminDataQualityView = () => import('@/views/school-admin/DataQualityView.vue')
+const SchoolAdminAnalysisPreparationView = () => import('@/views/school-admin/AnalysisPreparationView.vue')
 const TeacherDashboard = () => import('@/views/teacher/DashboardView.vue')
 const TeacherCoursesView = () => import('@/views/teacher/CoursesView.vue')
 const TeacherClassroomView = () => import('@/views/teacher/ClassroomView.vue')
@@ -67,7 +68,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/school-admin/question-reviews', component: SchoolAdminQuestionReviewsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/data-quality', component: SchoolAdminDataQualityView, meta: { role: 'school_admin' } },
   { path: '/school-admin/evaluations', redirect: '/school-admin' },
-  { path: '/school-admin/models', component: PlaceholderView, meta: { role: 'school_admin', title: '分层分析' } },
+  { path: '/school-admin/models', component: SchoolAdminAnalysisPreparationView, meta: { role: 'school_admin' } },
   { path: '/teacher', component: TeacherDashboard, meta: { role: 'teacher' } },
   { path: '/teacher/courses', component: TeacherCoursesView, meta: { role: 'teacher' } },
   { path: '/teacher/lessons/:lessonId/design', component: TeacherLessonDesignerView, meta: { role: 'teacher' } },

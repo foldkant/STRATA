@@ -199,11 +199,12 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py migrate --noinput
+.\.venv\Scripts\python.exe manage.py sync_analysis_definitions
 .\.venv\Scripts\python.exe manage.py check
 .\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
 ```
 
-Celery Beat 默认每天 01:30 检查前一完整自然日的学习数据。正式环境必须同时运行：
+Celery Beat 默认每天 01:30 检查前一完整自然日的学习数据，02:30 生成基础学习情况汇总，02:50 冻结到时的分析时间点并更新到期未来结果，03:10 运行重复测量统计和 M00-M03 影子比较。正式环境必须同时运行：
 
 ```powershell
 .\scripts\run_celery_worker.ps1

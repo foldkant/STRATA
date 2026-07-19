@@ -26,6 +26,12 @@ from .models import (
     SensitiveInferenceAccessLog,
     StudentLearningSummary,
     SyntheticDatasetRun,
+    LongitudinalAnalysisRun,
+    LongitudinalFeatureResult,
+    ModelComparisonRun,
+    ModelEvaluationResult,
+    ModelPrediction,
+    NegativeControlResult,
 )
 
 
@@ -560,3 +566,90 @@ class StudentLearningSummaryAdmin(ReadOnlyAnalyticsAdmin):
         "course__title",
     )
     readonly_fields = tuple(field.name for field in StudentLearningSummary._meta.fields)
+
+
+@admin.register(LongitudinalAnalysisRun)
+class LongitudinalAnalysisRunAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "dataset",
+        "school",
+        "subject",
+        "status",
+        "feature_count",
+        "ready_feature_count",
+        "created_at",
+    )
+    list_filter = ("status", "school", "subject")
+    search_fields = ("run_key", "dataset__dataset_key", "subject__name")
+    readonly_fields = tuple(field.name for field in LongitudinalAnalysisRun._meta.fields)
+
+
+@admin.register(LongitudinalFeatureResult)
+class LongitudinalFeatureResultAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "run",
+        "feature_key",
+        "status",
+        "observation_count",
+        "student_count",
+        "class_count",
+        "overall_association",
+    )
+    list_filter = ("status",)
+    search_fields = ("feature_key", "run__run_key")
+    readonly_fields = tuple(field.name for field in LongitudinalFeatureResult._meta.fields)
+
+
+@admin.register(ModelComparisonRun)
+class ModelComparisonRunAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "dataset",
+        "school",
+        "subject",
+        "status",
+        "target_type",
+        "row_count",
+        "created_at",
+    )
+    list_filter = ("status", "school", "subject", "target_type")
+    search_fields = ("run_key", "dataset__dataset_key", "subject__name")
+    readonly_fields = tuple(field.name for field in ModelComparisonRun._meta.fields)
+
+
+@admin.register(ModelEvaluationResult)
+class ModelEvaluationResultAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "run",
+        "model_key",
+        "validation_key",
+        "status",
+        "test_count",
+        "primary_metric",
+        "coverage",
+    )
+    list_filter = ("status", "model_key", "validation_key")
+    search_fields = ("run__run_key", "model_key", "validation_key")
+    readonly_fields = tuple(field.name for field in ModelEvaluationResult._meta.fields)
+
+
+@admin.register(ModelPrediction)
+class ModelPredictionAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "run",
+        "model_key",
+        "validation_key",
+        "status",
+        "predicted_value",
+        "created_at",
+    )
+    list_filter = ("status", "model_key", "validation_key")
+    search_fields = ("run__run_key", "pseudonymous_key")
+    readonly_fields = tuple(field.name for field in ModelPrediction._meta.fields)
+
+
+@admin.register(NegativeControlResult)
+class NegativeControlResultAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = ("run", "control_key", "status", "observed_metric", "created_at")
+    list_filter = ("status", "control_key")
+    search_fields = ("run__run_key", "control_key")
+    readonly_fields = tuple(field.name for field in NegativeControlResult._meta.fields)

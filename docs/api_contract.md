@@ -1528,6 +1528,68 @@ GET  /api/v1/school-admin/analytics/quality/export/
 
 导出返回本校 XLSX，包含“检查报告、检查指标、待处理问题、自动检查记录、执行阶段”五张表。完整口径见 `docs/data_quality_pipeline.md`。
 
+## 学校管理员分析准备
+
+```text
+GET  /api/v1/school-admin/analytics/preparation/
+POST /api/v1/school-admin/analytics/preparation/decision-points/
+POST /api/v1/school-admin/analytics/preparation/outcomes/refresh/
+POST /api/v1/school-admin/analytics/preparation/datasets/
+GET  /api/v1/school-admin/analytics/preparation/datasets/{id}/export/
+```
+
+准备情况接口返回本校学习指标版本、分析时间点、未来结果数量、数据版本、阻塞原因以及可选班级和课程。只返回学校级准备情况，不返回学生个人层级和建议。
+
+建立分析时间点请求：
+
+```json
+{
+  "class_id": 1,
+  "course_id": 3,
+  "title": "高一1班周度学习分析"
+}
+```
+
+服务器固定学校、学科、学生范围和当前时间。页面最多计划未来 90 日，不能补建 5 分钟以前的时间点。时间点到达后生成当时可用特征快照和等待观察的未来结果。
+
+更新到期结果接口只处理已经完成观察窗口和补传等待时间的记录。没有任务时保存 `UNOBSERVED`，不是 0。
+
+生成数据版本请求：
+
+```json
+{
+  "subject_id": 1,
+  "outcome_key": "required_completion_next_7d"
+}
+```
+
+只使用已冻结的当时可用特征和已到期结果。相同输入重复请求返回同一数据版本。响应包含是否可进入模型比较和阻塞原因。
+
+导出接口返回匿名 XLSX，不包含学生姓名、账号和学号。文件包含版本说明、学生分组、时间分组、特征值、分子、分母、缺失原因、未来结果和来源摘要。
+
+上述接口仅允许本校学校管理员访问。教师、学生和其他学校管理员均无权访问。完整口径见[学习指标、未来结果与数据版本设计](feature_outcome_dataset_design.md)。
+
+## 学校管理员统计验证与模型比较
+
+```text
+GET  /api/v1/school-admin/analytics/models/
+POST /api/v1/school-admin/analytics/models/longitudinal/
+POST /api/v1/school-admin/analytics/models/compare/
+GET  /api/v1/school-admin/analytics/models/{id}/export/
+```
+
+查询接口返回本校正式冻结数据版本、LONG-01 重复测量结果和 MODEL-01 比较结果。结果包含个人内/学生间/班级描述、M00-M03、V-A 至 V-E、覆盖率、拒绝预测数、负对照和模型卡；不返回学生姓名、账号、学号、内部匿名编号或个人预测。
+
+建立重复测量统计或模型比较的请求体为：
+
+```json
+{ "dataset_id": 12 }
+```
+
+相同数据版本和分析版本重复请求返回已有记录。只有已冻结、属于当前学校且不是模拟批次的数据版本可通过学校管理员接口使用。测试样本少于 30 条只返回“数据不足”；不能通过页面参数绕过样本门槛。
+
+模型比较始终是影子结果。`shadow_only` 表示工程比较完成，`blocked` 表示存在数据不足或负对照问题；两者都不能直接生成学生层级、改变课堂内容或向学生展示。导出 XLSX 包含模型卡、模型比较、重复测量和负对照四张表。
+
 ## 教师评价标准管理
 
 所有接口仅允许教师访问，并同时按学校和课程所属教师隔离。客户端不能提交 `school`、`subject`、`scope`、`review_status` 或教师 ID；课程决定学科和学校，新建内容默认处于“课程使用、编辑中”。学校管理员、学生和其他教师不能读取或修改当前教师的评价内容。

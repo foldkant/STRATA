@@ -193,7 +193,28 @@
 - `learning_analytics.services.access_audit.teacher_has_class_scope`：按学校和有效任课关系判断教师是否可查看班级个体分析，单纯教师角色不足以授权。
 - `sync_learning_event_schemas`：将代码中 35 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
 - `purge_expired_event_rejections`：删除超过本地保留期限的加密拒绝记录；正式环境后续由 Celery beat 定时调用。
-- 当前 app 已完成隐私权限、学习记录、学习任务关联、评分积分、新旧记录兼容写入、学习数据检查、评价版本冻结、共同题比较、四类学习情况汇总和教师审核规则版建议。历史旧记录使用确定性 UUID 回填，不能明确转换的记录以内部状态 `legacy.unmapped` 隔离，界面统一显示“旧事件未转换”。完整研究特征和机器学习模型尚未完成。
+- 当前 app 已完成隐私权限、学习记录、学习任务关联、评分积分、新旧记录兼容写入、学习数据检查、评价版本冻结、共同题比较、四类学习情况汇总、教师审核规则版建议、版本化学习指标、计划分析时间点、未来结果、冻结数据版本、重复测量统计和 M00-M03 透明基线比较。历史旧记录使用确定性 UUID 回填，不能明确转换的记录以内部状态 `legacy.unmapped` 隔离，界面统一显示“旧事件未转换”。当前比较结果仅用于影子核查，正式机器学习模型尚未开始。
+
+### 学习指标与未来结果
+
+完整说明见 [学习指标、未来结果与数据版本设计](feature_outcome_dataset_design.md)。
+
+- `FeatureDefinition`：版本化学习指标定义，保存证据组、用途、公式、窗口、最少材料量、允许事件、缺失原因和代码摘要；启用后不可修改。
+- `FeatureSetVersion`：一组固定学习指标定义的清单和摘要。
+- `DecisionPoint`：班级、学科、课程和固定时间 `T0`；保存正式/模拟数据范围、学习数据检查状态和冻结上下文。
+- `DecisionPointStudent`：时间点冻结时的学生范围及纳入原因。
+- `StudentFeatureSnapshot`：学生在 `T0` 的多窗口特征，保存值、分子、分母、缺失原因、来源水位和来源摘要。
+- `OutcomeDefinition`：未来结果定义、观察天数、最少分母、资格规则和代码摘要。
+- `OutcomeObservation`：等待观察、已观察、无可用结果或排除记录；修订通过新版本追加，不覆盖历史。
+- `TrainingDatasetVersion`：按学校、学科、特征集和未来结果冻结的数据版本及清单摘要。
+- `TrainingDatasetRow`：匿名学生编号、学生分组、时间分组、特征、未来结果和行摘要；不保存学生姓名、账号或学号副本。
+
+约束：
+
+- 正式时间点和数据版本的 `synthetic_run` 必须为空；模拟数据必须显式绑定批次。
+- 训练数据只允许使用 `operational_available` 视图。
+- F4 数据质量、离线和教师支持字段保留在数据版本中用于检查，但不列入主模型输入。
+- `UNOBSERVED` 结果的值保持为空，不能转换为 0 或负例。
 
 机会状态当前只支持立即投放：`content.released` 的发生时间即实际开放时间。未来定时任务必须先增加 `content.assigned`，到点后再追加 `released`；不能把未来计划时间提前记成已开放。
 
@@ -322,6 +343,17 @@
 - `DataQualityReport.check_version/source_checksum`：检查规则版本和来源校验码。
 
 检查报告不可原地修改或直接删除；重新检查必须产生新运行和新报告。检查结果只控制后续分析是否继续，禁止写入学生能力特征、核心素养得分、积分或奖章。
+
+## 统计验证与模型比较
+
+- `LongitudinalAnalysisRun`：某个冻结数据版本的一次重复测量统计，保存学生内外差异、班级数量、指标数量、计算版本和清单摘要。
+- `LongitudinalFeatureResult`：一个指标的观测数、学生数、班级数、总差异、学生间差异、个人内差异、ICC 描述值、总体/个人内/学生间关联方向和近似范围。样本不足时状态为 `insufficient_n`。
+- `ModelComparisonRun`：某个冻结数据版本的一次 M00-M03 比较，保存目标、模型清单、验证折、模型卡、负对照状态和阻塞原因。正式结果只允许 `shadow_only` 或 `blocked`，不代表生产模型。
+- `ModelEvaluationResult`：一个模型在一个验证折上的训练记录数、测试记录数、预测数、拒绝数、主要指标、RMSE/MAE/Brier、覆盖率和说明。
+- `ModelPrediction`：匿名的逐行预测事实，只保存冻结数据行、模型、验证折、预测/拒绝状态、预测值和拒绝原因；不向教师和学生 API 返回。
+- `NegativeControlResult`：标签打乱、随机匿名编号、未来哨兵、数据可用性和班级身份五类负对照结果。失败时模型比较保留记录但不得继续输出建议。
+
+重复测量和模型比较均只读取 `TrainingDatasetVersion.status=frozen` 且 `view_type=operational_available` 的数据。模拟批次通过 `synthetic_run` 隔离，不进入学校管理员正式接口和正式夜间任务。
 
 ## 模拟数据开发
 

@@ -104,4 +104,49 @@ urlpatterns = [
         school_admin_views.export_school_quality,
         name="school_admin_analytics_quality_export",
     ),
+    path(
+        "school-admin/analytics/preparation/",
+        school_admin_views.analysis_preparation,
+        name="school_admin_analysis_preparation",
+    ),
+    path(
+        "school-admin/analytics/preparation/decision-points/",
+        school_admin_views.create_analysis_decision_point,
+        name="school_admin_analysis_decision_point_create",
+    ),
+    path(
+        "school-admin/analytics/preparation/outcomes/refresh/",
+        school_admin_views.refresh_analysis_outcomes,
+        name="school_admin_analysis_outcomes_refresh",
+    ),
+    path(
+        "school-admin/analytics/preparation/datasets/",
+        school_admin_views.create_training_dataset,
+        name="school_admin_training_dataset_create",
+    ),
+    path(
+        "school-admin/analytics/preparation/datasets/<int:pk>/export/",
+        school_admin_views.export_training_dataset,
+        name="school_admin_training_dataset_export",
+    ),
+    path(
+        "school-admin/analytics/models/",
+        school_admin_views.model_validation,
+        name="school_admin_model_validation",
+    ),
+    path(
+        "school-admin/analytics/models/longitudinal/",
+        school_admin_views.create_longitudinal_analysis,
+        name="school_admin_longitudinal_analysis_create",
+    ),
+    path(
+        "school-admin/analytics/models/compare/",
+        school_admin_views.create_model_comparison,
+        name="school_admin_model_comparison_create",
+    ),
+    path(
+        "school-admin/analytics/models/<int:pk>/export/",
+        school_admin_views.export_model_validation,
+        name="school_admin_model_validation_export",
+    ),
 ]

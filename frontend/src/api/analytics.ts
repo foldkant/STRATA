@@ -99,3 +99,252 @@ export function runSchoolDataQuality(days = 7) {
     { method: 'POST', body: toJsonBody({ days }) }
   )
 }
+
+export type AnalysisSummary = {
+  feature_definition_count: number
+  model_input_feature_count: number
+  audit_feature_count: number
+  decision_point_count: number
+  snapshot_count: number
+  ready_snapshot_count: number
+  observed_outcome_count: number
+  pending_outcome_count: number
+  dataset_count: number
+  comparison_ready_dataset_count: number
+}
+
+export type AnalysisDecisionPoint = {
+  id: number
+  decision_id: string
+  title: string
+  class_group: { id: number; name: string }
+  subject: { id: number; name: string }
+  course: { id: number; title: string } | null
+  purpose: string
+  purpose_label: string
+  status: 'planned' | 'frozen' | 'cancelled'
+  status_label: string
+  scheduled_for: string
+  frozen_at: string | null
+  student_count: number
+  quality_checks_passed: boolean
+  snapshot_counts: Record<'ready' | 'degraded' | 'blocked', number>
+  outcome_counts: Record<'pending' | 'observed' | 'unobserved' | 'excluded', number>
+}
+
+export type AnalysisDataset = {
+  id: number
+  dataset_id: string
+  dataset_key: string
+  subject: { id: number; name: string }
+  outcome: { key: string; label: string; version: string }
+  feature_set: { key: string; version: string }
+  status: 'building' | 'frozen' | 'failed'
+  status_label: string
+  decision_start: string
+  decision_end: string
+  row_count: number
+  observed_count: number
+  unobserved_count: number
+  excluded_count: number
+  comparison_ready: boolean
+  blockers: string[]
+  manifest_hash: string
+  created_at: string
+  frozen_at: string | null
+}
+
+export type AnalysisPreparation = {
+  school: { id: number; name: string; code: string }
+  summary: AnalysisSummary
+  feature_set: {
+    key: string
+    version: string
+    label: string
+    manifest_hash: string
+  } | null
+  feature_groups: Array<{ key: string; label: string; count: number }>
+  outcome_definitions: Array<{
+    id: number
+    key: string
+    label: string
+    version: string
+    horizon_days: number
+    min_denominator: number
+  }>
+  decision_points: AnalysisDecisionPoint[]
+  datasets: AnalysisDataset[]
+  blockers: string[]
+  options: {
+    classes: Array<{ id: number; name: string; grade: string; student_count: number }>
+    courses: Array<{
+      id: number
+      title: string
+      subject: { id: number; name: string }
+      teacher_name: string
+      class_ids: number[]
+    }>
+  }
+}
+
+export type LongitudinalFeatureResult = {
+  feature_key: string
+  status: string
+  status_label: string
+  observation_count: number
+  student_count: number
+  class_count: number
+  total_variance: number | null
+  between_variance: number | null
+  within_variance: number | null
+  intraclass_correlation: number | null
+  overall_association: number | null
+  within_association: number | null
+  between_association: number | null
+  interval_low: number | null
+  interval_high: number | null
+  direction: string
+  details: Record<string, unknown>
+}
+
+export type LongitudinalRun = {
+  id: number
+  run_id: string
+  dataset_id: number
+  dataset_key: string
+  subject: { id: number; name: string }
+  status: string
+  status_label: string
+  analysis_version: string
+  feature_count: number
+  ready_feature_count: number
+  row_count: number
+  student_count: number
+  class_count: number
+  manifest: Record<string, unknown>
+  manifest_hash: string
+  created_at: string
+  finished_at: string | null
+  feature_results: LongitudinalFeatureResult[]
+}
+
+export type ModelEvaluation = {
+  id: number
+  model_key: string
+  validation_key: string
+  status: string
+  status_label: string
+  train_count: number
+  test_count: number
+  predicted_count: number
+  abstained_count: number
+  primary_metric: number | null
+  rmse: number | null
+  mae: number | null
+  brier_score: number | null
+  calibration_intercept: number | null
+  calibration_slope: number | null
+  coverage: number | null
+  metrics: Record<string, unknown>
+  note: string
+}
+
+export type NegativeControl = {
+  control_key: string
+  status: string
+  status_label: string
+  expected_behavior: string
+  observed_metric: number | null
+  baseline_metric: number | null
+  details: Record<string, unknown>
+}
+
+export type ModelComparisonRun = {
+  id: number
+  run_id: string
+  dataset_id: number
+  dataset_key: string
+  subject: { id: number; name: string }
+  status: string
+  status_label: string
+  comparison_version: string
+  target_type: string
+  model_keys: string[]
+  validation_keys: string[]
+  row_count: number
+  observed_count: number
+  manifest: { blockers?: string[]; [key: string]: unknown }
+  model_card: {
+    title?: string
+    status?: string
+    intended_use?: string
+    prohibited_use?: string
+    limitations?: string[]
+    [key: string]: unknown
+  }
+  manifest_hash: string
+  created_at: string
+  finished_at: string | null
+  evaluations: ModelEvaluation[]
+  negative_controls: NegativeControl[]
+}
+
+export type ModelValidation = {
+  datasets: AnalysisDataset[]
+  longitudinal_runs: LongitudinalRun[]
+  comparison_runs: ModelComparisonRun[]
+  rules: {
+    model_comparison_is_shadow_only: boolean
+    minimum_evaluation_n: number
+    model_order: string[]
+    validation_order: string[]
+  }
+}
+
+export function getAnalysisPreparation() {
+  return apiRequest<AnalysisPreparation>('/api/v1/school-admin/analytics/preparation/')
+}
+
+export function createAnalysisDecisionPoint(payload: {
+  class_id: number
+  course_id: number
+  title?: string
+  scheduled_for?: string
+}) {
+  return apiRequest<{ decision_point: AnalysisDecisionPoint }>(
+    '/api/v1/school-admin/analytics/preparation/decision-points/',
+    { method: 'POST', body: toJsonBody(payload) }
+  )
+}
+
+export function refreshAnalysisOutcomes() {
+  return apiRequest<Record<string, number>>(
+    '/api/v1/school-admin/analytics/preparation/outcomes/refresh/',
+    { method: 'POST', body: toJsonBody({}) }
+  )
+}
+
+export function createAnalysisDataset(payload: { subject_id: number; outcome_key: string }) {
+  return apiRequest<{ dataset: AnalysisDataset }>(
+    '/api/v1/school-admin/analytics/preparation/datasets/',
+    { method: 'POST', body: toJsonBody(payload) }
+  )
+}
+
+export function getModelValidation() {
+  return apiRequest<ModelValidation>('/api/v1/school-admin/analytics/models/')
+}
+
+export function createLongitudinalAnalysis(payload: { dataset_id: number }) {
+  return apiRequest<{ run: LongitudinalRun }>(
+    '/api/v1/school-admin/analytics/models/longitudinal/',
+    { method: 'POST', body: toJsonBody(payload) }
+  )
+}
+
+export function createModelComparison(payload: { dataset_id: number }) {
+  return apiRequest<{ run: ModelComparisonRun }>(
+    '/api/v1/school-admin/analytics/models/compare/',
+    { method: 'POST', body: toJsonBody(payload) }
+  )
+}

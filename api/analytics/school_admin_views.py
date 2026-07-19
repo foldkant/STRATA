@@ -1,19 +1,49 @@
 from __future__ import annotations
 
-from django.db.models import Prefetch
+from datetime import timedelta
+
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.decorators import api_view, permission_classes
 
 from api.permissions import IsSchoolAdmin
 from api.responses import fail, ok
+from courses.models import Course, CourseClass, Subject
 from learning_analytics.models import (
     AnalyticsPipelineRun,
     AnalyticsTaskRun,
     DataQualityReport,
+    DecisionPoint,
+    FeatureDefinition,
+    FeatureSetVersion,
+    OutcomeDefinition,
+    OutcomeObservation,
+    StudentFeatureSnapshot,
+    TrainingDatasetVersion,
+    LongitudinalAnalysisRun,
+    ModelComparisonRun,
 )
-from learning_analytics.services.quality import QUALITY_THRESHOLDS, trailing_window
+from learning_analytics.services.feature_registry import (
+    sync_feature_and_outcome_definitions,
+)
+from learning_analytics.services.feature_snapshots import create_decision_point
+from learning_analytics.services.outcomes import (
+    build_training_dataset,
+    mature_due_outcomes,
+)
+from learning_analytics.services.longitudinal import build_longitudinal_analysis
+from learning_analytics.services.model_comparison import build_model_comparison
+from learning_analytics.services.quality import (
+    QUALITY_THRESHOLDS,
+    latest_quality_report,
+    trailing_window,
+)
 from learning_analytics.tasks import dispatch_school_data_quality_pipeline
 from ops.xlsx import build_workbook, workbook_response
+from school.models import ClassGroup
 
 METRIC_LABELS = {
     "duplicate_rate": "重复事件率",
@@ -240,11 +270,7 @@ def export_school_quality(request):
                     report.report_id,
                     label,
                     float(getattr(report, key)),
-                    (
-                        "低于"
-                        if threshold.get("direction") == "low"
-                        else "高于"
-                    ),
+                    ("低于" if threshold.get("direction") == "low" else "高于"),
                     threshold.get("amber", ""),
                     threshold.get("red", ""),
                 ]
@@ -369,4 +395,858 @@ def export_school_quality(request):
     return workbook_response(
         workbook,
         f"{school.code}-学习数据检查-{timezone.localdate():%Y%m%d}.xlsx",
+    )
+
+
+def _validation_message(exc: ValidationError) -> str:
+    if hasattr(exc, "message_dict"):
+        return "；".join(
+            message for messages in exc.message_dict.values() for message in messages
+        )
+    return "；".join(exc.messages)
+
+
+def _current_outcomes(queryset):
+    if hasattr(queryset, "order_by"):
+        rows = queryset.order_by(
+            "decision_point_id",
+            "student_id",
+            "outcome_definition_id",
+            "-observation_version",
+            "-id",
+        )
+    else:
+        rows = sorted(
+            queryset,
+            key=lambda item: (
+                item.decision_point_id,
+                item.student_id,
+                item.outcome_definition_id,
+                -item.observation_version,
+                -item.id,
+            ),
+        )
+    latest = {}
+    for item in rows:
+        key = (
+            item.decision_point_id,
+            item.student_id,
+            item.outcome_definition_id,
+        )
+        latest.setdefault(key, item)
+    return list(latest.values())
+
+
+def _decision_point_row(point: DecisionPoint) -> dict:
+    snapshots = list(getattr(point, "prefetched_snapshots", []))
+    prefetched_outcomes = getattr(point, "prefetched_outcomes", None)
+    outcomes = _current_outcomes(
+        OutcomeObservation.objects.filter(decision_point=point)
+        if prefetched_outcomes is None
+        else prefetched_outcomes
+    )
+    return {
+        "id": point.id,
+        "decision_id": str(point.decision_id),
+        "title": point.title,
+        "class_group": {
+            "id": point.class_group_id,
+            "name": point.class_group.name,
+        },
+        "subject": {"id": point.subject_id, "name": point.subject.name},
+        "course": (
+            {"id": point.course_id, "title": point.course.title}
+            if point.course_id
+            else None
+        ),
+        "purpose": point.purpose,
+        "purpose_label": point.get_purpose_display(),
+        "status": point.status,
+        "status_label": point.get_status_display(),
+        "scheduled_for": point.scheduled_for,
+        "frozen_at": point.frozen_at,
+        "student_count": point.context_snapshot.get("eligible_student_count", 0),
+        "quality_checks_passed": point.context_snapshot.get(
+            "quality_checks_passed", False
+        ),
+        "snapshot_counts": {
+            status: sum(item.quality_status == status for item in snapshots)
+            for status, _label in StudentFeatureSnapshot.QualityStatus.choices
+        },
+        "outcome_counts": {
+            status: sum(item.status == status for item in outcomes)
+            for status, _label in OutcomeObservation.Status.choices
+        },
+    }
+
+
+def _dataset_row(dataset: TrainingDatasetVersion) -> dict:
+    return {
+        "id": dataset.id,
+        "dataset_id": str(dataset.dataset_id),
+        "dataset_key": dataset.dataset_key,
+        "subject": {"id": dataset.subject_id, "name": dataset.subject.name},
+        "outcome": {
+            "key": dataset.outcome_definition.outcome_key,
+            "label": dataset.outcome_definition.label,
+            "version": dataset.outcome_definition.version,
+        },
+        "feature_set": {
+            "key": dataset.feature_set.set_key,
+            "version": dataset.feature_set.version,
+        },
+        "status": dataset.status,
+        "status_label": dataset.get_status_display(),
+        "decision_start": dataset.decision_start,
+        "decision_end": dataset.decision_end,
+        "row_count": dataset.row_count,
+        "observed_count": dataset.observed_count,
+        "unobserved_count": dataset.unobserved_count,
+        "excluded_count": dataset.excluded_count,
+        "comparison_ready": bool(dataset.manifest.get("comparison_ready")),
+        "blockers": dataset.manifest.get("blockers", []),
+        "manifest_hash": dataset.manifest_hash,
+        "created_at": dataset.created_at,
+        "frozen_at": dataset.frozen_at,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def analysis_preparation(request):
+    sync_feature_and_outcome_definitions()
+    school = request.user.school
+    feature_set = FeatureSetVersion.objects.filter(
+        status=FeatureSetVersion.Status.ACTIVE
+    ).first()
+    features = FeatureDefinition.objects.filter(status=FeatureDefinition.Status.ACTIVE)
+    outcome_definitions = list(
+        OutcomeDefinition.objects.filter(
+            status=OutcomeDefinition.Status.ACTIVE
+        ).order_by("outcome_key")
+    )
+    points = list(
+        DecisionPoint.objects.filter(
+            school=school,
+            synthetic_run__isnull=True,
+        )
+        .select_related("class_group", "subject", "course", "feature_set")
+        .prefetch_related(
+            Prefetch(
+                "feature_snapshots",
+                queryset=StudentFeatureSnapshot.objects.filter(
+                    view_type=StudentFeatureSnapshot.ViewType.OPERATIONAL
+                ),
+                to_attr="prefetched_snapshots",
+            ),
+            Prefetch(
+                "outcome_observations",
+                queryset=OutcomeObservation.objects.order_by(
+                    "student_id",
+                    "outcome_definition_id",
+                    "-observation_version",
+                ),
+                to_attr="prefetched_outcomes",
+            ),
+        )
+        .order_by("-scheduled_for")[:30]
+    )
+    datasets = list(
+        TrainingDatasetVersion.objects.filter(
+            school=school,
+            synthetic_run__isnull=True,
+        )
+        .select_related("subject", "feature_set", "outcome_definition")
+        .order_by("-created_at")[:30]
+    )
+    current_outcomes = _current_outcomes(
+        OutcomeObservation.objects.filter(
+            decision_point__school=school,
+            decision_point__synthetic_run__isnull=True,
+        )
+    )
+    snapshot_query = StudentFeatureSnapshot.objects.filter(
+        school=school,
+        decision_point__synthetic_run__isnull=True,
+        view_type=StudentFeatureSnapshot.ViewType.OPERATIONAL,
+    )
+    quality_report = latest_quality_report(school=school)
+    blockers = []
+    if quality_report is None:
+        blockers.append("还没有学习数据检查报告。")
+    elif not quality_report.checks_passed:
+        blockers.append("最近一次学习数据检查未通过。")
+    if not points:
+        blockers.append("还没有建立分析时间点。")
+    if not any(
+        item.status == OutcomeObservation.Status.OBSERVED for item in current_outcomes
+    ):
+        blockers.append("还没有到期且可用的未来学习结果。")
+    if not datasets:
+        blockers.append("还没有生成冻结的数据版本。")
+
+    classes = list(
+        ClassGroup.objects.filter(
+            school=school,
+            status=ClassGroup.Status.ACTIVE,
+        )
+        .annotate(
+            active_student_count=Count(
+                "students",
+                filter=Q(students__user__is_active=True),
+            )
+        )
+        .order_by("grade", "name")
+    )
+    courses = list(
+        Course.objects.filter(
+            subject__school=school,
+            is_active=True,
+        )
+        .select_related("subject", "teacher")
+        .prefetch_related("course_classes")
+        .order_by("subject__name", "title")
+    )
+    return ok(
+        {
+            "school": {"id": school.id, "name": school.name, "code": school.code},
+            "summary": {
+                "feature_definition_count": features.count(),
+                "model_input_feature_count": features.filter(
+                    model_input_allowed=True
+                ).count(),
+                "audit_feature_count": features.filter(
+                    model_input_allowed=False
+                ).count(),
+                "decision_point_count": len(points),
+                "snapshot_count": snapshot_query.count(),
+                "ready_snapshot_count": snapshot_query.filter(
+                    quality_status=StudentFeatureSnapshot.QualityStatus.READY
+                ).count(),
+                "observed_outcome_count": sum(
+                    item.status == OutcomeObservation.Status.OBSERVED
+                    for item in current_outcomes
+                ),
+                "pending_outcome_count": sum(
+                    item.status == OutcomeObservation.Status.PENDING
+                    for item in current_outcomes
+                ),
+                "dataset_count": len(datasets),
+                "comparison_ready_dataset_count": sum(
+                    bool(item.manifest.get("comparison_ready")) for item in datasets
+                ),
+            },
+            "feature_set": (
+                {
+                    "key": feature_set.set_key,
+                    "version": feature_set.version,
+                    "label": feature_set.label,
+                    "manifest_hash": feature_set.manifest_hash,
+                }
+                if feature_set
+                else None
+            ),
+            "feature_groups": [
+                {
+                    "key": key,
+                    "label": label,
+                    "count": features.filter(evidence_group=key).count(),
+                }
+                for key, label in FeatureDefinition.EvidenceGroup.choices
+            ],
+            "outcome_definitions": [
+                {
+                    "id": item.id,
+                    "key": item.outcome_key,
+                    "label": item.label,
+                    "version": item.version,
+                    "horizon_days": item.horizon_days,
+                    "min_denominator": item.min_denominator,
+                }
+                for item in outcome_definitions
+            ],
+            "decision_points": [_decision_point_row(point) for point in points],
+            "datasets": [_dataset_row(dataset) for dataset in datasets],
+            "blockers": blockers,
+            "options": {
+                "classes": [
+                    {
+                        "id": item.id,
+                        "name": item.name,
+                        "grade": item.grade,
+                        "student_count": item.active_student_count,
+                    }
+                    for item in classes
+                ],
+                "courses": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "subject": {
+                            "id": item.subject_id,
+                            "name": item.subject.name,
+                        },
+                        "teacher_name": item.teacher.display_name
+                        or item.teacher.username,
+                        "class_ids": [
+                            relation.class_group_id
+                            for relation in item.course_classes.all()
+                        ],
+                    }
+                    for item in courses
+                ],
+            },
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def create_analysis_decision_point(request):
+    school = request.user.school
+    try:
+        class_id = int(request.data.get("class_id") or 0)
+        course_id = int(request.data.get("course_id") or 0)
+    except (TypeError, ValueError):
+        return fail("班级或课程不正确。", status=400)
+    class_group = ClassGroup.objects.filter(
+        pk=class_id,
+        school=school,
+        status=ClassGroup.Status.ACTIVE,
+    ).first()
+    course = (
+        Course.objects.filter(
+            pk=course_id,
+            subject__school=school,
+            is_active=True,
+        )
+        .select_related("subject")
+        .first()
+    )
+    if class_group is None or course is None:
+        return fail("班级或课程不存在。", status=404)
+    if not CourseClass.objects.filter(course=course, class_group=class_group).exists():
+        return fail("该课程没有分配给所选班级。", status=400)
+
+    scheduled_for = timezone.now()
+    raw_time = str(request.data.get("scheduled_for") or "").strip()
+    if raw_time:
+        parsed = parse_datetime(raw_time)
+        if parsed is None:
+            return fail("计划时间格式不正确。", status=400)
+        scheduled_for = (
+            timezone.make_aware(parsed, timezone.get_current_timezone())
+            if timezone.is_naive(parsed)
+            else parsed
+        )
+    now = timezone.now()
+    if scheduled_for < now - timedelta(minutes=5):
+        return fail("页面不能补建过去的分析时间点。", status=400)
+    if scheduled_for > now + timedelta(days=90):
+        return fail("计划时间不能超过未来 90 天。", status=400)
+    try:
+        result = create_decision_point(
+            school=school,
+            class_group=class_group,
+            subject=course.subject,
+            course=course,
+            scheduled_for=scheduled_for,
+            created_by=request.user,
+            purpose=DecisionPoint.Purpose.PILOT,
+            title=str(request.data.get("title") or "").strip(),
+        )
+    except IntegrityError:
+        return fail("相同班级、课程和时间已经建立过分析时间点。", status=409)
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=400)
+    point = result["decision_point"]
+    point = (
+        DecisionPoint.objects.select_related("class_group", "subject", "course")
+        .prefetch_related(
+            Prefetch(
+                "feature_snapshots",
+                queryset=StudentFeatureSnapshot.objects.filter(
+                    view_type=StudentFeatureSnapshot.ViewType.OPERATIONAL
+                ),
+                to_attr="prefetched_snapshots",
+            )
+        )
+        .get(pk=point.pk)
+    )
+    return ok(
+        {"decision_point": _decision_point_row(point)},
+        "分析时间点已建立。",
+        status=201,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def refresh_analysis_outcomes(request):
+    counts = mature_due_outcomes(school=request.user.school)
+    return ok(counts, "未来学习结果已更新。")
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def create_training_dataset(request):
+    school = request.user.school
+    try:
+        subject_id = int(request.data.get("subject_id") or 0)
+    except (TypeError, ValueError):
+        return fail("学科不正确。", status=400)
+    subject = Subject.objects.filter(pk=subject_id, school=school).first()
+    outcome = OutcomeDefinition.objects.filter(
+        outcome_key=str(request.data.get("outcome_key") or ""),
+        status=OutcomeDefinition.Status.ACTIVE,
+    ).first()
+    if subject is None or outcome is None:
+        return fail("学科或未来结果定义不存在。", status=404)
+    try:
+        dataset = build_training_dataset(
+            school=school,
+            subject=subject,
+            outcome_definition=outcome,
+            created_by=request.user,
+        )
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    dataset = TrainingDatasetVersion.objects.select_related(
+        "subject", "feature_set", "outcome_definition"
+    ).get(pk=dataset.pk)
+    return ok(
+        {"dataset": _dataset_row(dataset)},
+        "数据版本已生成。",
+        status=201,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def export_training_dataset(request, pk: int):
+    dataset = (
+        TrainingDatasetVersion.objects.filter(
+            pk=pk,
+            school=request.user.school,
+            synthetic_run__isnull=True,
+        )
+        .select_related("school", "subject", "feature_set", "outcome_definition")
+        .first()
+    )
+    if dataset is None:
+        return fail("数据版本不存在。", status=404)
+    rows = list(
+        dataset.rows.select_related("decision_point").order_by(
+            "decision_point__scheduled_for", "pseudonymous_key"
+        )
+    )
+    workbook = build_workbook(
+        [
+            {
+                "title": "版本说明",
+                "headers": ["项目", "内容"],
+                "rows": [
+                    ["数据版本", dataset.dataset_key],
+                    ["学校", dataset.school.name],
+                    ["学科", dataset.subject.name],
+                    [
+                        "特征集",
+                        f"{dataset.feature_set.set_key}@{dataset.feature_set.version}",
+                    ],
+                    [
+                        "未来结果",
+                        f"{dataset.outcome_definition.label}@{dataset.outcome_definition.version}",
+                    ],
+                    ["记录数", dataset.row_count],
+                    ["已观察", dataset.observed_count],
+                    ["无可用结果", dataset.unobserved_count],
+                    ["已排除", dataset.excluded_count],
+                    [
+                        "可进入模型比较",
+                        dataset.manifest.get("comparison_ready", False),
+                    ],
+                    ["暂不能比较原因", dataset.manifest.get("blockers", [])],
+                    ["清单摘要", dataset.manifest_hash],
+                ],
+            },
+            {
+                "title": "匿名数据",
+                "headers": [
+                    "内部匿名编号",
+                    "分析时间",
+                    "学生分组",
+                    "时间分组",
+                    "特征值",
+                    "分子",
+                    "分母",
+                    "缺失原因",
+                    "结果状态",
+                    "结果值",
+                    "结果分子",
+                    "结果分母",
+                    "结果缺失原因",
+                    "行摘要",
+                ],
+                "rows": [
+                    [
+                        item.pseudonymous_key,
+                        item.decision_point.scheduled_for,
+                        item.split_assignments.get("group_holdout", item.split),
+                        item.split_assignments.get("time_holdout", ""),
+                        item.feature_values,
+                        item.feature_numerators,
+                        item.feature_denominators,
+                        item.feature_missing_codes,
+                        item.outcome_status,
+                        item.outcome_value,
+                        item.outcome_numerator,
+                        item.outcome_denominator,
+                        item.outcome_missing_code,
+                        item.row_hash,
+                    ]
+                    for item in rows
+                ],
+            },
+        ]
+    )
+    return workbook_response(
+        workbook,
+        (
+            f"{dataset.school.code}-{dataset.subject.code}-学习分析数据-"
+            f"{dataset.dataset_key[:8]}.xlsx"
+        ),
+    )
+
+
+def _longitudinal_run_row(run: LongitudinalAnalysisRun, detail=False):
+    results = list(
+        run.feature_results.order_by("feature_key")
+        if detail
+        else run.feature_results.order_by("feature_key")[:8]
+    )
+    return {
+        "id": run.id,
+        "run_id": str(run.run_id),
+        "dataset_id": run.dataset_id,
+        "dataset_key": run.dataset.dataset_key,
+        "subject": {"id": run.subject_id, "name": run.subject.name},
+        "status": run.status,
+        "status_label": run.get_status_display(),
+        "analysis_version": run.analysis_version,
+        "feature_count": run.feature_count,
+        "ready_feature_count": run.ready_feature_count,
+        "row_count": run.row_count,
+        "student_count": run.student_count,
+        "class_count": run.class_count,
+        "manifest": run.manifest,
+        "manifest_hash": run.manifest_hash,
+        "created_at": run.created_at,
+        "finished_at": run.finished_at,
+        "feature_results": [
+            {
+                "feature_key": item.feature_key,
+                "status": item.status,
+                "status_label": item.get_status_display(),
+                "observation_count": item.observation_count,
+                "student_count": item.student_count,
+                "class_count": item.class_count,
+                "total_variance": item.total_variance,
+                "between_variance": item.between_variance,
+                "within_variance": item.within_variance,
+                "intraclass_correlation": item.intraclass_correlation,
+                "overall_association": item.overall_association,
+                "within_association": item.within_association,
+                "between_association": item.between_association,
+                "interval_low": item.interval_low,
+                "interval_high": item.interval_high,
+                "direction": item.direction,
+                "details": item.details,
+            }
+            for item in results
+        ],
+    }
+
+
+def _model_comparison_row(run: ModelComparisonRun, detail=False):
+    evaluations = run.evaluations.order_by("validation_key", "model_key")
+    if not detail:
+        evaluations = evaluations[:40]
+    controls = run.negative_controls.order_by("control_key")
+    return {
+        "id": run.id,
+        "run_id": str(run.run_id),
+        "dataset_id": run.dataset_id,
+        "dataset_key": run.dataset.dataset_key,
+        "subject": {"id": run.subject_id, "name": run.subject.name},
+        "status": run.status,
+        "status_label": run.get_status_display(),
+        "comparison_version": run.comparison_version,
+        "target_type": run.target_type,
+        "model_keys": run.model_keys,
+        "validation_keys": run.validation_keys,
+        "row_count": run.row_count,
+        "observed_count": run.observed_count,
+        "manifest": run.manifest,
+        "model_card": run.model_card,
+        "manifest_hash": run.manifest_hash,
+        "created_at": run.created_at,
+        "finished_at": run.finished_at,
+        "evaluations": [
+            {
+                "id": item.id,
+                "model_key": item.model_key,
+                "validation_key": item.validation_key,
+                "status": item.status,
+                "status_label": item.get_status_display(),
+                "train_count": item.train_count,
+                "test_count": item.test_count,
+                "predicted_count": item.predicted_count,
+                "abstained_count": item.abstained_count,
+                "primary_metric": item.primary_metric,
+                "rmse": item.rmse,
+                "mae": item.mae,
+                "brier_score": item.brier_score,
+                "calibration_intercept": item.calibration_intercept,
+                "calibration_slope": item.calibration_slope,
+                "coverage": item.coverage,
+                "metrics": item.metrics,
+                "note": item.note,
+            }
+            for item in evaluations
+        ],
+        "negative_controls": [
+            {
+                "control_key": item.control_key,
+                "status": item.status,
+                "status_label": item.get_status_display(),
+                "expected_behavior": item.expected_behavior,
+                "observed_metric": item.observed_metric,
+                "baseline_metric": item.baseline_metric,
+                "details": item.details,
+            }
+            for item in controls
+        ],
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def model_validation(request):
+    school = request.user.school
+    longitudinal_runs = list(
+        LongitudinalAnalysisRun.objects.filter(
+            school=school,
+            dataset__synthetic_run__isnull=True,
+        )
+        .select_related("dataset", "subject")
+        .prefetch_related("feature_results")
+        .order_by("-created_at")[:20]
+    )
+    comparison_runs = list(
+        ModelComparisonRun.objects.filter(
+            school=school,
+            dataset__synthetic_run__isnull=True,
+        )
+        .select_related("dataset", "subject")
+        .prefetch_related("evaluations", "negative_controls")
+        .order_by("-created_at")[:20]
+    )
+    datasets = list(
+        TrainingDatasetVersion.objects.filter(
+            school=school,
+            synthetic_run__isnull=True,
+            status=TrainingDatasetVersion.Status.FROZEN,
+        )
+        .select_related("subject", "outcome_definition")
+        .order_by("-created_at")[:50]
+    )
+    return ok(
+        {
+            "datasets": [_dataset_row(item) for item in datasets],
+            "longitudinal_runs": [
+                _longitudinal_run_row(item) for item in longitudinal_runs
+            ],
+            "comparison_runs": [
+                _model_comparison_row(item) for item in comparison_runs
+            ],
+            "rules": {
+                "model_comparison_is_shadow_only": True,
+                "minimum_evaluation_n": 30,
+                "model_order": ["M00", "M01", "M02", "M03"],
+                "validation_order": ["V-A", "V-B", "V-C", "V-D", "V-E"],
+            },
+        }
+    )
+
+
+def _dataset_for_school(request, request_data):
+    try:
+        dataset_id = int(request_data.get("dataset_id") or 0)
+    except (TypeError, ValueError):
+        raise ValidationError("数据版本编号不正确。")
+    dataset = (
+        TrainingDatasetVersion.objects.filter(
+            pk=dataset_id,
+            school=request.user.school,
+            synthetic_run__isnull=True,
+            status=TrainingDatasetVersion.Status.FROZEN,
+        )
+        .select_related("school", "subject", "feature_set", "outcome_definition")
+        .first()
+    )
+    if dataset is None:
+        raise ValidationError("数据版本不存在，或尚未冻结。")
+    return dataset
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def create_longitudinal_analysis(request):
+    try:
+        dataset = _dataset_for_school(request, request.data)
+        run = build_longitudinal_analysis(dataset=dataset, created_by=request.user)
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    run = LongitudinalAnalysisRun.objects.select_related("dataset", "subject").prefetch_related(
+        "feature_results"
+    ).get(pk=run.pk)
+    return ok(
+        {"run": _longitudinal_run_row(run, detail=True)},
+        "重复测量统计已生成。" if run.status == LongitudinalAnalysisRun.Status.COMPLETED else "重复测量统计暂不能报告。",
+        status=201,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def create_model_comparison(request):
+    try:
+        dataset = _dataset_for_school(request, request.data)
+        run = build_model_comparison(dataset=dataset, created_by=request.user)
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    run = ModelComparisonRun.objects.select_related("dataset", "subject").prefetch_related(
+        "evaluations", "negative_controls"
+    ).get(pk=run.pk)
+    return ok(
+        {"run": _model_comparison_row(run, detail=True)},
+        "模型比较已生成，当前只保留影子比较结果。"
+        if run.status == ModelComparisonRun.Status.SHADOW_ONLY
+        else "模型比较已生成，但存在数据不足或需要解释的问题。",
+        status=201,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def export_model_validation(request, pk: int):
+    run = (
+        ModelComparisonRun.objects.filter(
+            pk=pk,
+            school=request.user.school,
+            dataset__synthetic_run__isnull=True,
+        )
+        .select_related("dataset", "subject")
+        .prefetch_related("evaluations", "negative_controls")
+        .first()
+    )
+    if run is None:
+        return fail("模型比较记录不存在。", status=404)
+    longitudinal = LongitudinalAnalysisRun.objects.filter(dataset=run.dataset).first()
+    longitudinal_results = list(
+        longitudinal.feature_results.order_by("feature_key") if longitudinal else []
+    )
+    workbook = build_workbook(
+        [
+            {
+                "title": "模型卡",
+                "headers": ["项目", "内容"],
+                "rows": [[key, value] for key, value in run.model_card.items()],
+            },
+            {
+                "title": "模型比较",
+                "headers": [
+                    "模型",
+                    "验证方式",
+                    "状态",
+                    "训练记录",
+                    "测试记录",
+                    "预测数",
+                    "拒绝数",
+                    "主要指标",
+                    "RMSE",
+                    "MAE",
+                    "覆盖率",
+                    "说明",
+                ],
+                "rows": [
+                    [
+                        item.model_key,
+                        item.validation_key,
+                        item.get_status_display(),
+                        item.train_count,
+                        item.test_count,
+                        item.predicted_count,
+                        item.abstained_count,
+                        item.primary_metric,
+                        item.rmse,
+                        item.mae,
+                        item.coverage,
+                        item.note,
+                    ]
+                    for item in run.evaluations.all()
+                ],
+            },
+            {
+                "title": "重复测量",
+                "headers": [
+                    "指标",
+                    "状态",
+                    "观测数",
+                    "学生数",
+                    "班级数",
+                    "个体间差异",
+                    "个体内差异",
+                    "相关系数",
+                    "区间下限",
+                    "区间上限",
+                    "方向",
+                ],
+                "rows": [
+                    [
+                        item.feature_key,
+                        item.get_status_display(),
+                        item.observation_count,
+                        item.student_count,
+                        item.class_count,
+                        item.between_variance,
+                        item.within_variance,
+                        item.overall_association,
+                        item.interval_low,
+                        item.interval_high,
+                        item.direction,
+                    ]
+                    for item in longitudinal_results
+                ],
+            },
+            {
+                "title": "负对照",
+                "headers": ["检查", "状态", "预期", "实际指标", "基线指标", "详情"],
+                "rows": [
+                    [
+                        item.control_key,
+                        item.get_status_display(),
+                        item.expected_behavior,
+                        item.observed_metric,
+                        item.baseline_metric,
+                        item.details,
+                    ]
+                    for item in run.negative_controls.all()
+                ],
+            },
+        ]
+    )
+    return workbook_response(
+        workbook,
+        f"{run.school.code}-{run.subject.code}-模型验证-{run.run_key[:8]}.xlsx",
     )
