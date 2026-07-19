@@ -192,6 +192,59 @@ export type EvaluationTrialRow = {
   updated_at: string
 }
 
+export type LessonStepEvaluationCriterion = {
+  id: number
+  code: string
+  title: string
+  dimension: string
+  dimension_label: string
+  evaluation_target: string
+  evaluation_sources: string[]
+  expected_performance: string
+  level_descriptions: string[]
+  skip_condition: string
+  support_options: string[]
+  common_problems: string[]
+  follow_up_suggestion: string
+}
+
+export type LessonStepEvaluationStandardOption = {
+  id: number
+  title: string
+  version_no: number
+  review_status: string
+  review_status_label: string
+  criterion_count: number
+  criteria: LessonStepEvaluationCriterion[]
+}
+
+export type LessonStepEvaluationBinding = {
+  id: number
+  lesson_step: number
+  standard_version: number
+  standard_title: string
+  version_no: number
+  enable_self: boolean
+  enable_peer: boolean
+  enable_teacher: boolean
+  locked: boolean
+  criteria: LessonStepEvaluationCriterion[]
+  created_at: string
+  updated_at: string
+}
+
+export type LessonStepEvaluationBindingContext = {
+  binding: LessonStepEvaluationBinding | null
+  standards: LessonStepEvaluationStandardOption[]
+}
+
+export type LessonStepEvaluationBindingPayload = {
+  standard_version: number
+  enable_self: boolean
+  enable_peer: boolean
+  enable_teacher: boolean
+}
+
 const baseUrl = '/api/v1/teacher/evaluations'
 
 export function getEvaluationOptions() {
@@ -263,4 +316,30 @@ export function deleteEvaluationTrial(id: number) {
 
 export function evaluationTrialExportUrl() {
   return `${baseUrl}/trials/export/`
+}
+
+export function getLessonStepEvaluationBinding(stepId: number) {
+  return apiRequest<LessonStepEvaluationBindingContext>(
+    `${baseUrl}/lesson-steps/${stepId}/binding/`
+  )
+}
+
+export function saveLessonStepEvaluationBinding(
+  stepId: number,
+  payload: LessonStepEvaluationBindingPayload
+) {
+  return apiRequest<LessonStepEvaluationBinding>(
+    `${baseUrl}/lesson-steps/${stepId}/binding/`,
+    {
+      method: 'PATCH',
+      body: toJsonBody(payload)
+    }
+  )
+}
+
+export function deleteLessonStepEvaluationBinding(stepId: number) {
+  return apiRequest<Record<string, never>>(
+    `${baseUrl}/lesson-steps/${stepId}/binding/`,
+    { method: 'DELETE' }
+  )
 }

@@ -12,8 +12,11 @@ from courses.models import (
     ClassroomEvaluationConfigVersion,
     ClassroomEvaluationSubmission,
 )
-from learning.models import LearningEvent
+from learning.models import LearningEvent, LessonStepAttempt, StudentWorkAttachment
 from learning_analytics.models import (
+    ClassroomEvaluationStandardUse,
+    EvaluationSubmissionEvidence,
+    LessonStepEvaluationBinding,
     LearningEventV2,
     LearningOpportunity,
     LearningOpportunityTransitionFact,
@@ -56,14 +59,28 @@ def _criteria_rows(raw_items) -> list[dict]:
             sort_order = int(item.get("sort_order") or index * 10)
         except (TypeError, ValueError):
             sort_order = index * 10
-        rows.append(
-            {
-                "id": criterion_id,
-                "title": title[:80],
-                "description": str(item.get("description") or "").strip()[:300],
-                "sort_order": sort_order,
-            }
-        )
+        row = {
+            "id": criterion_id,
+            "title": title[:80],
+            "description": str(item.get("description") or "").strip()[:300],
+            "sort_order": sort_order,
+        }
+        optional_fields = {
+            "standard_criterion_id": item.get("standard_criterion_id"),
+            "criterion_code": str(item.get("criterion_code") or "").strip()[:32],
+            "dimension": str(item.get("dimension") or "").strip()[:32],
+            "evaluation_target": str(item.get("evaluation_target") or "").strip()[:300],
+            "evaluation_sources": item.get("evaluation_sources"),
+            "level_descriptions": item.get("level_descriptions"),
+            "skip_condition": str(item.get("skip_condition") or "").strip(),
+            "support_options": item.get("support_options"),
+            "common_problems": item.get("common_problems"),
+            "follow_up_suggestion": str(item.get("follow_up_suggestion") or "").strip(),
+        }
+        for field, value in optional_fields.items():
+            if field in item:
+                row[field] = value
+        rows.append(row)
     return sorted(rows, key=lambda item: (item["sort_order"], item["id"]))
 
 
@@ -119,10 +136,130 @@ def publish_evaluation_config_version(
     )
 
 
+def standard_binding_criteria(binding: LessonStepEvaluationBinding) -> list[dict]:
+    rows = []
+    for index, criterion in enumerate(
+        binding.standard_version.criteria.all().order_by("sort_order", "id"), 1
+    ):
+        rows.append(
+            {
+                "id": f"std_{binding.standard_version_id}_{criterion.code}"[:64],
+                "title": criterion.title[:80],
+                "description": criterion.expected_performance[:300],
+                "sort_order": index * 10,
+                "standard_criterion_id": criterion.id,
+                "criterion_code": criterion.code,
+                "dimension": criterion.dimension,
+                "evaluation_target": criterion.evaluation_target,
+                "evaluation_sources": criterion.evaluation_sources,
+                "level_descriptions": criterion.level_descriptions,
+                "skip_condition": criterion.skip_condition,
+                "support_options": criterion.support_options,
+                "common_problems": criterion.common_problems,
+                "follow_up_suggestion": criterion.follow_up_suggestion,
+            }
+        )
+    return rows
+
+
+@transaction.atomic
+def freeze_classroom_evaluation_standard(
+    *, session, binding: LessonStepEvaluationBinding, actor
+) -> ClassroomEvaluationStandardUse:
+    existing = ClassroomEvaluationStandardUse.objects.filter(session=session).first()
+    if existing:
+        return existing
+    criteria = standard_binding_criteria(binding)
+    if not criteria:
+        raise EvaluationEventError("evaluation_standard_empty", "评价标准没有可用评价指标。")
+    snapshot = {
+        "enable_self": binding.enable_self,
+        "enable_peer": binding.enable_peer,
+        "enable_teacher": binding.enable_teacher,
+        "self_criteria": criteria if binding.enable_self else [],
+        "peer_criteria": criteria if binding.enable_peer else [],
+        "teacher_criteria": criteria if binding.enable_teacher else [],
+    }
+    config_hash = evaluation_config_hash(snapshot)
+    version = ClassroomEvaluationConfigVersion.objects.filter(
+        course=session.course,
+        config_hash=config_hash,
+    ).first()
+    if version is None:
+        latest_no = (
+            ClassroomEvaluationConfigVersion.objects.filter(course=session.course).aggregate(
+                value=Max("version_no")
+            )["value"]
+            or 0
+        )
+        version = ClassroomEvaluationConfigVersion.objects.create(
+            course=session.course,
+            version_no=latest_no + 1,
+            config_hash=config_hash,
+            created_by=actor,
+            **snapshot,
+        )
+    return ClassroomEvaluationStandardUse.objects.create(
+        session=session,
+        binding=binding,
+        lesson_step=binding.lesson_step,
+        standard_version=binding.standard_version,
+        evaluation_config_version=version,
+        criteria_snapshot=criteria,
+        opened_by=actor,
+    )
+
+
+def capture_evaluation_submission_evidence(submission):
+    if not submission.session_id:
+        return None
+    standard_use = ClassroomEvaluationStandardUse.objects.filter(
+        session_id=submission.session_id
+    ).first()
+    if standard_use is None:
+        return None
+    attempt = (
+        LessonStepAttempt.objects.filter(
+            classroom_session_id=submission.session_id,
+            lesson_step_id=standard_use.lesson_step_id,
+            student_id=submission.target_id,
+        )
+        .order_by("-attempt_no", "-id")
+        .first()
+    )
+    work = (
+        StudentWorkAttachment.objects.filter(
+            classroom_session_id=submission.session_id,
+            lesson_step_id=standard_use.lesson_step_id,
+            student_id=submission.target_id,
+        )
+        .order_by("-upload_version", "-id")
+        .first()
+    )
+    return EvaluationSubmissionEvidence.objects.create(
+        submission=submission,
+        standard_use=standard_use,
+        lesson_step_attempt=attempt,
+        student_work_attachment=work,
+    )
+
+
 def evaluation_version_label(version: ClassroomEvaluationConfigVersion) -> str:
     return (
         f"course:{version.course_id}:v{version.version_no}:{version.config_hash[:12]}"
     )
+
+
+def standard_use_version_label(use: ClassroomEvaluationStandardUse) -> str:
+    version = use.standard_version
+    return f"standard:{version.id}:v{version.version_no}:{version.content_hash[:12]}"
+
+
+def classroom_evaluation_object_version(*, session, version) -> str:
+    standard_use = ClassroomEvaluationStandardUse.objects.filter(
+        session_id=session.id
+    ).select_related("standard_version").first()
+    return standard_use_version_label(standard_use) if standard_use else version.config_hash
 
 
 def _criteria_for_type(version, evaluation_type: str) -> list[dict]:
@@ -162,6 +299,9 @@ def release_classroom_evaluation_opportunities(
     if learning_event_write_mode() == "v1_only":
         return {"release_events": 0, "opportunities_created": 0}
     occurred_at = occurred_at or timezone.now()
+    object_version = classroom_evaluation_object_version(
+        session=session, version=version
+    )
     existing_ids = set(
         LearningEventV2.objects.filter(
             school=session.school,
@@ -196,7 +336,7 @@ def release_classroom_evaluation_opportunities(
                 classroom_session=session,
                 object_type="evaluation_standard",
                 object_id=object_id,
-                object_version=version.config_hash,
+                object_version=object_version,
                 legacy_metadata={
                     "action": "classroom_evaluation_released",
                     "classroom_session": session.id,
@@ -410,6 +550,7 @@ def append_evaluation_submission(
         ratings=ratings,
         comment=comment,
     )
+    evidence = capture_evaluation_submission_evidence(submission)
     if session:
         release_classroom_evaluation_opportunities(
             session=session,
@@ -426,10 +567,15 @@ def append_evaluation_submission(
             actor=course.teacher,
         )
         object_id = course_evaluation_object_id(course, class_group, evaluation_type)
+    object_version = (
+        standard_use_version_label(evidence.standard_use)
+        if evidence
+        else evaluation_version.config_hash
+    )
     opportunity = _active_evaluation_opportunity(
         student=target,
         object_id=object_id,
-        object_version=evaluation_version.config_hash,
+        object_version=object_version,
     )
     criterion_order = {
         item["id"]: index
@@ -449,7 +595,11 @@ def append_evaluation_submission(
             target_student=target,
             event_name="evaluation.rating.submitted",
             payload={
-                "evaluation_version": evaluation_version_label(evaluation_version),
+                "evaluation_version": (
+                    standard_use_version_label(evidence.standard_use)
+                    if evidence
+                    else evaluation_version_label(evaluation_version)
+                ),
                 "criterion_ratings": criterion_ratings,
                 "rater_role": evaluation_type,
             },
@@ -467,7 +617,7 @@ def append_evaluation_submission(
             classroom_session=session,
             object_type="evaluation_standard",
             object_id=object_id,
-            object_version=evaluation_version.config_hash,
+            object_version=object_version,
             opportunity_id=opportunity.opportunity_id if opportunity else None,
             attempt_id=submission.analytics_attempt_id,
             legacy_metadata={

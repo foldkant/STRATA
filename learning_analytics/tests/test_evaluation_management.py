@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 from rest_framework.test import APIClient
 
 from accounts.models import User
-from courses.models import Course, Subject
+from courses.models import Course, Lesson, LessonStep, Subject
 from learning_analytics.evaluation_models import (
     EvaluationPlan,
     EvaluationPlanVersion,
@@ -87,6 +87,17 @@ class EvaluationManagementApiTests(TestCase):
             title="Peer Teacher Course",
             teacher=self.peer_teacher,
             is_active=True,
+        )
+        self.lesson = Lesson.objects.create(
+            course=self.course,
+            title="Evaluation lesson",
+            is_active=True,
+        )
+        self.lesson_step = LessonStep.objects.create(
+            lesson=self.lesson,
+            title="Evaluation step",
+            step_type=LessonStep.StepType.EVALUATION,
+            created_by=self.teacher,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.teacher)
@@ -173,17 +184,22 @@ class EvaluationManagementApiTests(TestCase):
             ],
         }
 
-    def create_plan(self) -> dict:
+    def create_plan(self, *, course: Course | None = None) -> dict:
+        payload = self.plan_payload()
+        if course is not None:
+            payload["course"] = course.id
         response = self.client.post(
             "/api/v1/teacher/evaluations/plans/",
-            self.plan_payload(),
+            payload,
             format="json",
         )
         self.assertEqual(response.status_code, 201, response.data)
         return response.data["data"]
 
-    def create_published_standard(self) -> EvaluationStandardVersion:
-        plan = self.create_plan()
+    def create_published_standard(
+        self, *, course: Course | None = None
+    ) -> EvaluationStandardVersion:
+        plan = self.create_plan(course=course)
         response = self.client.post(
             f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
             {},
@@ -204,6 +220,78 @@ class EvaluationManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200, response.data)
         return EvaluationStandardVersion.objects.get(source_id=standard_id)
+
+    def test_teacher_can_bind_published_standard_to_own_lesson_step(self):
+        version = self.create_published_standard()
+        url = f"/api/v1/teacher/evaluations/lesson-steps/{self.lesson_step.id}/binding/"
+
+        response = self.client.patch(
+            url,
+            {
+                "standard_version": version.id,
+                "enable_self": "true",
+                "enable_peer": "false",
+                "enable_teacher": "true",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        binding = response.data["data"]
+        self.assertTrue(binding["enable_self"])
+        self.assertFalse(binding["enable_peer"])
+        self.assertTrue(binding["enable_teacher"])
+        self.assertFalse(binding["locked"])
+        self.assertEqual(binding["criteria"][0]["code"], "D1")
+        self.assertEqual(len(binding["criteria"][0]["level_descriptions"]), 5)
+
+        loaded = self.client.get(url)
+        self.assertEqual(loaded.status_code, 200, loaded.data)
+        self.assertEqual(loaded.data["data"]["binding"]["standard_version"], version.id)
+
+    def test_lesson_step_binding_requires_teacher_scope_and_one_type(self):
+        version = self.create_published_standard()
+        url = f"/api/v1/teacher/evaluations/lesson-steps/{self.lesson_step.id}/binding/"
+
+        response = self.client.patch(
+            url,
+            {
+                "standard_version": version.id,
+                "enable_self": "false",
+                "enable_peer": "false",
+                "enable_teacher": "false",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+
+        other_client = APIClient()
+        other_client.force_authenticate(self.other_teacher)
+        self.assertEqual(other_client.get(url).status_code, 404)
+
+        admin_client = APIClient()
+        admin_client.force_authenticate(self.school_admin)
+        self.assertEqual(admin_client.get(url).status_code, 403)
+
+    def test_lesson_step_cannot_bind_standard_from_another_course(self):
+        other_course = Course.objects.create(
+            subject=self.subject,
+            title="Second teacher course",
+            teacher=self.teacher,
+            is_active=True,
+        )
+        other_version = self.create_published_standard(course=other_course)
+        response = self.client.patch(
+            f"/api/v1/teacher/evaluations/lesson-steps/{self.lesson_step.id}/binding/",
+            {
+                "standard_version": other_version.id,
+                "enable_self": True,
+                "enable_peer": False,
+                "enable_teacher": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
 
     def test_options_and_drafts_are_teacher_course_scoped(self):
         response = self.client.get("/api/v1/teacher/evaluations/options/")

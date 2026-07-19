@@ -1,7 +1,7 @@
 # STRATA 教师评价标准管理
 
 > 实现日期：2026-07-19  
-> 当前状态：教师评价方案、评价标准、版本管理和试用记录已经完成；当前使用测试记录验证流程，正式课堂试用结论尚未形成。
+> 当前状态：教师评价方案、评价标准、版本管理、试用记录和课时环节绑定已经完成；课堂开启评价时会冻结所选版本，并把评价提交关联到本环节作答与学生作品。正式课堂试用结论尚未形成。
 
 ## 1. 功能定位
 
@@ -23,6 +23,9 @@
 - `EvaluationCriterionVersion`：评价标准中的单项指标。
 - `EvaluationScoringExample`：帮助统一评分判断的示例。
 - `EvaluationTrialRecord`：内容审核、课堂试用、评分培训和评分一致性检查记录。
+- `LessonStepEvaluationBinding`：课时环节选择的已发布标准版本，以及本环节启用的自评、互评和教师评价。
+- `ClassroomEvaluationStandardUse`：课堂首次开启评价时形成的不可修改快照。
+- `EvaluationSubmissionEvidence`：评价提交与同一课堂、同一环节、同一学生最新作答和最新作品的关联。
 
 实际数据库表、字段、Python 类、API 和前端类型均使用上述名称。历史迁移文件保留旧名称，只用于记录数据库升级过程。
 
@@ -61,6 +64,7 @@
 - 相同内容重复发布不会生成重复版本。
 - 修改后再次发布会生成下一版本。
 - 已发布版本不能删除，保证历史评分可以追溯。
+- 已经投入课堂的课时绑定不能原地修改或删除；需要调整时复制环节并选择新版本，避免改写历史课堂。
 
 ## 6. 权限
 
@@ -92,6 +96,7 @@ POST     /api/v1/teacher/evaluations/standards/{id}/publish/
 GET|POST /api/v1/teacher/evaluations/trials/
 GET|PATCH|DELETE /api/v1/teacher/evaluations/trials/{id}/
 GET      /api/v1/teacher/evaluations/trials/export/
+GET|PATCH|DELETE /api/v1/teacher/evaluations/lesson-steps/{step_id}/binding/
 ```
 
 页面包含“评价方案、评价标准、试用记录”三个页签。试用记录支持 XLSX 导出。
@@ -118,6 +123,7 @@ GET      /api/v1/teacher/evaluations/trials/export/
 - 把评价提交事件改为 `evaluation.rating.submitted`。
 - 保留原有 1 个方案、1 个标准、5 个指标和 10 个评分示例。
 - 迁移 `learning_analytics.0018` 新增评价试用记录表、学校/日期索引和评分一致率范围约束。
+- 迁移 `learning_analytics.0019` 新增课时绑定、课堂标准快照和评价证据关联。
 
 SQLite 升级前备份位于 `storage/dev.before-evaluation-rename.sqlite3`。
 
@@ -139,8 +145,7 @@ SQLite 升级前备份位于 `storage/dev.before-evaluation-rename.sqlite3`。
 
 ## 11. 后续开发
 
-1. 教师在课程或课时中选择本人发布的评价标准，并冻结本次使用版本。
-2. 为题库题目增加审核、试用、启用和停用状态。
-3. 建立共同测试和不同版本结果比较。
-4. 使用正式课堂数据补充真实试用记录。
-5. 前述流程稳定后，再进入学生学习情况汇总和分层建议开发。
+1. 为题库题目增加审核、试用、启用和停用状态。
+2. 建立共同测试和不同版本结果比较。
+3. 使用正式课堂数据补充真实试用记录。
+4. 前述流程稳定后，再进入学生学习情况汇总和分层建议开发。

@@ -618,3 +618,230 @@ class EvaluationTrialRecord(models.Model):
 
     def __str__(self) -> str:
         return f"{self.get_record_type_display()}:{self.title}"
+
+
+class LessonStepEvaluationBinding(models.Model):
+    lesson_step = models.OneToOneField(
+        "courses.LessonStep",
+        on_delete=models.CASCADE,
+        related_name="evaluation_standard_binding",
+    )
+    standard_version = models.ForeignKey(
+        EvaluationStandardVersion,
+        on_delete=models.PROTECT,
+        related_name="lesson_step_bindings",
+    )
+    enable_self = models.BooleanField(default=False)
+    enable_peer = models.BooleanField(default=False)
+    enable_teacher = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_lesson_step_evaluation_bindings",
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="updated_lesson_step_evaluation_bindings",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["standard_version", "updated_at"]),
+        ]
+        ordering = ["lesson_step_id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if not (self.enable_self or self.enable_peer or self.enable_teacher):
+            errors["enable_teacher"] = "至少启用一种评价方式。"
+        if self.lesson_step_id and self.standard_version_id:
+            course_id = self.lesson_step.lesson.course_id
+            if self.standard_version.course_id != course_id:
+                errors["standard_version"] = "评价标准版本与课时环节不属于同一课程。"
+            teacher_id = self.lesson_step.lesson.course.teacher_id
+            if self.created_by_id and self.created_by_id != teacher_id:
+                errors["created_by"] = "只有课程教师可以创建课时评价绑定。"
+            if self.updated_by_id and self.updated_by_id != teacher_id:
+                errors["updated_by"] = "只有课程教师可以修改课时评价绑定。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            persisted = type(self).objects.filter(pk=self.pk).first()
+            if persisted and persisted.classroom_uses.exists():
+                protected_fields = (
+                    "lesson_step_id",
+                    "standard_version_id",
+                    "enable_self",
+                    "enable_peer",
+                    "enable_teacher",
+                )
+                if any(
+                    getattr(persisted, field) != getattr(self, field)
+                    for field in protected_fields
+                ):
+                    raise ValidationError("已用于课堂的课时评价绑定不可修改。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.classroom_uses.exists():
+            raise ValidationError("已用于课堂的课时评价绑定不可删除。")
+        return super().delete(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"step:{self.lesson_step_id}:standard:{self.standard_version_id}"
+
+
+class ClassroomEvaluationStandardUse(models.Model):
+    session = models.OneToOneField(
+        "courses.ClassroomSession",
+        on_delete=models.PROTECT,
+        related_name="evaluation_standard_use",
+    )
+    binding = models.ForeignKey(
+        LessonStepEvaluationBinding,
+        on_delete=models.PROTECT,
+        related_name="classroom_uses",
+    )
+    lesson_step = models.ForeignKey(
+        "courses.LessonStep",
+        on_delete=models.PROTECT,
+        related_name="classroom_evaluation_uses",
+    )
+    standard_version = models.ForeignKey(
+        EvaluationStandardVersion,
+        on_delete=models.PROTECT,
+        related_name="classroom_uses",
+    )
+    evaluation_config_version = models.ForeignKey(
+        "courses.ClassroomEvaluationConfigVersion",
+        on_delete=models.PROTECT,
+        related_name="standard_uses",
+    )
+    criteria_snapshot = models.JSONField(default=list)
+    opened_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="opened_classroom_evaluation_standard_uses",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["standard_version", "created_at"]),
+            models.Index(fields=["lesson_step", "created_at"]),
+        ]
+        ordering = ["-created_at", "-id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.session_id and self.lesson_step_id:
+            if self.session.current_step_id != self.lesson_step_id:
+                errors["lesson_step"] = "课堂当前环节与评价标准使用记录不一致。"
+            if self.session.lesson_id != self.lesson_step.lesson_id:
+                errors["lesson_step"] = "评价环节不属于当前课堂课时。"
+        if self.binding_id:
+            if self.binding.lesson_step_id != self.lesson_step_id:
+                errors["binding"] = "课时评价绑定与课堂环节不一致。"
+            if self.binding.standard_version_id != self.standard_version_id:
+                errors["standard_version"] = "课堂使用版本与课时绑定版本不一致。"
+        if self.evaluation_config_version_id and self.standard_version_id:
+            if self.evaluation_config_version.course_id != self.standard_version.course_id:
+                errors["evaluation_config_version"] = "课堂评价快照与评价标准不属于同一课程。"
+        if self.opened_by_id and self.session_id and self.opened_by_id != self.session.teacher_id:
+            errors["opened_by"] = "只有课堂教师可以开启评价标准。"
+        if not isinstance(self.criteria_snapshot, list):
+            errors["criteria_snapshot"] = "评价指标快照必须是列表。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("课堂评价标准使用记录不可修改。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("课堂评价标准使用记录不可删除。")
+
+    def __str__(self) -> str:
+        return f"session:{self.session_id}:standard:{self.standard_version_id}"
+
+
+class EvaluationSubmissionEvidence(models.Model):
+    submission = models.OneToOneField(
+        "courses.ClassroomEvaluationSubmission",
+        on_delete=models.PROTECT,
+        related_name="standard_evidence",
+    )
+    standard_use = models.ForeignKey(
+        ClassroomEvaluationStandardUse,
+        on_delete=models.PROTECT,
+        related_name="submission_evidence",
+    )
+    lesson_step_attempt = models.ForeignKey(
+        "learning.LessonStepAttempt",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="evaluation_evidence",
+    )
+    student_work_attachment = models.ForeignKey(
+        "learning.StudentWorkAttachment",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="evaluation_evidence",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["standard_use", "created_at"]),
+            models.Index(fields=["lesson_step_attempt", "created_at"]),
+            models.Index(fields=["student_work_attachment", "created_at"]),
+        ]
+        ordering = ["-created_at", "-id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.submission_id and not self.submission.session_id:
+            errors["submission"] = "正式评价证据必须属于一次课堂。"
+        if self.submission_id and self.standard_use_id:
+            if self.submission.session_id != self.standard_use.session_id:
+                errors["standard_use"] = "评价提交与课堂评价标准使用记录不一致。"
+        if self.lesson_step_attempt_id and self.standard_use_id:
+            attempt = self.lesson_step_attempt
+            if attempt.classroom_session_id != self.standard_use.session_id:
+                errors["lesson_step_attempt"] = "学生作答不属于当前课堂。"
+            if attempt.lesson_step_id != self.standard_use.lesson_step_id:
+                errors["lesson_step_attempt"] = "学生作答不属于当前评价环节。"
+            if self.submission_id and attempt.student_id != self.submission.target_id:
+                errors["lesson_step_attempt"] = "学生作答与被评价学生不一致。"
+        if self.student_work_attachment_id and self.standard_use_id:
+            work = self.student_work_attachment
+            if work.classroom_session_id != self.standard_use.session_id:
+                errors["student_work_attachment"] = "学生作品不属于当前课堂。"
+            if work.lesson_step_id != self.standard_use.lesson_step_id:
+                errors["student_work_attachment"] = "学生作品不属于当前评价环节。"
+            if self.submission_id and work.student_id != self.submission.target_id:
+                errors["student_work_attachment"] = "学生作品与被评价学生不一致。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("评价证据关系不可修改。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("评价证据关系不可删除。")
+
+    def __str__(self) -> str:
+        return f"submission:{self.submission_id}:use:{self.standard_use_id}"

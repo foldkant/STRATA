@@ -1167,14 +1167,27 @@ def classroom_evaluation_criteria_rows(items) -> list[dict]:
         title = str(item.get("title") or "").strip()
         if not title:
             continue
-        rows.append(
-            {
-                "id": str(item.get("id") or f"crit_{index}"),
-                "title": title,
-                "description": str(item.get("description") or "").strip(),
-                "sort_order": int(item.get("sort_order") or index * 10),
-            }
-        )
+        row = {
+            "id": str(item.get("id") or f"crit_{index}"),
+            "title": title,
+            "description": str(item.get("description") or "").strip(),
+            "sort_order": int(item.get("sort_order") or index * 10),
+        }
+        for field in (
+            "standard_criterion_id",
+            "criterion_code",
+            "dimension",
+            "evaluation_target",
+            "evaluation_sources",
+            "level_descriptions",
+            "skip_condition",
+            "support_options",
+            "common_problems",
+            "follow_up_suggestion",
+        ):
+            if field in item:
+                row[field] = item[field]
+        rows.append(row)
     return sorted(rows, key=lambda row: (row["sort_order"], row["id"]))
 
 

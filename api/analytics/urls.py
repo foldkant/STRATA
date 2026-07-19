@@ -55,6 +55,11 @@ urlpatterns = [
         name="teacher_evaluation_trial_detail",
     ),
     path(
+        "teacher/evaluations/lesson-steps/<int:step_id>/binding/",
+        evaluation_views.lesson_step_binding,
+        name="teacher_lesson_step_evaluation_binding",
+    ),
+    path(
         "learning-events/batch/",
         event_views.learning_event_batch,
         name="learning_event_batch",

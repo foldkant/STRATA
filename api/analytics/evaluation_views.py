@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 
 from api.permissions import IsTeacher
 from api.responses import fail, ok
-from courses.models import Course
+from courses.models import Course, LessonStep
 from learning_analytics.evaluation_models import (
     EvaluationPlan,
     EvaluationScope,
@@ -18,6 +19,7 @@ from learning_analytics.evaluation_models import (
     EvaluationTrialRecord,
     EvaluationTrialStatus,
     EvaluationTrialType,
+    LessonStepEvaluationBinding,
 )
 from learning_analytics.services.evaluation import (
     THINKING_REQUIREMENT_VALUES,
@@ -187,6 +189,141 @@ def _teacher_plans(request):
         school=request.user.school,
         course__teacher=request.user,
     ).select_related("subject", "course")
+
+
+def _request_bool(value) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _criterion_version_row(criterion) -> dict:
+    return {
+        "id": criterion.id,
+        "code": criterion.code,
+        "title": criterion.title,
+        "dimension": criterion.dimension,
+        "dimension_label": criterion.get_dimension_display(),
+        "evaluation_target": criterion.evaluation_target,
+        "evaluation_sources": criterion.evaluation_sources,
+        "expected_performance": criterion.expected_performance,
+        "level_descriptions": criterion.level_descriptions,
+        "skip_condition": criterion.skip_condition,
+        "support_options": criterion.support_options,
+        "common_problems": criterion.common_problems,
+        "follow_up_suggestion": criterion.follow_up_suggestion,
+    }
+
+
+def _standard_version_option(version) -> dict:
+    return {
+        "id": version.id,
+        "title": version.title,
+        "version_no": version.version_no,
+        "review_status": version.review_status,
+        "review_status_label": version.get_review_status_display(),
+        "criterion_count": len(version.criteria.all()),
+        "criteria": [
+            _criterion_version_row(criterion)
+            for criterion in version.criteria.all()
+        ],
+    }
+
+
+def _binding_row(binding):
+    if binding is None:
+        return None
+    version = binding.standard_version
+    return {
+        "id": binding.id,
+        "lesson_step": binding.lesson_step_id,
+        "standard_version": version.id,
+        "standard_title": version.title,
+        "version_no": version.version_no,
+        "enable_self": binding.enable_self,
+        "enable_peer": binding.enable_peer,
+        "enable_teacher": binding.enable_teacher,
+        "locked": binding.classroom_uses.exists(),
+        "criteria": [_criterion_version_row(item) for item in version.criteria.all()],
+        "created_at": binding.created_at,
+        "updated_at": binding.updated_at,
+    }
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+@permission_classes([IsTeacher])
+def lesson_step_binding(request, step_id: int):
+    step = (
+        LessonStep.objects.select_related("lesson__course")
+        .filter(pk=step_id, lesson__course__teacher=request.user)
+        .first()
+    )
+    if step is None:
+        return fail("课时环节不存在或无权访问。", status=404)
+    binding = (
+        LessonStepEvaluationBinding.objects.select_related("standard_version")
+        .prefetch_related("standard_version__criteria")
+        .filter(lesson_step=step)
+        .first()
+    )
+    versions = (
+        EvaluationStandardVersion.objects.filter(course=step.lesson.course)
+        .prefetch_related("criteria")
+        .order_by("title", "-version_no")
+    )
+    if request.method == "GET":
+        return ok(
+            {
+                "binding": _binding_row(binding),
+                "standards": [_standard_version_option(version) for version in versions],
+            }
+        )
+    if request.method == "DELETE":
+        if binding is None:
+            return ok({}, "当前环节未绑定评价标准。")
+        if binding.classroom_uses.exists():
+            return fail("该标准已在课堂中使用，不能取消绑定。", status=409)
+        binding.delete()
+        return ok({}, "已取消当前环节评价标准。")
+    version = versions.filter(pk=request.data.get("standard_version")).first()
+    if version is None:
+        return fail("请选择本课程已发布的评价标准。", status=400)
+    values = {
+        "enable_self": _request_bool(request.data.get("enable_self")),
+        "enable_peer": _request_bool(request.data.get("enable_peer")),
+        "enable_teacher": _request_bool(request.data.get("enable_teacher")),
+        "updated_by": request.user,
+    }
+    if not any(values[key] for key in ("enable_self", "enable_peer", "enable_teacher")):
+        return fail("至少启用一种评价方式。", status=400)
+    with transaction.atomic():
+        binding = (
+            LessonStepEvaluationBinding.objects.select_for_update()
+            .filter(lesson_step=step)
+            .first()
+        )
+        if binding and binding.classroom_uses.exists():
+            unchanged = (
+                binding.standard_version_id == version.id
+                and binding.enable_self == values["enable_self"]
+                and binding.enable_peer == values["enable_peer"]
+                and binding.enable_teacher == values["enable_teacher"]
+            )
+            if not unchanged:
+                return fail(
+                    "该环节的评价标准已用于课堂，不能修改历史绑定。请复制环节后使用新标准。",
+                    status=409,
+                )
+        binding, _ = LessonStepEvaluationBinding.objects.update_or_create(
+            lesson_step=step,
+            defaults={
+                **values,
+                "standard_version": version,
+                "created_by": binding.created_by if binding else request.user,
+            },
+        )
+    binding = LessonStepEvaluationBinding.objects.select_related(
+        "standard_version"
+    ).prefetch_related("standard_version__criteria").get(pk=binding.pk)
+    return ok(_binding_row(binding), "当前环节评价标准已保存。")
 
 
 def _teacher_standards(request):

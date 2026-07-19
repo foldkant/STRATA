@@ -29,7 +29,7 @@ import NoticeLine from '@/components/NoticeLine.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
 import { teacherNav } from './nav'
 
-const CourseEvaluationModal = defineAsyncComponent(() => import('@/components/teacher/CourseEvaluationModal.vue'))
+const LessonStepEvaluationModal = defineAsyncComponent(() => import('@/components/teacher/LessonStepEvaluationModal.vue'))
 const LearningPageStudio = defineAsyncComponent(() => import('@/components/teacher/LearningPageStudio.vue'))
 
 type ToolTab = 'resource' | 'question' | 'evaluation' | 'ai'
@@ -1219,7 +1219,7 @@ onMounted(loadLesson)
         <div class="lesson-designer-actions">
           <RouterLink class="secondary-button" to="/teacher/courses">返回课程</RouterLink>
           <RouterLink class="secondary-button" to="/teacher/classroom">课堂教学</RouterLink>
-          <button class="secondary-button" type="button" :disabled="!course" @click="evaluationModalOpen = true">评价设置</button>
+          <button class="secondary-button" type="button" :disabled="!activeStep" @click="evaluationModalOpen = true">环节评价</button>
           <button class="secondary-button" type="button" @click="openStudentPreview">大屏预览</button>
         </div>
       </header>
@@ -1480,15 +1480,16 @@ onMounted(loadLesson)
 
           <div v-else-if="activeTool === 'evaluation'" class="evaluation-tool-panel">
             <section class="tool-entry-panel">
-              <strong>评价设置</strong>
-              <p>在备课阶段设计自评、互评和师评内容。课堂中只查看完成情况和填写师评。</p>
-              <button class="primary-button" type="button" :disabled="!course" @click="evaluationModalOpen = true">打开评价设置</button>
+              <strong>当前环节评价</strong>
+              <p>从本课程已发布的评价标准中选择版本，并确定本环节使用自评、互评或教师评价。</p>
+              <button class="primary-button" type="button" :disabled="!activeStep" @click="evaluationModalOpen = true">选择评价标准</button>
             </section>
             <section class="evaluation-tool-note">
               <strong>课堂使用规则</strong>
+              <span>评价标准由教师在评价标准库统一维护，课时环节只选择已发布版本。</span>
               <span>自评：学生在课堂中对自己进行 5 星评价。</span>
               <span>互评：需要课堂开启小组合作后，学生评价同组成员。</span>
-              <span>师评：教师可在课堂或课程评价情况中填写。</span>
+              <span>教师评价：教师在课堂评价情况中填写。</span>
             </section>
           </div>
 
@@ -1924,9 +1925,11 @@ onMounted(loadLesson)
       </div>
     </Teleport>
 
-    <CourseEvaluationModal
+    <LessonStepEvaluationModal
       :open="evaluationModalOpen"
-      :course="course"
+      :lesson-step-id="activeStepId"
+      :lesson-step-title="activeStep?.title || '当前环节'"
+      :course-title="courseTitle"
       @close="evaluationModalOpen = false"
     />
 

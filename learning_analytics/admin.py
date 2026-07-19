@@ -19,6 +19,9 @@ from .models import (
     EvaluationCriterionVersion,
     EvaluationStandard,
     EvaluationStandardVersion,
+    LessonStepEvaluationBinding,
+    ClassroomEvaluationStandardUse,
+    EvaluationSubmissionEvidence,
     EvaluationTrialRecord,
     SensitiveInferenceAccessLog,
     SyntheticDatasetRun,
@@ -488,3 +491,49 @@ class EvaluationTrialRecordAdmin(admin.ModelAdmin):
     )
     list_filter = ("record_type", "status", "conclusion", "school")
     search_fields = ("title", "standard_version__title", "summary")
+
+
+@admin.register(LessonStepEvaluationBinding)
+class LessonStepEvaluationBindingAdmin(admin.ModelAdmin):
+    list_display = (
+        "lesson_step",
+        "standard_version",
+        "enable_self",
+        "enable_peer",
+        "enable_teacher",
+        "updated_at",
+    )
+    list_filter = ("enable_self", "enable_peer", "enable_teacher")
+    search_fields = (
+        "lesson_step__title",
+        "lesson_step__lesson__title",
+        "standard_version__title",
+    )
+
+
+@admin.register(ClassroomEvaluationStandardUse)
+class ClassroomEvaluationStandardUseAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "session",
+        "lesson_step",
+        "standard_version",
+        "opened_by",
+        "created_at",
+    )
+    readonly_fields = tuple(
+        field.name for field in ClassroomEvaluationStandardUse._meta.fields
+    )
+
+
+@admin.register(EvaluationSubmissionEvidence)
+class EvaluationSubmissionEvidenceAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "submission",
+        "standard_use",
+        "lesson_step_attempt",
+        "student_work_attachment",
+        "created_at",
+    )
+    readonly_fields = tuple(
+        field.name for field in EvaluationSubmissionEvidence._meta.fields
+    )

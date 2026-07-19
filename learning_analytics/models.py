@@ -32,6 +32,9 @@ from .evaluation_models import (  # noqa: F401
     EvaluationTrialRecord,
     EvaluationTrialStatus,
     EvaluationTrialType,
+    LessonStepEvaluationBinding,
+    ClassroomEvaluationStandardUse,
+    EvaluationSubmissionEvidence,
 )
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")

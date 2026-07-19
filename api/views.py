@@ -107,10 +107,12 @@ from learning_analytics.services.dual_write import (
 from learning_analytics.services.evaluation_events import (
     EvaluationEventError,
     append_evaluation_submission,
+    freeze_classroom_evaluation_standard,
     publish_evaluation_config_version,
     release_classroom_evaluation_opportunities,
     withdraw_classroom_evaluation_opportunities,
 )
+from learning_analytics.models import LessonStepEvaluationBinding
 from learning_analytics.services.group_collaboration_events import (
     GroupCollaborationEventError,
     group_collaboration_has_student_activity,
@@ -4966,11 +4968,29 @@ def teacher_classroom_evaluation(request, pk):
             config = ClassroomEvaluationConfig.objects.filter(
                 course=session.course
             ).first()
+            binding = (
+                LessonStepEvaluationBinding.objects.select_related(
+                    "standard_version", "lesson_step__lesson__course"
+                )
+                .filter(lesson_step_id=session.current_step_id)
+                .first()
+            )
             if "evaluation_enabled" in request.data:
                 enabled = _bool_value(request.data.get("evaluation_enabled", False))
                 if enabled and session.status != ClassroomSession.Status.RUNNING:
                     raise ServiceError("请先开启课堂，再开放评价。", status=400)
-                if enabled and _configured_evaluation_type_count(config) == 0:
+                binding_type_count = (
+                    sum(
+                        [
+                            binding.enable_self,
+                            binding.enable_peer,
+                            binding.enable_teacher,
+                        ]
+                    )
+                    if binding
+                    else 0
+                )
+                if enabled and binding_type_count == 0 and _configured_evaluation_type_count(config) == 0:
                     raise ServiceError(
                         "请先回到课时设计设置并启用至少一类评价项。", status=400
                     )
@@ -4981,9 +5001,15 @@ def teacher_classroom_evaluation(request, pk):
                     was_enabled = session.evaluation_enabled
                     version = session.evaluation_config_version
                     if enabled and version is None:
-                        version = publish_evaluation_config_version(
-                            config=config, actor=request.user
-                        )
+                        if binding:
+                            standard_use = freeze_classroom_evaluation_standard(
+                                session=session, binding=binding, actor=request.user
+                            )
+                            version = standard_use.evaluation_config_version
+                        else:
+                            version = publish_evaluation_config_version(
+                                config=config, actor=request.user
+                            )
                         session.evaluation_config_version = version
                     session.evaluation_enabled = enabled
                     update_fields = [

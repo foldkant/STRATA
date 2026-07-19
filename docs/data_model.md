@@ -332,7 +332,10 @@
 - `EvaluationCriterionVersion`：单项评价指标，保存评价方面、材料来源、具体表现、暂不评价条件、可用帮助、常见问题、1-5 星表现说明和后续教学建议。
 - `EvaluationScoringExample`：评价指标的评分示例，登记星级、示例说明和可选材料引用。
 - `EvaluationTrialRecord`：评价试用与审核记录，绑定已发布评价标准版本，保存记录类型、日期、参与人数、状态、评分一致率、处理结论、问题和后续安排。
+- `LessonStepEvaluationBinding`：一个课时环节选择一个已发布评价标准版本，并设置自评、互评和教师评价。绑定一旦被课堂使用即不可原地修改或删除。
+- `ClassroomEvaluationStandardUse`：某次课堂首次开启评价时冻结环节、标准版本、评价方式和完整指标快照，后续切换环节或编辑工作稿不改变历史记录。
+- `EvaluationSubmissionEvidence`：把课堂评价提交关联到同一课堂、同一环节、同一被评价学生的最新 `LessonStepAttempt` 和最新 `StudentWorkAttachment`。没有匹配材料时允许为空，不以低星代替缺失材料。
 
-实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
+实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录，迁移 `0019` 新增课时评价绑定和课堂证据链。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
 
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

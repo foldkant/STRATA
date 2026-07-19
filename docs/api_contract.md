@@ -1503,6 +1503,7 @@ POST /api/v1/teacher/evaluations/standards/{id}/publish/
 GET|POST /api/v1/teacher/evaluations/trials/
 GET|PATCH|DELETE /api/v1/teacher/evaluations/trials/{id}/
 GET /api/v1/teacher/evaluations/trials/export/
+GET|PATCH|DELETE /api/v1/teacher/evaluations/lesson-steps/{step_id}/binding/
 ```
 
 编辑中的内容允许暂时不完整；发布接口检查学习目标、评价依据、学习任务、星级说明和评分示例。发布成功返回详情及最新版本；相同内容重复发布返回现有版本，不新增行。发布失败返回：
@@ -1520,3 +1521,16 @@ GET /api/v1/teacher/evaluations/trials/export/
 试用记录必须绑定本校已发布的评价标准版本。类型为“内容审核、课堂试用、评分培训、评分一致性检查”，状态为“待进行、进行中、已完成”。已完成记录必须填写参与人数、结果说明和处理结论；评分一致性检查还必须填写 0-100 的一致率。已完成记录不能修改或删除，导出返回本校 XLSX。
 
 发布后的评价方案版本、评价标准版本、评价指标和评分示例不可 PATCH 或 DELETE。完整字段见[教师评价标准管理](evaluation_management.md)。
+
+课时绑定接口只返回当前教师本人课程的已发布标准。`PATCH` 请求体为：
+
+```json
+{
+  "standard_version": 12,
+  "enable_self": true,
+  "enable_peer": false,
+  "enable_teacher": true
+}
+```
+
+至少启用一种评价方式。绑定一旦在课堂中使用，修改或删除返回 `409`。课堂开启评价后，正式评价事件的 `object_version` 使用 `standard:{id}:v{version_no}:{hash}`，并与本次课堂冻结快照及学生作答/作品证据保持一致。没有课时绑定的历史课程评价继续使用原课程评价版本，不自动视为正式评价标准证据。
