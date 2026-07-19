@@ -5,6 +5,8 @@ from .models import (
     AnalyticsOperatingMode,
     AnalyticsPipelineRun,
     AnalyticsTaskRun,
+    AssessmentBlueprint,
+    AssessmentBlueprintVersion,
     DataQualityReport,
     EventSchemaDefinition,
     EventIngestionDailyCounter,
@@ -13,6 +15,10 @@ from .models import (
     LearningOpportunity,
     LearningOpportunityTransitionFact,
     ParticipationPointLedger,
+    RubricAnchorExample,
+    RubricCriterionVersion,
+    RubricDefinition,
+    RubricDefinitionVersion,
     SensitiveInferenceAccessLog,
     SyntheticDatasetRun,
 )
@@ -388,3 +394,81 @@ class SyntheticDatasetRunAdmin(ReadOnlyAnalyticsAdmin):
     list_filter = ("mode", "status", "generator_version", "school")
     search_fields = ("run_id", "dataset_key", "school__code", "school__name")
     readonly_fields = tuple(field.name for field in SyntheticDatasetRun._meta.fields)
+
+
+@admin.register(AssessmentBlueprint)
+class AssessmentBlueprintAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "school",
+        "subject",
+        "course",
+        "intended_use",
+        "validation_status",
+        "updated_at",
+    )
+    list_filter = ("intended_use", "validation_status", "school", "subject")
+    search_fields = ("title", "course__title", "created_by__username")
+
+
+@admin.register(RubricDefinition)
+class RubricDefinitionAdmin(admin.ModelAdmin):
+    list_display = (
+        "title",
+        "school",
+        "subject",
+        "blueprint",
+        "intended_use",
+        "validation_status",
+        "updated_at",
+    )
+    list_filter = ("intended_use", "validation_status", "school", "subject")
+    search_fields = ("title", "blueprint__title", "created_by__username")
+
+
+@admin.register(AssessmentBlueprintVersion)
+class AssessmentBlueprintVersionAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "source",
+        "version_no",
+        "intended_use",
+        "validation_status",
+        "published_by",
+        "published_at",
+    )
+    list_filter = ("intended_use", "validation_status", "school", "subject")
+    readonly_fields = tuple(
+        field.name for field in AssessmentBlueprintVersion._meta.fields
+    )
+
+
+@admin.register(RubricDefinitionVersion)
+class RubricDefinitionVersionAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "source",
+        "version_no",
+        "blueprint_version",
+        "intended_use",
+        "validation_status",
+        "published_at",
+    )
+    list_filter = ("intended_use", "validation_status", "school", "subject")
+    readonly_fields = tuple(
+        field.name for field in RubricDefinitionVersion._meta.fields
+    )
+
+
+@admin.register(RubricCriterionVersion)
+class RubricCriterionVersionAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = ("rubric_version", "code", "module", "title", "sort_order")
+    list_filter = ("module",)
+    search_fields = ("code", "title", "rubric_version__title")
+    readonly_fields = tuple(field.name for field in RubricCriterionVersion._meta.fields)
+
+
+@admin.register(RubricAnchorExample)
+class RubricAnchorExampleAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = ("criterion", "level", "title", "sort_order")
+    list_filter = ("level",)
+    search_fields = ("title", "criterion__code", "criterion__title")
+    readonly_fields = tuple(field.name for field in RubricAnchorExample._meta.fields)

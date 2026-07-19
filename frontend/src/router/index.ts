@@ -26,6 +26,7 @@ const TeacherFeedbackView = () => import('@/views/teacher/FeedbackView.vue')
 const TeacherResourcesView = () => import('@/views/teacher/ResourcesView.vue')
 const TeacherQuestionBankView = () => import('@/views/teacher/QuestionBankView.vue')
 const TeacherAssessmentsView = () => import('@/views/teacher/AssessmentsView.vue')
+const TeacherMeasurementDesignView = () => import('@/views/teacher/MeasurementDesignView.vue')
 const TeacherModulePlaceholder = () => import('@/views/teacher/ModulePlaceholderView.vue')
 const StudentDashboard = () => import('@/views/student/DashboardView.vue')
 const StudentCoursesView = () => import('@/views/student/CoursesView.vue')
@@ -77,6 +78,7 @@ const routes: RouteRecordRaw[] = [
   },
   { path: '/teacher/students', component: TeacherStudentsView, meta: { role: 'teacher' } },
   { path: '/teacher/question-bank', component: TeacherQuestionBankView, meta: { role: 'teacher' } },
+  { path: '/teacher/measurement-design', component: TeacherMeasurementDesignView, meta: { role: 'teacher' } },
   {
     path: '/teacher/documents',
     component: TeacherDocumentsView,

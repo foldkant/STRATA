@@ -296,6 +296,8 @@ a {
   display: grid;
   gap: 6px;
   margin-top: 24px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .nav-list a {

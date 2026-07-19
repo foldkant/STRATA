@@ -318,4 +318,15 @@
 
 正式夜间质量任务排除 `is_synthetic=true` 的独立学校；正式学校质量报告始终排除已关联 `synthetic_run` 的叠加事件和计数。合成事件仍通过正式双写、机会和评分服务生成，以验证生产契约，详细边界见[合成数据研究轨道](synthetic_data_research_track.md)。
 
+## M2 测量设计
+
+- `AssessmentBlueprint`：教师可编辑任务蓝图草案，保存课程范围、任务版本、目标总体、课程目标、主张、证据规则、任务规格、内容覆盖、认知复杂度、允许支持、评分模型和形成性行动。
+- `AssessmentBlueprintVersion`：不可变蓝图发布版本。按草案递增版本号，规范化内容计算 SHA-256；相同内容不重复发布。
+- `RubricDefinition`：教师可编辑量规草案，绑定任务蓝图并保存总体评价对象和结构化条目草案。
+- `RubricDefinitionVersion`：不可变量规版本，必须绑定同一蓝图的已发布版本。
+- `RubricCriterionVersion`：不可变量规条目，模块为 P/S/R/C/D/E；逐项保存评价对象、证据来源、可观察证据、`NOT_ASSESSED` 条件、允许支持、反例、1-5 星文字锚点和下一步行动。
+- `RubricAnchorExample`：量规条目的不可变锚定样例，登记星级、证据说明和可选材料引用。
+
+教师创建对象的 `intended_use` 固定为 `local_formative`。`school_common/research_linked` 仅预留给后续治理流程。发布版本、条目和样例不能原地修改或删除；完整约束见[任务蓝图与量规版本](measurement_design.md)。
+
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

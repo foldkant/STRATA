@@ -18,6 +18,18 @@ from learning_analytics.schemas.registry import (
     validate_event_payload,
 )
 
+from .measurement_models import (  # noqa: F401
+    AssessmentBlueprint,
+    AssessmentBlueprintVersion,
+    MeasurementUse,
+    MeasurementValidationStatus,
+    RubricAnchorExample,
+    RubricCriterionVersion,
+    RubricDefinition,
+    RubricDefinitionVersion,
+    RubricModule,
+)
+
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 SCHEMA_VERSION_PATTERN = re.compile(r"^\d+\.\d+$")
 ALLOWED_EVENT_CONTEXT_FIELDS = {

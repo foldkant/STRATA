@@ -1485,3 +1485,31 @@ GET  /api/v1/school-admin/analytics/quality/export/
 手动运行请求体为 `{ "days": 7 }`，允许 1-365 个完整自然日。成功入队返回 202；同校已有 `pending/running` 任务返回 409；Redis/Celery 不可用返回 503 并把运行记录标为失败。
 
 导出返回本校 XLSX，包含“质量报告、质量指标、质量问题、流水线运行、任务阶段”五张表。完整口径见 `docs/data_quality_pipeline.md`。
+
+## 教师测量设计
+
+所有接口仅允许教师访问，并按登录学校和创建教师隔离。客户端不能提交 `school`、`subject`、`intended_use` 或 `validation_status`；课程决定学科和学校，教师用途固定为 `local_formative/unvalidated`。
+
+```text
+GET  /api/v1/teacher/measurement/options/
+GET|POST /api/v1/teacher/measurement/blueprints/
+GET|PATCH /api/v1/teacher/measurement/blueprints/{id}/
+POST /api/v1/teacher/measurement/blueprints/{id}/publish/
+GET|POST /api/v1/teacher/measurement/rubrics/
+GET|PATCH /api/v1/teacher/measurement/rubrics/{id}/
+POST /api/v1/teacher/measurement/rubrics/{id}/publish/
+```
+
+草案保存允许内容不完整；发布接口执行完整证据链和五星锚点校验。发布成功返回草案详情及最新版本；相同内容重复发布返回现有版本，不新增行。发布失败返回：
+
+```json
+{
+  "data": null,
+  "message": "量规发布前检查未通过。",
+  "errors": {
+    "criteria": ["量规条目 D1 至少需要两份锚定样例。"]
+  }
+}
+```
+
+发布后的蓝图版本、量规版本、条目和锚定样例不可 PATCH 或 DELETE。完整字段见[任务蓝图与量规版本](measurement_design.md)。
