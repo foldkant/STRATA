@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '@/api/client'
-import { getLearningPage, submitLearningPageForm, type LearningPage } from '@/api/learningPages'
+import { getLearningPage, submitLearningPageForm, trackLearningPageBlock, type LearningPage, type LearningPageBlock } from '@/api/learningPages'
 import LearningPageFrame from '@/components/LearningPageFrame.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -27,7 +27,7 @@ async function loadPage() {
     return
   }
   try {
-    page.value = await getLearningPage(pageId.value)
+    page.value = await getLearningPage(pageId.value, 'popout')
     document.title = `${page.value.title} - STRATA数智教学系统`
   } catch (loadError) {
     error.value = loadError instanceof ApiError ? loadError.message : '学习网页加载失败。'
@@ -44,6 +44,15 @@ async function submitForm(payload: { formId: string; answers: Record<string, unk
   } catch (submitError) {
     const message = submitError instanceof ApiError ? submitError.message : '提交失败，请重试。'
     frame.value?.notifyResult(payload.formId, false, message)
+  }
+}
+
+async function trackBlock(payload: { blockId: string; blockType: LearningPageBlock['type']; visibleMs: number; visibilityRatio: number }) {
+  if (!page.value || !interactive.value) return
+  try {
+    await trackLearningPageBlock(page.value.id, payload)
+  } catch {
+    // 行为采集失败不能阻断学习网页本身。
   }
 }
 
@@ -82,6 +91,7 @@ onMounted(loadPage)
       :page="page"
       :interactive="interactive"
       @submit="submitForm"
+      @block-viewed="trackBlock"
     />
   </main>
 </template>

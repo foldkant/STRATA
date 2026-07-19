@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ApiError, type FieldErrors } from '@/api/client'
 import {
@@ -24,11 +24,13 @@ import {
   type ResourceRow
 } from '@/api/teacher'
 import AppShell from '@/layouts/AppShell.vue'
-import CourseEvaluationModal from '@/components/teacher/CourseEvaluationModal.vue'
-import LearningPageStudio from '@/components/teacher/LearningPageStudio.vue'
+import FilePicker from '@/components/FilePicker.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
 import { teacherNav } from './nav'
+
+const CourseEvaluationModal = defineAsyncComponent(() => import('@/components/teacher/CourseEvaluationModal.vue'))
+const LearningPageStudio = defineAsyncComponent(() => import('@/components/teacher/LearningPageStudio.vue'))
 
 type ToolTab = 'resource' | 'question' | 'evaluation' | 'ai'
 type PreviewMode = 'student' | 'resource'
@@ -58,8 +60,8 @@ const resourceLoading = ref(false)
 const resourceSaving = ref(false)
 const resourceRows = ref<ResourceRow[]>([])
 const resourceQuery = ref('')
+const resourceScope = ref<'mine' | 'school' | 'external'>('mine')
 const selectedResourceFile = ref<File | null>(null)
-const resourceFileInput = ref<HTMLInputElement | null>(null)
 const selectedPreviewResource = ref<ResourceBinding | null>(null)
 const previewOpen = ref(false)
 const previewMode = ref<PreviewMode>('student')
@@ -964,7 +966,7 @@ async function loadLesson() {
 async function loadResources() {
   resourceLoading.value = true
   try {
-    const rows = await getTeacherResources({ q: resourceQuery.value, page_size: 30 })
+    const rows = await getTeacherResources({ q: resourceQuery.value, scope: resourceScope.value, page_size: 30 })
     resourceRows.value = rows.results
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '资源库加载失败。'
@@ -1102,9 +1104,8 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(size >= 100 * 1024 * 1024 ? 0 : 1)} MB`
 }
 
-function onResourceFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0] || null
+function onResourceFileChange(files: File[]) {
+  const file = files[0] || null
   resourceErrors.value = {}
   selectedResourceFile.value = file
   if (!file) return
@@ -1113,13 +1114,11 @@ function onResourceFileChange(event: Event) {
   if (!allowedResourceExt.has(cleanExt)) {
     resourceErrors.value = { attachment: ['暂不支持该资源格式。'] }
     selectedResourceFile.value = null
-    input.value = ''
     return
   }
   if (file.size > 512 * 1024 * 1024) {
     resourceErrors.value = { attachment: ['资源文件不能超过 512MB。'] }
     selectedResourceFile.value = null
-    input.value = ''
     return
   }
   if (!resourceUploadForm.title.trim()) {
@@ -1149,9 +1148,6 @@ async function uploadResource() {
     resourceUploadForm.title = ''
     resourceUploadForm.content = ''
     selectedResourceFile.value = null
-    if (resourceFileInput.value) {
-      resourceFileInput.value.value = ''
-    }
     resourceErrors.value = {}
     resourceUploadOpen.value = false
     notice.value = '资源已上传，并已加入当前环节。'
@@ -1408,7 +1404,12 @@ onMounted(loadLesson)
 
             <section class="resource-library-panel">
               <div class="resource-library-toolbar">
-                <input v-model.trim="resourceQuery" placeholder="搜索我的资源" @keyup.enter="loadResources" />
+                <select v-model="resourceScope" aria-label="资源库范围" @change="loadResources">
+                  <option value="mine">我的资源</option>
+                  <option value="school">校内资源</option>
+                  <option value="external">跨校资源</option>
+                </select>
+                <input v-model.trim="resourceQuery" aria-label="搜索资源" placeholder="搜索资源" @keyup.enter="loadResources" />
                 <button class="secondary-button" type="button" :disabled="resourceLoading" @click="loadResources">
                   {{ resourceLoading ? '刷新中' : '刷新' }}
                 </button>
@@ -1583,17 +1584,17 @@ onMounted(loadLesson)
               <textarea v-model.trim="resourceUploadForm.content" rows="3" maxlength="1000" placeholder="给自己或学生看的简要说明，可不填。"></textarea>
               <small v-if="resourceErrors.content" class="field-error">{{ resourceErrors.content[0] }}</small>
             </label>
-            <label class="span-2">
-              <span>本地文件 <b>*</b></span>
-              <input
-                ref="resourceFileInput"
-                type="file"
-                accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.webm,.mov,.mp3,.wav,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.md,.zip,.rar,.7z"
-                @change="onResourceFileChange"
-              />
-              <small v-if="selectedResourceFile">{{ selectedResourceFile.name }} · {{ formatFileSize(selectedResourceFile.size) }}</small>
-              <small v-if="resourceErrors.attachment" class="field-error">{{ resourceErrors.attachment[0] }}</small>
-            </label>
+            <FilePicker
+              class="span-2"
+              label="本地文件"
+              hint="支持课件、文档、图片、音视频和压缩包，单个文件最大 512MB。"
+              accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.webm,.mov,.mp3,.wav,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.txt,.md,.zip,.rar,.7z"
+              :file="selectedResourceFile"
+              :required="true"
+              :disabled="resourceSaving"
+              :error="resourceErrors.attachment?.[0] || ''"
+              @select="onResourceFileChange"
+            />
           </div>
 
           <footer class="modal-actions">

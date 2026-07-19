@@ -1,4 +1,5 @@
 import { apiRequest, queryString, toJsonBody, uploadRequest } from './client'
+import type { ResourceRow } from './teacher'
 
 export type PageResult<T> = {
   count: number
@@ -609,5 +610,16 @@ export function updatePretestQuestion(paperId: number, questionId: number, paylo
 export function deletePretestQuestion(paperId: number, questionId: number) {
   return apiRequest<Record<string, never>>(`/api/v1/school-admin/pretests/${paperId}/questions/${questionId}/`, {
     method: 'DELETE'
+  })
+}
+
+export function getResourceReviews(params: PageQuery = {}) {
+  return apiRequest<PageResult<ResourceRow>>(`/api/v1/school-admin/resource-reviews/${queryString(params)}`)
+}
+
+export function reviewResource(id: number, action: 'approve' | 'reject', note = '') {
+  return apiRequest<ResourceRow>(`/api/v1/school-admin/resource-reviews/${id}/`, {
+    method: 'PATCH',
+    body: toJsonBody({ action, note })
   })
 }

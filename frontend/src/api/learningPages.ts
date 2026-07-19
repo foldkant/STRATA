@@ -176,13 +176,28 @@ export function getTeacherLearningPageResponses(pageId: number, classroomSession
   return apiRequest<LearningPageResponseSummary>(`/api/v1/teacher/learning-pages/${pageId}/responses/${query}`)
 }
 
-export function getLearningPage(pageId: number) {
-  return apiRequest<LearningPage>(`/api/v1/learning-pages/${pageId}/`)
+export function getLearningPage(pageId: number, presentation: 'embedded' | 'popout' | 'unknown' = 'unknown') {
+  return apiRequest<LearningPage>(`/api/v1/learning-pages/${pageId}/?presentation=${presentation}`)
 }
 
 export function submitLearningPageForm(pageId: number, formId: string, answers: Record<string, unknown>) {
   return apiRequest<LearningPageResponse>(`/api/v1/student/learning-pages/${pageId}/submit/`, {
     method: 'POST',
     body: toJsonBody({ form_id: formId, answers })
+  })
+}
+
+export function trackLearningPageBlock(
+  pageId: number,
+  payload: { blockId: string; blockType: LearningPageBlock['type']; visibleMs: number; visibilityRatio: number }
+) {
+  return apiRequest<Record<string, never>>(`/api/v1/student/learning-pages/${pageId}/blocks/viewed/`, {
+    method: 'POST',
+    body: toJsonBody({
+      block_id: payload.blockId,
+      block_type: payload.blockType,
+      visible_ms: payload.visibleMs,
+      visibility_ratio: payload.visibilityRatio
+    })
   })
 }

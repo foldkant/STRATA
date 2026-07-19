@@ -1,0 +1,18 @@
+TY  - JOUR
+AU  - Weidlich, Joshua
+AU  - Gašević, Dragan
+AU  - Drachsler, Hendrik
+TI  - Causal Inference and Bias in Learning Analytics
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - Learning Analytics
+PY  - 2022
+VL  - 9
+IS  - 3
+SP  - 183
+EP  - 199
+DO  - 10.18608/jla.2022.7577
+UR  - https://doi.org/10.18608/jla.2022.7577
+N2  - As a research field geared toward understanding and improving learning, Learning Analytics (LA) must be able to provide empirical support for causal claims. However, as a highly applied field, tightly controlled randomized experiments are not always feasible nor desirable. Instead, researchers often rely on observational data, based on which they may be reluctant to draw causal inferences. The past decades have seen much progress concerning causal inference in the absence of experimental data. T
+DB  - CrossRef
+ER  - 

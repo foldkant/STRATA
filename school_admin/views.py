@@ -142,7 +142,6 @@ def _school_courses(request):
 
 
 def _dashboard_data(request):
-    User = get_user_model()
     now = timezone.now()
     today = timezone.localdate()
     school = _school(request)

@@ -1,0 +1,16 @@
+TY  - JOUR
+AU  - Simbeck, Katharina
+TI  - They shall be fair, transparent, and robust: auditing learning analytics systems
+JO  - AI and Ethics
+T2  - AI and Ethics
+JA  - AI Ethics
+PY  - 2023
+VL  - 4
+IS  - 2
+SP  - 555
+EP  - 571
+DO  - 10.1007/s43681-023-00292-7
+UR  - https://doi.org/10.1007/s43681-023-00292-7
+N2  - AbstractIn the near future, systems, that use Artificial Intelligence (AI) methods, such as machine learning, are required to be certified or audited for fairness if used in ethically sensitive fields such as education. One example of those upcoming regulatory initiatives is the European Artificial Intelligence Act. Interconnected with fairness are the notions of system transparency (i.e. how understandable is the system) and system robustness (i.e. will similar inputs lead to similar results). 
+DB  - CrossRef
+ER  - 

@@ -1,5 +1,7 @@
 # 前端架构设计
 
+教师端与学生端的四轮响应式、性能和可访问性审查记录见 [ui_ux_audit.md](ui_ux_audit.md)。所有角色页面使用路由级动态导入；重型图表、评价弹窗和 AI 学习网页组件继续使用组件级异步加载，避免进入登录首包。
+
 ## 定位
 
 新版前端使用 Vue3 承接主要业务界面。  
@@ -30,10 +32,12 @@ frontend/
       dashboards.ts
       management.ts
     components/
+      ClassChipList.vue
       ConfirmDialog.vue
       EntityFormModal.vue
       ManagementPage.vue
       MetricGrid.vue
+      MultiSelectActions.vue
       StatusBadge.vue
     layouts/
       AppShell.vue
@@ -152,6 +156,7 @@ Vue 登录流程：
 /school-admin/classes
 /school-admin/teaching
 /school-admin/pretests
+/school-admin/resource-reviews
 /teacher
 /teacher/courses
 /teacher/courses/:courseId
@@ -193,12 +198,15 @@ Vue 登录流程：
 - `/school-admin/classes`
 - `/school-admin/teaching`
 - `/school-admin/pretests`
+- `/school-admin/resource-reviews`
 - `/teacher`
 - `/teacher/students`
 - `/teacher/notices`
 - `/teacher/feedback`
 - `/teacher/courses`
 - `/teacher/classroom`
+- `/teacher/resources`
+- `/student/resources`
 
 其它路由后续接 API 时补页面。
 
@@ -206,7 +214,11 @@ Vue 登录流程：
 
 课程与课堂的下一版以 `docs/lesson_workspace_ai_design.md` 为准：教师进入课时后按环节组织资源、题目、任务、作品上传和 AI 生成学习单；学生端采用左侧资源预览、右侧本环节任务的结构，同一环节内可以边看视频/PPT边完成选择题或提交任务。当前 `/teacher/classroom` 第一版仅作为数据模型和接口基础，不作为最终课堂 UI 方向。
 
+AI 隐性分层按 `docs/student_behavior_ai_stratification_development_roadmap.md` 开发。学生前端不建立分层页面，也不接收 `current_layer/target_layer/layer_scores/is_layered/layer_hint/grouping_strategy` 等内部字段；题目和资源必须由服务端解析后只返回本人实际投放内容。教师分层工作台在独立 `features/stratification` 领域中建设，不与学生 DTO 复用。
+
 学生端路由设计详见 `docs/student_module_design.md`。学生端不使用后台侧边栏布局，核心是首次使用、学科前测、课程学习、课时学习工作台、实时课堂同步、任务作品提交、学习档案和留言反馈。
+
+资源中心采用共享卡片、详情预览弹窗和独立编辑弹窗。教师编辑弹窗内部滚动、底部操作固定；学生端资源卡片在桌面双列、窄屏单列。三端共享 `ResourcePreview`，不重复实现 Office、PDF、图片和音视频预览逻辑。
 
 ## 复用策略
 
@@ -218,6 +230,8 @@ Vue 登录流程：
 - `ManagementPage` 统一封装查询、分页、导出/模板/导入入口和表格外壳。
 - `EntityFormModal` 统一封装新增、编辑、重置密码表单和字段错误展示。
 - `ConfirmDialog` 统一封装停用、启用、删除确认。
+- `MultiSelectActions` 统一显示多选数量、全选和全不选；测试、公告、资源、课程和任课关系中的班级多选不得单独复制按钮逻辑。
+- `ClassChipList` 统一展示班级标签，表格默认只显示前三个，其余以 `+N` 汇总，避免班级数量较多时撑宽表格。
 - `usePageSelection` 统一处理当前页多选、全选和选择清空。
 - `useBulkDisableDelete` 统一处理“批量删除前必须先停用”的交互逻辑。
 - API 层按资源分组，不按页面复制。

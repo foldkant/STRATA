@@ -39,7 +39,7 @@ onMounted(async () => {
 <template>
   <StudentShell title="我的课程" subtitle="按班级发布的学习内容" :nav-items="navItems">
     <template #actions>
-      <input v-model.trim="query" class="student-search-input" placeholder="搜索课程、学科或教师" />
+      <input v-model.trim="query" class="student-search-input" aria-label="搜索课程" placeholder="搜索课程、学科或教师" />
     </template>
     <NoticeLine v-if="notice" :message="notice" />
     <section v-if="loading" class="student-panel"><p class="empty">正在加载课程</p></section>

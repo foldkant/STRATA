@@ -5,21 +5,14 @@ import AppShell from '@/layouts/AppShell.vue'
 import EChartPanel from '@/components/EChartPanel.vue'
 import MetricGrid from '@/components/MetricGrid.vue'
 import { barOption, lineOption, pieOption, stackedBarOption, total } from '@/utils/chartOptions'
+import { schoolAdminNav } from './nav'
 
 type SchoolAdminCharts = NonNullable<SchoolAdminDashboard['charts']>
 
 const emptyRows: SeriesPoint[] = []
 const emptySlices: CountSlice[] = []
 const data = ref<SchoolAdminDashboard | null>(null)
-const navItems = [
-  { label: '管理首页', path: '/school-admin', active: true },
-  { label: '教师管理', path: '/school-admin/teachers' },
-  { label: '学生管理', path: '/school-admin/students' },
-  { label: '班级管理', path: '/school-admin/classes' },
-  { label: '任课关系', path: '/school-admin/teaching' },
-  { label: '学科与学科前测', path: '/school-admin/pretests' },
-  { label: '模型与训练', path: '/school-admin/models' }
-]
+const navItems = schoolAdminNav('/school-admin')
 
 const fallbackCharts = computed<Partial<SchoolAdminCharts>>(() => ({
   login_series: data.value?.login_series || emptyRows,

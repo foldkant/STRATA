@@ -1,14 +1,12 @@
 import { apiRequest, queryString, toJsonBody, uploadRequest } from './client'
 import type { CurrentUser } from './auth'
 import type { ClassGroupRow, PageQuery, PageResult, SubjectRow } from './management'
+import type { ResourceRow } from './teacher'
 
 export type StudentProfile = {
   id: number
   student_no: string
   class_group: ClassGroupRow | null
-  current_layer: string | null
-  current_layer_label: string
-  current_group_no: number | null
   score: number
   is_first_use: boolean
   onboarding_status: string
@@ -96,7 +94,6 @@ export type StudentClassroom = {
   current_step_status: 'idle' | 'open' | 'locked' | 'closed'
   current_step_status_label: string
   submission_locked: boolean
-  is_layered: boolean
   evaluation_enabled: boolean
   evaluation_opened_at: string | null
   current_step_started_at: string | null
@@ -146,6 +143,8 @@ export type StudentClassroomActivityResponsePayload = {
 }
 
 export type StudentStepAnswerResult = {
+  attempt_id: string
+  attempt_no: number
   answered_count: number
   question_count: number
   auto_score: number
@@ -159,6 +158,7 @@ export type StudentWorkAttachment = {
   classroom_session: number | null
   question_id: string
   question_stem: string
+  upload_version: number
   title: string
   attachment_url: string
   attachment_name: string
@@ -175,12 +175,9 @@ export type StudentWorkAttachment = {
 export type StudentGroupMember = {
   id: number
   student_id: number
-  profile_id: number | null
   username: string
   display_name: string
   student_no: string
-  current_layer: string
-  current_layer_label: string
   role: 'leader' | 'member'
   role_label: string
   joined_at: string
@@ -188,6 +185,8 @@ export type StudentGroupMember = {
 
 export type StudentGroupFile = {
   id: number
+  public_id: string
+  version_no: number
   group: number
   uploader: {
     id: number
@@ -217,7 +216,6 @@ export type StudentGroup = {
   collaboration: number
   group_no: number
   name: string
-  layer_hint: string
   leader: number | null
   document: StudentGroupDocument
   used_storage_bytes: number
@@ -236,8 +234,6 @@ export type StudentGroupCollaboration = {
   status: 'draft' | 'open' | 'closed'
   status_label: string
   group_size: number
-  grouping_strategy: string
-  grouping_strategy_label: string
   document_type: 'docx' | 'pptx' | 'xlsx'
   document_type_label: string
   storage_quota_mb: number
@@ -306,8 +302,6 @@ export type StudentPeerEvaluationTarget = {
   username: string
   display_name: string
   student_no: string
-  current_layer: string
-  current_layer_label: string
   submission: StudentEvaluationSubmission | null
 }
 
@@ -449,8 +443,6 @@ export type StudentLessonStep = {
   sort_order: number
   is_required: boolean
   estimated_minutes: number
-  target_layer: string
-  target_layer_label: string
   status: string
   status_label: string
   resource_items: StudentResourceBinding[]
@@ -472,10 +464,6 @@ export type StudentLessonQuestion = {
     allowed_extensions: string[]
     max_size_mb: number
   }
-  target_layer?: string
-  target_layer_label?: string
-  use_layer_scores?: boolean
-  layer_scores?: Record<'A' | 'B' | 'C', number>
   is_required: boolean
   sort_order: number
 }
@@ -487,6 +475,8 @@ export type StudentResourceBinding = {
   attachment_name: string
   file_ext: string
   kind: string
+  external_url?: string
+  resource_type?: string
   learning_page_id?: number
   revision_no?: number
 }
@@ -582,6 +572,18 @@ export function getStudentDashboard() {
   return apiRequest<StudentDashboard>('/api/v1/student/dashboard/')
 }
 
+export function getStudentResources(params: PageQuery & { scope?: string } = {}) {
+  return apiRequest<PageResult<ResourceRow>>(`/api/v1/student/resources/${queryString(params)}`)
+}
+
+export function getStudentResource(id: number) {
+  return apiRequest<ResourceRow>(`/api/v1/student/resources/${id}/`)
+}
+
+export function recordStudentResourceView(id: number) {
+  return apiRequest<ResourceRow>(`/api/v1/student/resources/${id}/`, { method: 'POST' })
+}
+
 export function getStudentArchive(subject?: number | string) {
   return apiRequest<StudentArchive>(`/api/v1/student/profile/${queryString({ subject })}`)
 }
@@ -622,6 +624,39 @@ export function getStudentLessonWorkspace(id: number) {
 
 export function getStudentClassroom(id: number) {
   return apiRequest<StudentClassroom>(`/api/v1/student/classroom/${id}/`)
+}
+
+export function recordClassroomResourceOpened(
+  classroomId: number,
+  resourceId: number | string,
+  presentation: 'embedded' | 'popout' | 'external' | 'download' | 'unknown' = 'embedded'
+) {
+  return apiRequest<Record<string, never>>(`/api/v1/student/classroom/${classroomId}/resources/${resourceId}/opened/`, {
+    method: 'POST',
+    body: toJsonBody({ presentation })
+  })
+}
+
+export function recordClassroomVideoProgress(
+  classroomId: number,
+  resourceId: number | string,
+  payload: { position_seconds: number; media_seconds: number; playback_rate: number; duration_ms: number }
+) {
+  return apiRequest<Record<string, never>>(`/api/v1/student/classroom/${classroomId}/resources/${resourceId}/video-progress/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function recordClassroomDocumentProgress(
+  classroomId: number,
+  resourceId: number | string,
+  payload: { page: number; page_count: number; visible_seconds: number }
+) {
+  return apiRequest<Record<string, never>>(`/api/v1/student/classroom/${classroomId}/resources/${resourceId}/document-progress/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
 }
 
 export function getStudentGroupCollaboration(classroomId: number) {

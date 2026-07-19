@@ -1,0 +1,20 @@
+TY  - JOUR
+AU  - Mosqueira-Rey, Eduardo
+AU  - Hernández-Pereira, Elena
+AU  - Alonso-Ríos, David
+AU  - Bobes-Bascarán, José
+AU  - Fernández-Leal, Ángel
+TI  - Human-in-the-loop machine learning: a state of the art
+JO  - Artificial Intelligence Review
+T2  - Artificial Intelligence Review
+JA  - Artif Intell Rev
+PY  - 2022
+VL  - 56
+IS  - 4
+SP  - 3005
+EP  - 3054
+DO  - 10.1007/s10462-022-10246-w
+UR  - https://doi.org/10.1007/s10462-022-10246-w
+N2  - AbstractResearchers are defining new types of interactions between humans and machine learning algorithms generically called human-in-the-loop machine learning. Depending on who is in control of the learning process, we can identify: active learning, in which the system remains in control; interactive machine learning, in which there is a closer interaction between users and learning systems; and machine teaching, where human domain experts have control over the learning process. Aside from cont
+DB  - CrossRef
+ER  - 

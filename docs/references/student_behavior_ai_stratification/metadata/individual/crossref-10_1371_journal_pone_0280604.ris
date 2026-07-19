@@ -1,0 +1,16 @@
+TY  - JOUR
+AU  - Vallès-Català, Toni
+AU  - Palau, Ramon
+TI  - Minimum entropy collaborative groupings: A tool for an automatic heterogeneous learning group formation
+JO  - PLOS ONE
+T2  - PLOS ONE
+JA  - PLoS ONE
+PY  - 2023
+VL  - 18
+IS  - 3
+SP  - e0280604
+DO  - 10.1371/journal.pone.0280604
+UR  - https://doi.org/10.1371/journal.pone.0280604
+N2  - For some decades now, theories on learning methodologies have advocated collaborative learning due to its good results in terms of effectiveness and learning types and its promotion of educational and social values. This means that teachers need to be able to apply different criteria when forming heterogeneous groups of students and to use automated techniques to assist them. In this study, we have created an approach based on complex network theory to design an algorithm called Minimum Entropy 
+DB  - CrossRef
+ER  - 

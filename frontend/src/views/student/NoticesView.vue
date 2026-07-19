@@ -44,7 +44,7 @@ onMounted(loadRows)
 <template>
   <StudentShell title="公告通知" subtitle="任课教师发布给本班的通知" :nav-items="navItems">
     <template #actions>
-      <input v-model.trim="query" class="student-search-input" placeholder="搜索公告" />
+      <input v-model.trim="query" class="student-search-input" aria-label="搜索公告" placeholder="搜索公告" />
     </template>
 
     <NoticeLine v-if="notice" :message="notice" />

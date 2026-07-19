@@ -27,18 +27,11 @@ import StatusBadge from '@/components/StatusBadge.vue'
 import XlsxImportModal from '@/components/XlsxImportModal.vue'
 import { usePageSelection } from '@/composables/usePageSelection'
 import type { FormField } from '@/types/forms'
+import { schoolAdminNav } from './nav'
 
 type FormModel = Record<string, string | number | boolean>
 
-const navItems = [
-  { label: '管理首页', path: '/school-admin' },
-  { label: '教师管理', path: '/school-admin/teachers' },
-  { label: '学生管理', path: '/school-admin/students' },
-  { label: '班级管理', path: '/school-admin/classes' },
-  { label: '任课关系', path: '/school-admin/teaching' },
-  { label: '学科与学科前测', path: '/school-admin/pretests' },
-  { label: '模型与训练', path: '/school-admin/models' }
-]
+const navItems = schoolAdminNav('/school-admin/students')
 
 const statusOptions = [
   { label: '全部状态', value: '' },

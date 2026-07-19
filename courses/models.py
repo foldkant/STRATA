@@ -1,4 +1,7 @@
+import uuid
+
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
@@ -10,8 +13,31 @@ def classroom_group_document_upload_path(instance, filename: str) -> str:
     class_id = session.class_group_id or "unknown"
     session_id = session.id or "unknown"
     group_id = instance.id or "unknown"
-    suffix = str(filename or "").rsplit(".", 1)[-1].lower() if "." in str(filename or "") else collaboration.document_type
+    suffix = (
+        str(filename or "").rsplit(".", 1)[-1].lower()
+        if "." in str(filename or "")
+        else collaboration.document_type
+    )
     return f"classroom_group_docs/school_{school_id}/class_{class_id}/session_{session_id}/group_{group_id}/collaboration.{suffix}"
+
+
+def classroom_group_document_version_upload_path(instance, filename: str) -> str:
+    group = instance.group
+    session = group.collaboration.session
+    school_id = session.school_id or "unknown"
+    class_id = session.class_group_id or "unknown"
+    session_id = session.id or "unknown"
+    group_id = group.id or "unknown"
+    suffix = (
+        str(filename or "").rsplit(".", 1)[-1].lower()
+        if "." in str(filename or "")
+        else group.collaboration.document_type
+    )
+    return (
+        f"classroom_group_docs/school_{school_id}/class_{class_id}/"
+        f"session_{session_id}/group_{group_id}/versions/"
+        f"version_{instance.version_no}.{suffix}"
+    )
 
 
 def classroom_group_file_upload_path(instance, filename: str) -> str:
@@ -25,8 +51,17 @@ def classroom_group_file_upload_path(instance, filename: str) -> str:
     return f"classroom_group_files/school_{school_id}/class_{class_id}/session_{session_id}/group_{group_id}/user_{uploader_id}/{filename}"
 
 
+def resource_extra_file_upload_path(instance, filename: str) -> str:
+    resource = instance.resource
+    school_id = resource.owner.school_id or "unknown"
+    resource_id = resource.id or "unknown"
+    return f"resources/school_{school_id}/resource_{resource_id}/extras/{filename}"
+
+
 class Subject(models.Model):
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="subjects")
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="subjects"
+    )
     name = models.CharField(max_length=64)
     code = models.CharField(max_length=32)
     is_active = models.BooleanField(default=True)
@@ -42,8 +77,12 @@ class Subject(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["school", "code"], name="uniq_subject_code_per_school"),
-            models.UniqueConstraint(fields=["school", "name"], name="uniq_subject_name_per_school"),
+            models.UniqueConstraint(
+                fields=["school", "code"], name="uniq_subject_code_per_school"
+            ),
+            models.UniqueConstraint(
+                fields=["school", "name"], name="uniq_subject_name_per_school"
+            ),
         ]
         ordering = ["school_id", "name"]
 
@@ -56,12 +95,18 @@ class Course(models.Model):
         PROJECT = "pbl", "项目式学习"
         TASK = "tbl", "任务驱动学习"
 
-    subject = models.ForeignKey(Subject, on_delete=models.PROTECT, null=True, blank=True, related_name="courses")
+    subject = models.ForeignKey(
+        Subject, on_delete=models.PROTECT, null=True, blank=True, related_name="courses"
+    )
     title = models.CharField(max_length=128)
     introduction = models.TextField(blank=True)
     cover = models.ImageField(upload_to="course_covers/", blank=True)
-    teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="courses")
-    teaching_model = models.CharField(max_length=16, choices=TeachingModel.choices, default=TeachingModel.PROJECT)
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="courses"
+    )
+    teaching_model = models.CharField(
+        max_length=16, choices=TeachingModel.choices, default=TeachingModel.PROJECT
+    )
     is_active = models.BooleanField(default=False)
     legacy_id = models.IntegerField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -75,8 +120,12 @@ class Course(models.Model):
 
 
 class CourseClass(models.Model):
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="course_classes")
-    class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT, related_name="course_classes")
+    course = models.ForeignKey(
+        Course, on_delete=models.CASCADE, related_name="course_classes"
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup", on_delete=models.PROTECT, related_name="course_classes"
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -88,7 +137,9 @@ class CourseClass(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["course", "class_group"], name="uniq_course_class_group"),
+            models.UniqueConstraint(
+                fields=["course", "class_group"], name="uniq_course_class_group"
+            ),
         ]
         ordering = ["course_id", "class_group__grade", "class_group__name"]
 
@@ -141,14 +192,20 @@ class LessonStep(models.Model):
 
     lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name="steps")
     title = models.CharField(max_length=128)
-    step_type = models.CharField(max_length=32, choices=StepType.choices, default=StepType.RESOURCE)
+    step_type = models.CharField(
+        max_length=32, choices=StepType.choices, default=StepType.RESOURCE
+    )
     student_instruction = models.TextField(blank=True)
     teacher_note = models.TextField(blank=True)
     sort_order = models.PositiveIntegerField(default=0)
     is_required = models.BooleanField(default=True)
     estimated_minutes = models.PositiveIntegerField(default=10)
-    target_layer = models.CharField(max_length=16, choices=TargetLayer.choices, default=TargetLayer.ALL)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    target_layer = models.CharField(
+        max_length=16, choices=TargetLayer.choices, default=TargetLayer.ALL
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
     resource_items = models.JSONField(default=list, blank=True)
     activity_items = models.JSONField(default=list, blank=True)
     question_items = models.JSONField(default=list, blank=True)
@@ -181,20 +238,28 @@ class LearningWebPage(models.Model):
         DRAFT = "draft", "草稿"
         READY = "ready", "可使用"
 
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="learning_web_pages")
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="learning_web_pages"
+    )
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="learning_web_pages",
         limit_choices_to={"role": "teacher"},
     )
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="learning_web_pages")
-    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name="learning_web_pages")
+    course = models.ForeignKey(
+        Course, on_delete=models.CASCADE, related_name="learning_web_pages"
+    )
+    lesson = models.ForeignKey(
+        Lesson, on_delete=models.CASCADE, related_name="learning_web_pages"
+    )
     title = models.CharField(max_length=128)
     schema = models.JSONField(default=dict)
     generation_prompt = models.TextField(blank=True)
     revision_no = models.PositiveIntegerField(default=1)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.READY)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.READY
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -211,7 +276,9 @@ class LearningWebPage(models.Model):
 
 
 class LearningWebPageVersion(models.Model):
-    page = models.ForeignKey(LearningWebPage, on_delete=models.CASCADE, related_name="versions")
+    page = models.ForeignKey(
+        LearningWebPage, on_delete=models.CASCADE, related_name="versions"
+    )
     version_no = models.PositiveIntegerField()
     prompt = models.TextField(blank=True)
     schema = models.JSONField(default=dict)
@@ -226,7 +293,9 @@ class LearningWebPageVersion(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["page", "version_no"], name="uniq_learning_web_page_version"),
+            models.UniqueConstraint(
+                fields=["page", "version_no"], name="uniq_learning_web_page_version"
+            ),
         ]
         ordering = ["-version_no", "-id"]
 
@@ -235,8 +304,17 @@ class LearningWebPageVersion(models.Model):
 
 
 class LearningWebPageResponse(models.Model):
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="learning_web_page_responses")
-    page = models.ForeignKey(LearningWebPage, on_delete=models.PROTECT, related_name="responses")
+    analytics_attempt_id = models.UUIDField(
+        default=uuid.uuid4, unique=True, editable=False
+    )
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.CASCADE,
+        related_name="learning_web_page_responses",
+    )
+    page = models.ForeignKey(
+        LearningWebPage, on_delete=models.PROTECT, related_name="responses"
+    )
     page_version = models.PositiveIntegerField(default=1)
     student = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -244,10 +322,20 @@ class LearningWebPageResponse(models.Model):
         related_name="learning_web_page_responses",
         limit_choices_to={"role": "student"},
     )
-    class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT, related_name="learning_web_page_responses")
-    course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name="learning_web_page_responses")
-    lesson = models.ForeignKey(Lesson, on_delete=models.PROTECT, related_name="learning_web_page_responses")
-    lesson_step = models.ForeignKey(LessonStep, on_delete=models.PROTECT, related_name="learning_web_page_responses")
+    class_group = models.ForeignKey(
+        "school.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="learning_web_page_responses",
+    )
+    course = models.ForeignKey(
+        Course, on_delete=models.PROTECT, related_name="learning_web_page_responses"
+    )
+    lesson = models.ForeignKey(
+        Lesson, on_delete=models.PROTECT, related_name="learning_web_page_responses"
+    )
+    lesson_step = models.ForeignKey(
+        LessonStep, on_delete=models.PROTECT, related_name="learning_web_page_responses"
+    )
     classroom_session = models.ForeignKey(
         "ClassroomSession",
         on_delete=models.SET_NULL,
@@ -290,14 +378,18 @@ class ClassroomSession(models.Model):
         LOCKED = "locked", "已锁定"
         CLOSED = "closed", "已关闭"
 
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="classroom_sessions")
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="classroom_sessions"
+    )
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="classroom_sessions",
         limit_choices_to={"role": "teacher"},
     )
-    course = models.ForeignKey(Course, on_delete=models.PROTECT, related_name="classroom_sessions")
+    course = models.ForeignKey(
+        Course, on_delete=models.PROTECT, related_name="classroom_sessions"
+    )
     lesson = models.ForeignKey(
         Lesson,
         on_delete=models.PROTECT,
@@ -305,9 +397,13 @@ class ClassroomSession(models.Model):
         blank=True,
         related_name="classroom_sessions",
     )
-    class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT, related_name="classroom_sessions")
+    class_group = models.ForeignKey(
+        "school.ClassGroup", on_delete=models.PROTECT, related_name="classroom_sessions"
+    )
     title = models.CharField(max_length=128)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
     current_step = models.ForeignKey(
         LessonStep,
         on_delete=models.SET_NULL,
@@ -315,10 +411,19 @@ class ClassroomSession(models.Model):
         blank=True,
         related_name="+",
     )
-    current_step_status = models.CharField(max_length=16, choices=StepStatus.choices, default=StepStatus.IDLE)
+    current_step_status = models.CharField(
+        max_length=16, choices=StepStatus.choices, default=StepStatus.IDLE
+    )
     submission_locked = models.BooleanField(default=False)
     is_layered = models.BooleanField(default=False)
     evaluation_enabled = models.BooleanField(default=False)
+    evaluation_config_version = models.ForeignKey(
+        "ClassroomEvaluationConfigVersion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="classroom_sessions",
+    )
     evaluation_opened_at = models.DateTimeField(null=True, blank=True)
     current_step_started_at = models.DateTimeField(null=True, blank=True)
     current_step_closed_at = models.DateTimeField(null=True, blank=True)
@@ -353,12 +458,16 @@ class ClassroomActivity(models.Model):
         OPEN = "open", "进行中"
         CLOSED = "closed", "已关闭"
 
-    session = models.ForeignKey(ClassroomSession, on_delete=models.CASCADE, related_name="activities")
+    session = models.ForeignKey(
+        ClassroomSession, on_delete=models.CASCADE, related_name="activities"
+    )
     activity_type = models.CharField(max_length=32, choices=ActivityType.choices)
     title = models.CharField(max_length=128)
     content = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
     opened_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -376,20 +485,129 @@ class ClassroomActivity(models.Model):
 
 
 class Resource(models.Model):
+    class ResourceType(models.TextChoices):
+        FILE = "file", "文件资源"
+        ARTICLE = "article", "图文内容"
+        LINK = "link", "外部链接"
+        STUDENT_PROJECT = "student_project", "学生项目"
+
+    class Category(models.TextChoices):
+        COURSEWARE = "courseware", "课件素材"
+        EXTRACURRICULAR = "extracurricular", "课外拓展"
+        COMPETITION = "competition", "竞赛资源"
+        PROJECT = "project", "学生项目"
+        REFERENCE = "reference", "参考资料"
+        TOOLKIT = "toolkit", "工具素材"
+        OTHER = "other", "其他"
+
+    class Visibility(models.TextChoices):
+        PRIVATE = "private", "仅自己"
+        CLASSES = "classes", "指定班级"
+        SCHOOL = "school", "本校共享"
+        EXTERNAL = "external", "跨校共享"
+
+    class PublishStatus(models.TextChoices):
+        PUBLISHED = "published", "已发布"
+        PENDING = "pending", "待审核"
+        APPROVED = "approved", "已通过"
+        REJECTED = "rejected", "已退回"
+        ARCHIVED = "archived", "已归档"
+
+    class ProjectType(models.TextChoices):
+        INDIVIDUAL = "individual", "个人项目"
+        GROUP = "group", "小组项目"
+
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     title = models.CharField(max_length=128)
     content = models.TextField(blank=True)
     attachment = models.FileField(upload_to="resources/", blank=True)
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="resources")
+    cover = models.ImageField(upload_to="resource_covers/", blank=True)
+    resource_type = models.CharField(
+        max_length=24, choices=ResourceType.choices, default=ResourceType.FILE
+    )
+    category = models.CharField(
+        max_length=24, choices=Category.choices, default=Category.COURSEWARE
+    )
+    visibility = models.CharField(
+        max_length=16, choices=Visibility.choices, default=Visibility.PRIVATE
+    )
+    publish_status = models.CharField(
+        max_length=16, choices=PublishStatus.choices, default=PublishStatus.PUBLISHED
+    )
+    subject = models.ForeignKey(
+        Subject,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resources",
+    )
+    target_classes = models.ManyToManyField(
+        "school.ClassGroup", blank=True, related_name="shared_resources"
+    )
+    grade_scope = models.CharField(max_length=128, blank=True)
+    tags = models.JSONField(default=list, blank=True)
+    external_url = models.URLField(max_length=500, blank=True)
+    project_type = models.CharField(
+        max_length=16, choices=ProjectType.choices, blank=True
+    )
+    project_members = models.JSONField(default=list, blank=True)
+    project_course = models.CharField(max_length=128, blank=True)
+    competition_name = models.CharField(max_length=128, blank=True)
+    competition_year = models.PositiveSmallIntegerField(null=True, blank=True)
+    award_level = models.CharField(max_length=128, blank=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="resources"
+    )
     view_count = models.PositiveIntegerField(default=0)
     is_pinned = models.BooleanField(default=False)
+    review_note = models.CharField(max_length=500, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviewed_resources",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        indexes = [
+            models.Index(fields=["visibility", "publish_status", "updated_at"]),
+            models.Index(fields=["resource_type", "category", "updated_at"]),
+        ]
         ordering = ["-is_pinned", "-created_at"]
 
     def __str__(self) -> str:
         return self.title
+
+
+class ResourceFile(models.Model):
+    class Role(models.TextChoices):
+        SUPPLEMENT = "supplement", "补充附件"
+        PROCESS = "process", "项目过程材料"
+
+    resource = models.ForeignKey(
+        Resource, on_delete=models.CASCADE, related_name="extra_files"
+    )
+    file = models.FileField(upload_to=resource_extra_file_upload_path)
+    original_name = models.CharField(max_length=255)
+    file_ext = models.CharField(max_length=16, blank=True)
+    file_size = models.PositiveBigIntegerField(default=0)
+    role = models.CharField(
+        max_length=16, choices=Role.choices, default=Role.SUPPLEMENT
+    )
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["resource", "role", "sort_order"])]
+        ordering = ["sort_order", "id"]
+
+    def __str__(self) -> str:
+        return self.original_name
 
 
 class ClassroomGroupCollaboration(models.Model):
@@ -422,11 +640,15 @@ class ClassroomGroupCollaboration(models.Model):
         choices=GroupingStrategy.choices,
         default=GroupingStrategy.BALANCED_LAYER,
     )
-    document_type = models.CharField(max_length=8, choices=DocumentType.choices, default=DocumentType.DOCX)
+    document_type = models.CharField(
+        max_length=8, choices=DocumentType.choices, default=DocumentType.DOCX
+    )
     storage_quota_mb = models.PositiveIntegerField(default=100)
     allow_student_upload = models.BooleanField(default=True)
     allow_onlyoffice_edit = models.BooleanField(default=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -466,7 +688,9 @@ class ClassroomGroup(models.Model):
         blank=True,
         related_name="led_classroom_groups",
     )
-    collaboration_document = models.FileField(upload_to=classroom_group_document_upload_path, blank=True)
+    collaboration_document = models.FileField(
+        upload_to=classroom_group_document_upload_path, blank=True
+    )
     document_original_name = models.CharField(max_length=128, blank=True)
     document_file_ext = models.CharField(max_length=8, blank=True)
     document_version = models.PositiveIntegerField(default=1)
@@ -475,7 +699,10 @@ class ClassroomGroup(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["collaboration", "group_no"], name="uniq_classroom_group_no_per_collaboration"),
+            models.UniqueConstraint(
+                fields=["collaboration", "group_no"],
+                name="uniq_classroom_group_no_per_collaboration",
+            ),
         ]
         indexes = [
             models.Index(fields=["collaboration", "group_no"]),
@@ -484,6 +711,51 @@ class ClassroomGroup(models.Model):
 
     def __str__(self) -> str:
         return self.name
+
+
+class ClassroomGroupDocumentVersion(models.Model):
+    class Source(models.TextChoices):
+        INITIAL = "initial", "初始文档"
+        ONLYOFFICE_CALLBACK = "onlyoffice_callback", "ONLYOFFICE 回调"
+
+    group = models.ForeignKey(
+        ClassroomGroup,
+        on_delete=models.CASCADE,
+        related_name="document_versions",
+    )
+    version_no = models.PositiveIntegerField()
+    file = models.FileField(upload_to=classroom_group_document_version_upload_path)
+    file_sha256 = models.CharField(max_length=64)
+    file_size = models.PositiveBigIntegerField(default=0)
+    source = models.CharField(max_length=32, choices=Source.choices)
+    callback_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    callback_key = models.CharField(max_length=255, blank=True)
+    verified_editor_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["group", "version_no"],
+                name="uniq_classroom_group_document_version",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["group", "created_at"]),
+            models.Index(fields=["file_sha256"]),
+        ]
+        ordering = ["group_id", "version_no"]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("小组协作文档版本是不可变证据，不能原地修改。")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("小组协作文档版本不能单独删除。")
+
+    def __str__(self) -> str:
+        return f"{self.group} v{self.version_no}"
 
 
 class ClassroomGroupMember(models.Model):
@@ -496,8 +768,14 @@ class ClassroomGroupMember(models.Model):
         on_delete=models.CASCADE,
         related_name="members",
     )
-    group = models.ForeignKey(ClassroomGroup, on_delete=models.CASCADE, related_name="members")
-    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="classroom_group_memberships")
+    group = models.ForeignKey(
+        ClassroomGroup, on_delete=models.CASCADE, related_name="members"
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="classroom_group_memberships",
+    )
     student_profile = models.ForeignKey(
         "school.StudentProfile",
         on_delete=models.SET_NULL,
@@ -510,21 +788,38 @@ class ClassroomGroupMember(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["collaboration", "student"], name="uniq_student_per_group_collaboration"),
-            models.UniqueConstraint(fields=["group", "student"], name="uniq_student_per_classroom_group"),
+            models.UniqueConstraint(
+                fields=["collaboration", "student"],
+                name="uniq_student_per_group_collaboration",
+            ),
+            models.UniqueConstraint(
+                fields=["group", "student"], name="uniq_student_per_classroom_group"
+            ),
         ]
         indexes = [
             models.Index(fields=["collaboration", "student"]),
             models.Index(fields=["group", "role"]),
         ]
-        ordering = ["group__group_no", "role", "student__display_name", "student__username"]
+        ordering = [
+            "group__group_no",
+            "role",
+            "student__display_name",
+            "student__username",
+        ]
 
     def __str__(self) -> str:
         return f"{self.group} - {self.student}"
 
 
 class ClassroomGroupFile(models.Model):
-    group = models.ForeignKey(ClassroomGroup, on_delete=models.CASCADE, related_name="files")
+    public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    analytics_attempt_id = models.UUIDField(
+        default=uuid.uuid4, unique=True, editable=False
+    )
+    version_no = models.PositiveIntegerField(default=1)
+    group = models.ForeignKey(
+        ClassroomGroup, on_delete=models.CASCADE, related_name="files"
+    )
     uploader = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -584,13 +879,64 @@ class ClassroomEvaluationConfig(models.Model):
         return f"{self.course} - 课程评价"
 
 
+class ClassroomEvaluationConfigVersion(models.Model):
+    course = models.ForeignKey(
+        Course,
+        on_delete=models.CASCADE,
+        related_name="evaluation_config_versions",
+    )
+    version_no = models.PositiveIntegerField()
+    config_hash = models.CharField(max_length=64)
+    enable_self = models.BooleanField(default=False)
+    enable_peer = models.BooleanField(default=False)
+    enable_teacher = models.BooleanField(default=False)
+    self_criteria = models.JSONField(default=list, blank=True)
+    peer_criteria = models.JSONField(default=list, blank=True)
+    teacher_criteria = models.JSONField(default=list, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_evaluation_config_versions",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["course", "version_no"],
+                name="uniq_course_evaluation_version_no",
+            ),
+            models.UniqueConstraint(
+                fields=["course", "config_hash"],
+                name="uniq_course_evaluation_config_hash",
+            ),
+        ]
+        indexes = [models.Index(fields=["course", "created_at"])]
+        ordering = ["-version_no", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.course} - 评价量规 v{self.version_no}"
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("已发布评价量规版本不可修改。")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("已发布评价量规版本不可删除。")
+
+
 class ClassroomEvaluationSubmission(models.Model):
     class EvaluationType(models.TextChoices):
         SELF = "self", "自评"
         PEER = "peer", "互评"
         TEACHER = "teacher", "师评"
 
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="evaluation_submissions")
+    course = models.ForeignKey(
+        Course, on_delete=models.CASCADE, related_name="evaluation_submissions"
+    )
     class_group = models.ForeignKey(
         "school.ClassGroup",
         on_delete=models.SET_NULL,
@@ -623,6 +969,23 @@ class ClassroomEvaluationSubmission(models.Model):
         blank=True,
         related_name="evaluation_submissions",
     )
+    rubric_version = models.ForeignKey(
+        ClassroomEvaluationConfigVersion,
+        on_delete=models.PROTECT,
+        related_name="submissions",
+    )
+    submission_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    submission_version = models.PositiveIntegerField(default=1)
+    analytics_attempt_id = models.UUIDField(
+        default=uuid.uuid4, unique=True, editable=False
+    )
+    supersedes = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="revisions",
+    )
     ratings = models.JSONField(default=dict)
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -631,14 +994,26 @@ class ClassroomEvaluationSubmission(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["session", "evaluation_type", "evaluator", "target"],
+                fields=[
+                    "session",
+                    "evaluation_type",
+                    "evaluator",
+                    "target",
+                    "submission_version",
+                ],
                 condition=Q(session__isnull=False),
-                name="uniq_classroom_evaluation_submission",
+                name="uniq_classroom_evaluation_submission_version",
             ),
             models.UniqueConstraint(
-                fields=["course", "evaluation_type", "evaluator", "target"],
+                fields=[
+                    "course",
+                    "evaluation_type",
+                    "evaluator",
+                    "target",
+                    "submission_version",
+                ],
                 condition=Q(session__isnull=True),
-                name="uniq_course_evaluation_submission",
+                name="uniq_course_evaluation_submission_version",
             ),
         ]
         indexes = [
@@ -654,9 +1029,19 @@ class ClassroomEvaluationSubmission(models.Model):
         scope = self.session_id or f"course:{self.course_id}"
         return f"{scope}:{self.evaluation_type}:{self.evaluator_id}->{self.target_id}"
 
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("评价提交版本不可修改，请追加修订版本。")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("评价提交版本不可直接删除。")
+
 
 class Activity(models.Model):
-    lesson = models.ForeignKey(Lesson, on_delete=models.CASCADE, related_name="activities")
+    lesson = models.ForeignKey(
+        Lesson, on_delete=models.CASCADE, related_name="activities"
+    )
     title = models.CharField(max_length=128)
     content = models.TextField(blank=True)
     sort_order = models.PositiveIntegerField(default=0)
@@ -667,5 +1052,6 @@ class Activity(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
 
 # Create your models here.

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ApiError } from '@/api/client'
-import { getLearningPage, submitLearningPageForm, type LearningPage } from '@/api/learningPages'
+import { getLearningPage, submitLearningPageForm, trackLearningPageBlock, type LearningPage, type LearningPageBlock } from '@/api/learningPages'
 import LearningPageFrame from './LearningPageFrame.vue'
 import OnlyOfficeEditor from './OnlyOfficeEditor.vue'
 
@@ -13,6 +13,8 @@ type PreviewResource = {
   attachment_url?: string
   attachment_name?: string
   file_ext?: string
+  external_url?: string
+  resource_type?: string
   kind?: string
   learning_page_id?: number | string
   revision_no?: number
@@ -28,6 +30,17 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
+  'resource-opened': [payload: {
+    resourceId: number | string
+    presentation: 'embedded' | 'popout' | 'external' | 'download' | 'unknown'
+  }]
+  'video-progress': [payload: {
+    resourceId: number | string
+    positionSeconds: number
+    mediaSeconds: number
+    playbackRate: number
+    durationMs: number
+  }]
 }>()
 
 const router = useRouter()
@@ -35,7 +48,10 @@ const learningPage = shallowRef<LearningPage | null>(null)
 const learningPageLoading = ref(false)
 const learningPageError = ref('')
 const learningPageFrame = ref<InstanceType<typeof LearningPageFrame> | null>(null)
+const videoElement = ref<HTMLVideoElement | null>(null)
 let learningPageLoadToken = 0
+let lastVideoReportAt = 0
+let lastVideoPosition = 0
 
 const knownExts = new Set([
   'png',
@@ -86,10 +102,12 @@ function detectExt() {
 
 const title = computed(() => props.resource?.title || props.resource?.attachment_name || '未选择资源')
 const url = computed(() => props.resource?.attachment_url || '')
+const externalUrl = computed(() => props.resource?.external_url || '')
 const ext = computed(detectExt)
 
 const kind = computed(() => {
   if (props.resource?.kind === 'learning_page') return 'learning_page'
+  if (props.resource?.resource_type === 'link') return 'link'
   if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(ext.value)) return 'image'
   if (['mp4', 'webm', 'ogg', 'mov'].includes(ext.value)) return 'video'
   if (['mp3', 'wav', 'm4a'].includes(ext.value)) return 'audio'
@@ -108,6 +126,71 @@ const learningPageKey = computed(() => {
   return `${learningPageId.value}:${learningPageRevision.value}`
 })
 
+const previewKey = computed(() => {
+  if (!props.resource) return ''
+  return [
+    props.resource.kind || '',
+    props.resource.id || '',
+    props.resource.attachment_url || '',
+    props.resource.external_url || '',
+    props.resource.revision_no || '',
+  ].join(':')
+})
+
+function trackableResourceId() {
+  if (!props.resource || kind.value === 'learning_page') return null
+  const value = props.resource.id
+  return typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value)) ? value : null
+}
+
+function emitResourceOpened(
+  presentation: 'embedded' | 'popout' | 'external' | 'download' | 'unknown' = 'embedded'
+) {
+  const resourceId = trackableResourceId()
+  if (resourceId === null) return
+  emit('resource-opened', { resourceId, presentation })
+}
+
+function resetVideoTracking() {
+  lastVideoReportAt = 0
+  lastVideoPosition = 0
+}
+
+function startVideoTracking(event: Event) {
+  const video = event.currentTarget as HTMLVideoElement
+  lastVideoReportAt = performance.now()
+  lastVideoPosition = Math.max(video.currentTime || 0, 0)
+}
+
+function reportVideoProgress(force = false) {
+  const video = videoElement.value
+  const resourceId = trackableResourceId()
+  if (!video || resourceId === null) return
+  const positionSeconds = Number(video.currentTime)
+  const mediaSeconds = Number(video.duration)
+  const playbackRate = Number(video.playbackRate || 1)
+  if (!Number.isFinite(positionSeconds) || positionSeconds <= 0) return
+  if (!Number.isFinite(mediaSeconds) || mediaSeconds <= 0) return
+  const now = performance.now()
+  if (!lastVideoReportAt) {
+    lastVideoReportAt = now
+    lastVideoPosition = positionSeconds
+    return
+  }
+  const wallDurationMs = Math.max(now - lastVideoReportAt, 0)
+  if (!force && wallDurationMs < 10_000) return
+  const mediaDurationMs = Math.max(positionSeconds - lastVideoPosition, 0) * 1000 / Math.max(playbackRate, 0.25)
+  emit('video-progress', {
+    resourceId,
+    positionSeconds,
+    mediaSeconds,
+    playbackRate,
+    durationMs: Math.round(Math.min(wallDurationMs, mediaDurationMs, 600_000))
+  })
+  lastVideoReportAt = now
+  lastVideoPosition = positionSeconds
+}
+
 async function loadLearningPage() {
   const loadToken = ++learningPageLoadToken
   learningPageError.value = ''
@@ -118,7 +201,7 @@ async function loadLearningPage() {
   }
   learningPageLoading.value = true
   try {
-    const page = await getLearningPage(learningPageId.value)
+    const page = await getLearningPage(learningPageId.value, 'embedded')
     if (loadToken === learningPageLoadToken) {
       learningPage.value = page
     }
@@ -144,6 +227,15 @@ async function submitLearningPage(payload: { formId: string; answers: Record<str
   }
 }
 
+async function trackLearningBlock(payload: { blockId: string; blockType: LearningPageBlock['type']; visibleMs: number; visibilityRatio: number }) {
+  if (!learningPage.value || !props.learningPageInteractive) return
+  try {
+    await trackLearningPageBlock(learningPage.value.id, payload)
+  } catch {
+    // 行为采集失败不能中断学生当前的学习内容。
+  }
+}
+
 function openLearningPageTab() {
   if (!learningPage.value) return
   const href = router.resolve(`/learning-pages/${learningPage.value.id}`).href
@@ -151,6 +243,11 @@ function openLearningPageTab() {
 }
 
 watch(learningPageKey, loadLearningPage, { immediate: true })
+watch(previewKey, (value) => {
+  resetVideoTracking()
+  if (value) emitResourceOpened('embedded')
+}, { immediate: true, flush: 'post' })
+onBeforeUnmount(() => reportVideoProgress(true))
 </script>
 
 <template>
@@ -163,6 +260,7 @@ watch(learningPageKey, loadLearningPage, { immediate: true })
       </div>
       <div class="resource-preview-actions">
         <a v-if="url" :href="url" download>下载</a>
+        <a v-if="externalUrl" :href="externalUrl" target="_blank" rel="noopener noreferrer">打开链接</a>
         <button v-if="closable" type="button" @click="emit('close')">关闭</button>
       </div>
     </header>
@@ -187,10 +285,20 @@ watch(learningPageKey, loadLearningPage, { immediate: true })
           :page="learningPage"
           :interactive="Boolean(learningPageInteractive)"
           @submit="submitLearningPage"
+          @block-viewed="trackLearningBlock"
         />
       </div>
       <img v-else-if="kind === 'image' && canEmbed" :src="url" :alt="title" />
-      <video v-else-if="kind === 'video' && canEmbed" :src="url" controls />
+      <video
+        v-else-if="kind === 'video' && canEmbed"
+        ref="videoElement"
+        :src="url"
+        controls
+        @play="startVideoTracking"
+        @timeupdate="reportVideoProgress(false)"
+        @pause="reportVideoProgress(true)"
+        @ended="reportVideoProgress(true)"
+      />
       <audio v-else-if="kind === 'audio' && canEmbed" :src="url" controls />
       <iframe v-else-if="kind === 'pdf' && canEmbed" :src="url" title="PDF 预览"></iframe>
       <OnlyOfficeEditor
@@ -198,6 +306,11 @@ watch(learningPageKey, loadLearningPage, { immediate: true })
         :resource-id="resource!.id!"
         :mode="officeMode || 'view'"
       />
+      <div v-else-if="kind === 'link'" class="resource-preview-empty resource-preview-link-card">
+        <strong>{{ title }}</strong>
+        <p>{{ resource?.content || '该资源需要联网访问外部链接。' }}</p>
+        <a :href="externalUrl" target="_blank" rel="noopener noreferrer">在新标签页打开</a>
+      </div>
       <div v-else class="resource-preview-empty">
         <strong>{{ title }}</strong>
         <p v-if="!resource">当前没有选择可预览资源。</p>

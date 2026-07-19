@@ -244,16 +244,77 @@ export type TeacherCourseOptions = {
 
 export type ResourceRow = {
   id: number
+  public_id: string
   title: string
   content: string
   attachment_url: string
   attachment_name: string
   attachment_size: number
   file_ext: string
+  cover_url: string
+  resource_type: 'file' | 'article' | 'link' | 'student_project'
+  resource_type_label: string
+  category: string
+  category_label: string
+  visibility: 'private' | 'classes' | 'school' | 'external'
+  visibility_label: string
+  publish_status: 'published' | 'pending' | 'approved' | 'rejected' | 'archived'
+  publish_status_label: string
+  subject: SubjectRow | null
+  target_classes: ClassGroupRow[]
+  grade_scope: string
+  tags: string[]
+  external_url: string
+  project_type: '' | 'individual' | 'group'
+  project_type_label: string
+  project_members: string[]
+  project_course: string
+  competition_name: string
+  competition_year: number | null
+  award_level: string
+  extra_files: Array<{
+    id: number
+    name: string
+    file_url: string
+    file_ext: string
+    file_size: number
+    role: 'supplement' | 'process'
+    role_label: string
+    sort_order: number
+  }>
+  owner: { id: number; username: string; display_name: string; role: string }
+  school: { id: number; name: string; code: string } | null
   view_count: number
   is_pinned: boolean
+  is_owner: boolean
+  review_note: string
+  reviewed_at: string | null
+  published_at: string | null
   created_at: string
   updated_at: string
+}
+
+export type ResourcePayload = {
+  title: string
+  content?: string
+  resource_type?: ResourceRow['resource_type']
+  category?: string
+  visibility?: ResourceRow['visibility']
+  subject?: number | string
+  class_ids?: number[]
+  grade_scope?: string
+  tags?: string[]
+  external_url?: string
+  project_type?: 'individual' | 'group' | ''
+  project_members?: string[]
+  project_course?: string
+  competition_name?: string
+  competition_year?: number | string
+  award_level?: string
+  is_pinned?: boolean
+  file?: File | null
+  cover?: File | null
+  extra_files?: File[]
 }
 
 export type TeacherAIProviderRow = {
@@ -416,6 +477,7 @@ export type StudentWorkAttachmentRow = {
   classroom_session: number | null
   question_id: string
   question_stem: string
+  upload_version: number
   title: string
   attachment_url: string
   attachment_name: string
@@ -445,6 +507,8 @@ export type ClassroomGroupMemberRow = {
 
 export type ClassroomGroupFileRow = {
   id: number
+  public_id: string
+  version_no: number
   group: number
   uploader: {
     id: number
@@ -631,6 +695,8 @@ export type ClassroomStepProgressRow = {
   submitted: boolean
   submitted_at: string | null
   event_id: number | null
+  attempt_id: string | null
+  attempt_no: number | null
   text: string
   answered_count: number
   question_count: number
@@ -714,21 +780,52 @@ export function getTeacherCourseOptions() {
   return apiRequest<TeacherCourseOptions>('/api/v1/teacher/course-options/')
 }
 
-export function getTeacherResources(params: PageQuery = {}) {
+export function getTeacherResources(params: PageQuery & { scope?: string; resource_type?: string; category?: string } = {}) {
   return apiRequest<PageResult<ResourceRow>>(`/api/v1/teacher/resources/${queryString(params)}`)
 }
 
-export function uploadTeacherResource(payload: { title: string; content?: string; file: File; is_pinned?: boolean }) {
+function resourceFormData(payload: ResourcePayload) {
   const formData = new FormData()
   formData.append('title', payload.title)
   formData.append('content', payload.content || '')
+  formData.append('resource_type', payload.resource_type || 'file')
+  formData.append('category', payload.category || 'courseware')
+  formData.append('visibility', payload.visibility || 'private')
+  formData.append('subject', payload.subject ? String(payload.subject) : '')
+  formData.append('class_ids', JSON.stringify(payload.class_ids || []))
+  formData.append('grade_scope', payload.grade_scope || '')
+  formData.append('tags', JSON.stringify(payload.tags || []))
+  formData.append('external_url', payload.external_url || '')
+  formData.append('project_type', payload.project_type || '')
+  formData.append('project_members', JSON.stringify(payload.project_members || []))
+  formData.append('project_course', payload.project_course || '')
+  formData.append('competition_name', payload.competition_name || '')
+  formData.append('competition_year', payload.competition_year ? String(payload.competition_year) : '')
+  formData.append('award_level', payload.award_level || '')
   formData.append('is_pinned', payload.is_pinned ? 'true' : 'false')
-  formData.append('attachment', payload.file)
+  if (payload.file) formData.append('attachment', payload.file)
+  if (payload.cover) formData.append('cover', payload.cover)
+  for (const file of payload.extra_files || []) {
+    formData.append('extra_files', file)
+  }
+  return formData
+}
+
+export function uploadTeacherResource(payload: ResourcePayload) {
+  const formData = resourceFormData(payload)
   return uploadRequest<ResourceRow>('/api/v1/teacher/resources/', formData)
+}
+
+export function updateTeacherResource(id: number, payload: ResourcePayload) {
+  return uploadRequest<ResourceRow>(`/api/v1/teacher/resources/${id}/`, resourceFormData(payload), 'PATCH')
 }
 
 export function deleteTeacherResource(id: number) {
   return apiRequest<Record<string, never>>(`/api/v1/teacher/resources/${id}/`, { method: 'DELETE' })
+}
+
+export function deleteTeacherResourceFile(resourceId: number, fileId: number) {
+  return apiRequest<Record<string, never>>(`/api/v1/teacher/resources/${resourceId}/files/${fileId}/`, { method: 'DELETE' })
 }
 
 export function getTeacherCourses(params: PageQuery = {}) {

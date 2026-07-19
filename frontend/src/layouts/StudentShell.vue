@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useRouteMenu } from '@/composables/useRouteMenu'
 
 defineProps<{
   title: string
@@ -10,6 +11,7 @@ defineProps<{
 
 const auth = useAuthStore()
 const router = useRouter()
+const { isOpen: mobileNavOpen, close: closeMobileNav, toggle: toggleMobileNav } = useRouteMenu()
 
 async function signOut() {
   await auth.signOut()
@@ -19,6 +21,7 @@ async function signOut() {
 
 <template>
   <div class="student-shell">
+    <a class="skip-link" href="#student-main-content">跳到主要内容</a>
     <header class="student-topbar">
       <RouterLink class="student-brand" to="/student">
         <span class="student-brand-mark">S</span>
@@ -27,8 +30,23 @@ async function signOut() {
           <small>数智教学系统</small>
         </span>
       </RouterLink>
-      <nav class="student-nav">
-        <RouterLink v-for="item in navItems" :key="item.path" :to="item.path" :class="{ active: item.active }">
+      <button
+        class="student-ghost-button student-nav-toggle"
+        type="button"
+        aria-controls="student-navigation"
+        :aria-expanded="mobileNavOpen"
+        @click="toggleMobileNav"
+      >
+        导航
+      </button>
+      <nav id="student-navigation" class="student-nav" :class="{ open: mobileNavOpen }">
+        <RouterLink
+          v-for="item in navItems"
+          :key="item.path"
+          :to="item.path"
+          :class="{ active: item.active }"
+          @click="closeMobileNav"
+        >
           {{ item.label }}
         </RouterLink>
       </nav>
@@ -38,7 +56,7 @@ async function signOut() {
       </div>
     </header>
 
-    <main class="student-main">
+    <main id="student-main-content" class="student-main" tabindex="-1">
       <section class="student-page-heading">
         <div>
           <p>{{ subtitle || '学习空间' }}</p>

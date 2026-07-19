@@ -5,22 +5,27 @@ from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import Avg, Count, F, Q, Sum
-from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 
-from accounts.models import User
 from api.permissions import IsStudent, IsTeacher
 from api.responses import fail, ok
 from api.services import ServiceError, generate_question_bank_drafts_with_ai
 from courses.models import Course, Subject
 from learning.models import (
-    LearningEvent,
     QuestionBankItem,
     TestAssessment,
     TestAssessmentQuestion,
     TestAttempt,
     TestAttemptAnswer,
+)
+from learning_analytics.services.assessment_events import (
+    AssessmentEventError,
+    next_manual_grading_state,
+    record_assessment_item_grade,
+    record_assessment_item_submission,
+    release_assessment_opportunities,
+    withdraw_assessment_opportunities,
 )
 from ops.xlsx import build_workbook, export_rows, read_table_rows, template_response, workbook_response
 from school.models import ClassGroup, StudentProfile, TeachingAssignment
@@ -622,6 +627,7 @@ def teacher_assessment_questions(request, pk):
         return _error(exc)
 
 
+@transaction.atomic
 def _change_assessment_status(user, pk, action: str):
     assessment = _teacher_assessment(user, pk)
     now = timezone.now()
@@ -632,8 +638,12 @@ def _change_assessment_status(user, pk, action: str):
     elif action == "open":
         if assessment.status not in {TestAssessment.Status.PUBLISHED, TestAssessment.Status.CLOSED}:
             raise AssessmentError("当前状态不能开启测试。")
+        if assessment.status == TestAssessment.Status.CLOSED and assessment.attempts.exists():
+            raise AssessmentError("已有学生答卷的测试不能重新开启，请复制后创建新测试。")
         if assessment.end_at and assessment.end_at <= now:
             raise AssessmentError("测试结束时间已过，请先调整时间。")
+        if assessment.start_at and assessment.start_at > now:
+            raise AssessmentError("测试开始时间未到，暂不能提前开启。")
         assessment.status = TestAssessment.Status.OPEN
         assessment.opened_at = now
         assessment.closed_at = None
@@ -643,9 +653,25 @@ def _change_assessment_status(user, pk, action: str):
         assessment.status = TestAssessment.Status.CLOSED
         assessment.closed_at = now
     assessment.save(update_fields=["status", "opened_at", "closed_at", "updated_at"])
-    if action == "close":
-        for attempt in assessment.attempts.filter(status=TestAttempt.Status.IN_PROGRESS).select_related("assessment", "student", "class_group"):
-            _submit_attempt(attempt)
+    try:
+        if action == "open":
+            release_assessment_opportunities(
+                assessment=assessment,
+                actor=user,
+                occurred_at=now,
+            )
+        elif action == "close":
+            for attempt in assessment.attempts.filter(
+                status=TestAttempt.Status.IN_PROGRESS
+            ).select_related("assessment", "student", "class_group"):
+                _submit_attempt(attempt, source_override="server")
+            withdraw_assessment_opportunities(
+                assessment=assessment,
+                actor=user,
+                occurred_at=timezone.now(),
+            )
+    except AssessmentEventError as exc:
+        raise AssessmentError(exc.message) from exc
     return assessment
 
 
@@ -813,6 +839,7 @@ def teacher_attempt_grade(request, attempt_id):
     answer_map = {item.id: item for item in attempt.answer_rows.select_related("question").all()}
     try:
         with transaction.atomic():
+            changed_rows = {}
             for raw in raw_answers:
                 if not isinstance(raw, dict) or not str(raw.get("answer_id")).isdigit():
                     continue
@@ -822,9 +849,12 @@ def teacher_attempt_grade(request, attempt_id):
                 score = float(raw.get("score") or 0)
                 if score < 0 or score > row.question.score:
                     raise AssessmentError(f"“{row.question.stem[:20]}”评分超出题目分值。")
-                row.manual_score = score
-                row.feedback = str(raw.get("feedback") or "").strip()[:1000]
-                row.save(update_fields=["manual_score", "feedback", "answered_at"])
+                feedback = str(raw.get("feedback") or "").strip()[:1000]
+                if row.manual_score != score or row.feedback != feedback:
+                    row.manual_score = score
+                    row.feedback = feedback
+                    row.save(update_fields=["manual_score", "feedback", "answered_at"])
+                    changed_rows[row.id] = row
             pending_subjective = attempt.answer_rows.filter(
                 question__question_type=QuestionBankItem.QuestionType.TEXT,
                 manual_score__isnull=True,
@@ -835,8 +865,23 @@ def teacher_attempt_grade(request, attempt_id):
             attempt.status = TestAttempt.Status.GRADED
             attempt.graded_at = timezone.now()
             attempt.save(update_fields=["objective_score", "subjective_score", "total_score", "status", "graded_at", "last_saved_at"])
+            for row in changed_rows.values():
+                record_assessment_item_grade(
+                    attempt=attempt,
+                    answer_row=row,
+                    grading_state=next_manual_grading_state(
+                        attempt=attempt,
+                        question=row.question,
+                    ),
+                    score_raw=row.manual_score,
+                    grader_type="teacher",
+                    actor=request.user,
+                    occurred_at=attempt.graded_at,
+                )
         return ok(_attempt_row(attempt, include_answers=True), "评分已保存。")
-    except (AssessmentError, TypeError, ValueError) as exc:
+    except (AssessmentError, AssessmentEventError, TypeError, ValueError) as exc:
+        if isinstance(exc, AssessmentEventError):
+            return _error(AssessmentError(exc.message))
         return _error(exc if isinstance(exc, AssessmentError) else AssessmentError("评分格式不正确。"))
 
 
@@ -1084,11 +1129,14 @@ def _recalculate_attempt(attempt):
     attempt.total_score = objective + subjective
 
 
-def _submit_attempt(attempt):
+@transaction.atomic
+def _submit_attempt(attempt, *, source_override: str | None = "server"):
     if attempt.status != TestAttempt.Status.IN_PROGRESS:
         return attempt
     existing = {item.question_id: item for item in attempt.answer_rows.all()}
     has_subjective = False
+    submitted_at = timezone.now()
+    submitted_rows = []
     for question in attempt.assessment.questions.all():
         row = existing.get(question.id)
         if row is None:
@@ -1097,25 +1145,47 @@ def _submit_attempt(attempt):
         row.auto_score = auto_score
         row.is_correct = is_correct
         row.save(update_fields=["auto_score", "is_correct", "answered_at"])
+        submitted_rows.append(row)
         has_subjective = has_subjective or question.question_type == QuestionBankItem.QuestionType.TEXT
     _recalculate_attempt(attempt)
     attempt.status = TestAttempt.Status.SUBMITTED if has_subjective else TestAttempt.Status.GRADED
-    attempt.submitted_at = timezone.now()
+    attempt.submitted_at = submitted_at
     attempt.graded_at = None if has_subjective else attempt.submitted_at
     attempt.save(update_fields=[
         "objective_score", "subjective_score", "total_score", "status", "submitted_at", "graded_at", "last_saved_at"
     ])
-    LearningEvent.objects.create(
-        actor=attempt.student,
-        class_group=attempt.class_group,
-        course=attempt.assessment.course,
-        event_type=LearningEvent.EventType.ANSWER_SUBMIT,
-        object_type="test_assessment",
-        object_id=str(attempt.assessment_id),
-        score=attempt.total_score,
-        metadata={"status": attempt.status, "total_score": _assessment_total_score(attempt.assessment)},
-        occurred_at=timezone.now(),
-    )
+    try:
+        for row in submitted_rows:
+            record_assessment_item_submission(
+                attempt=attempt,
+                answer_row=row,
+                occurred_at=submitted_at,
+                source_override=source_override,
+            )
+            if row.question.question_type == QuestionBankItem.QuestionType.TEXT:
+                record_assessment_item_grade(
+                    attempt=attempt,
+                    answer_row=row,
+                    grading_state="pending",
+                    score_raw=None,
+                    grader_type="teacher",
+                    actor=attempt.assessment.teacher,
+                    occurred_at=submitted_at,
+                    source_override="server",
+                )
+            else:
+                record_assessment_item_grade(
+                    attempt=attempt,
+                    answer_row=row,
+                    grading_state="final",
+                    score_raw=row.auto_score,
+                    grader_type="automatic",
+                    actor=attempt.assessment.teacher,
+                    occurred_at=submitted_at,
+                    source_override="server",
+                )
+    except AssessmentEventError as exc:
+        raise AssessmentError(exc.message) from exc
     return attempt
 
 
@@ -1129,7 +1199,7 @@ def student_assessment_submit(request, pk):
             raise AssessmentError("请先开始测试。")
         if attempt.status != TestAttempt.Status.IN_PROGRESS:
             return ok(_attempt_row(attempt), "测试已经提交。")
-        _submit_attempt(attempt)
+        _submit_attempt(attempt, source_override=None)
         result = _attempt_row(attempt)
         if not assessment.show_score_after_submit:
             result["objective_score"] = None

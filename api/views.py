@@ -1,23 +1,30 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import random
 import urllib.request
 import zipfile
 from io import BytesIO
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 from xml.sax.saxutils import escape
 
 from django.conf import settings
-from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout, update_session_auth_hash
+from django.contrib.auth import (
+    authenticate,
+    login as auth_login,
+    logout as auth_logout,
+    update_session_auth_hash,
+)
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
-from django.core.paginator import Paginator
 from django.db import connection, transaction
 from django.http import JsonResponse
-from django.db.models import Count, Max, Prefetch, Q, Sum
-from django.db.models.functions import TruncDate
+from django.db.models import Count, F, Max, Prefetch, Q, Sum, TextField
+from django.db.models.functions import Cast, TruncDate
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
@@ -25,14 +32,20 @@ from rest_framework.decorators import api_view, parser_classes, permission_class
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from config.onlyoffice import sign_editor_config
+from config.onlyoffice import (
+    OnlyOfficeJWTError,
+    sign_editor_config,
+    verify_callback_payload,
+)
 from aiops.models import ModelVersion, TrainingJob
 from courses.models import (
     ClassroomActivity,
     ClassroomEvaluationConfig,
+    ClassroomEvaluationConfigVersion,
     ClassroomEvaluationSubmission,
     ClassroomGroup,
     ClassroomGroupCollaboration,
+    ClassroomGroupDocumentVersion,
     ClassroomGroupFile,
     ClassroomGroupMember,
     ClassroomSession,
@@ -44,15 +57,78 @@ from courses.models import (
     Lesson,
     LessonStep,
     Resource,
+    ResourceFile,
     Subject,
 )
-from learning.models import Feedback, LearningEvent, Notice, PretestPaper, PretestQuestion, PretestSubmission, StratificationDecision, StudentWorkAttachment, TestAssessment, TestAttempt
+from learning.models import (
+    Feedback,
+    LearningEvent,
+    LessonStepAttempt,
+    LessonStepAttemptAnswer,
+    Notice,
+    PretestPaper,
+    PretestQuestion,
+    PretestSubmission,
+    StratificationDecision,
+    StudentWorkAttachment,
+    TestAssessment,
+    TestAttempt,
+)
+from learning_analytics.services.classroom_events import (
+    ClassroomEventError,
+    classroom_question,
+    classroom_question_version,
+    ensure_classroom_attachment_submission,
+    ensure_classroom_step_opportunities,
+    next_classroom_grading_state,
+    record_classroom_attachment_submission,
+    record_classroom_attempt_events,
+    record_classroom_document_progress,
+    record_classroom_item_grade,
+    record_classroom_resource_opened,
+    record_classroom_video_progress,
+    record_learning_page_block_viewed,
+    record_learning_page_form_submission,
+    record_learning_page_opened,
+)
+from learning_analytics.services.attendance_events import (
+    AttendanceEventError,
+    is_attendance_activity,
+    record_attendance_status,
+)
+from learning_analytics.services.classroom_interaction_events import (
+    ClassroomInteractionEventError,
+    record_quick_answer_response,
+)
+from learning_analytics.services.dual_write import (
+    EventWriteError,
+    record_classroom_point_adjustment,
+)
+from learning_analytics.services.evaluation_events import (
+    EvaluationEventError,
+    append_evaluation_submission,
+    publish_evaluation_config_version,
+    release_classroom_evaluation_opportunities,
+    withdraw_classroom_evaluation_opportunities,
+)
+from learning_analytics.services.group_collaboration_events import (
+    GroupCollaborationEventError,
+    group_collaboration_has_student_activity,
+    record_group_document_opened,
+    record_group_document_saved,
+    record_group_file_shared,
+    release_group_collaboration_opportunities,
+    withdraw_group_collaboration_opportunities,
+)
 from ops.models import AuditLog, ExportBatch, ImportBatch
 from ops.xlsx import export_rows, template_response
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 from .permissions import IsSchoolAdmin, IsStudent, IsSuperAdmin, IsTeacher
 from .responses import fail, ok, page_data
+from .view_utils import current_school as _school
+from .view_utils import paginate as _paginate
+from .view_utils import service_error_response as _service_fail
 from .serializers import (
     account_row,
     classroom_activity_row,
@@ -60,7 +136,6 @@ from .serializers import (
     classroom_evaluation_submission_row,
     classroom_group_collaboration_row,
     classroom_group_file_row,
-    classroom_group_row,
     classroom_session_row,
     classroom_attendance_row,
     class_group_row,
@@ -81,6 +156,8 @@ from .serializers import (
     school_row,
     student_row,
     student_classroom_row,
+    student_classroom_group_collaboration_row,
+    student_classroom_group_row,
     student_course_row,
     student_feedback_row,
     student_lesson_step_row,
@@ -91,6 +168,7 @@ from .serializers import (
     student_work_attachment_row,
     subject_row,
     teacher_ai_provider_row,
+    teacher_student_profile_summary,
     teaching_assignment_row,
     teaching_teacher_row,
     user_summary,
@@ -192,15 +270,6 @@ from .services import (
 )
 
 
-def _paginate(request, rows, per_page=20):
-    try:
-        page_size = min(max(int(request.GET.get("page_size", per_page)), 1), 100)
-    except ValueError:
-        page_size = per_page
-    paginator = Paginator(rows, page_size)
-    return paginator.get_page(request.GET.get("page") or 1)
-
-
 def _day_series(queryset, date_field: str, days=7) -> list[dict]:
     today = timezone.localdate()
     start = today - timedelta(days=days - 1)
@@ -213,12 +282,17 @@ def _day_series(queryset, date_field: str, days=7) -> list[dict]:
     )
     by_day = {item["day"]: item["total"] for item in rows}
     return [
-        {"label": (start + timedelta(days=offset)).strftime("%m-%d"), "count": by_day.get(start + timedelta(days=offset), 0)}
+        {
+            "label": (start + timedelta(days=offset)).strftime("%m-%d"),
+            "count": by_day.get(start + timedelta(days=offset), 0),
+        }
         for offset in range(days)
     ]
 
 
-def _day_distinct_series(queryset, date_field: str, distinct_field: str, days=7) -> list[dict]:
+def _day_distinct_series(
+    queryset, date_field: str, distinct_field: str, days=7
+) -> list[dict]:
     today = timezone.localdate()
     start = today - timedelta(days=days - 1)
     rows = (
@@ -230,7 +304,10 @@ def _day_distinct_series(queryset, date_field: str, distinct_field: str, days=7)
     )
     by_day = {item["day"]: item["total"] for item in rows}
     return [
-        {"label": (start + timedelta(days=offset)).strftime("%m-%d"), "count": by_day.get(start + timedelta(days=offset), 0)}
+        {
+            "label": (start + timedelta(days=offset)).strftime("%m-%d"),
+            "count": by_day.get(start + timedelta(days=offset), 0),
+        }
         for offset in range(days)
     ]
 
@@ -238,7 +315,10 @@ def _day_distinct_series(queryset, date_field: str, distinct_field: str, days=7)
 def _choice_counts(queryset, field: str, choices) -> list[dict]:
     rows = queryset.values(field).annotate(count=Count("id"))
     by_value = {item[field]: item["count"] for item in rows}
-    return [{"label": label, "value": value, "count": by_value.get(value, 0)} for value, label in choices]
+    return [
+        {"label": label, "value": value, "count": by_value.get(value, 0)}
+        for value, label in choices
+    ]
 
 
 def _flag_counts(queryset, field: str, true_label: str, false_label: str) -> list[dict]:
@@ -253,7 +333,8 @@ def _flag_counts(queryset, field: str, true_label: str, false_label: str) -> lis
 def _class_student_counts(classes) -> list[dict]:
     return [
         {
-            "label": f"{class_group.grade} {class_group.name}".strip() or class_group.name,
+            "label": f"{class_group.grade} {class_group.name}".strip()
+            or class_group.name,
             "count": getattr(class_group, "student_count", 0),
         }
         for class_group in classes
@@ -263,7 +344,8 @@ def _class_student_counts(classes) -> list[dict]:
 def _class_teacher_counts(classes) -> list[dict]:
     return [
         {
-            "label": f"{class_group.grade} {class_group.name}".strip() or class_group.name,
+            "label": f"{class_group.grade} {class_group.name}".strip()
+            or class_group.name,
             "count": getattr(class_group, "teacher_count", 0),
         }
         for class_group in classes
@@ -273,7 +355,8 @@ def _class_teacher_counts(classes) -> list[dict]:
 def _class_event_counts(classes) -> list[dict]:
     return [
         {
-            "label": f"{class_group.grade} {class_group.name}".strip() or class_group.name,
+            "label": f"{class_group.grade} {class_group.name}".strip()
+            or class_group.name,
             "count": getattr(class_group, "event_count", 0),
         }
         for class_group in classes
@@ -299,17 +382,9 @@ def _event_type_counts(queryset) -> list[dict]:
     ]
 
 
-def _school(request):
-    return request.user.school
-
-
 def _school_users(request):
     User = get_user_model()
     return User.objects.filter(school=_school(request))
-
-
-def _service_fail(exc: ServiceError):
-    return fail(exc.message, errors=exc.errors, status=exc.status)
 
 
 def _xlsx_filename(prefix: str) -> str:
@@ -368,26 +443,64 @@ def super_admin_dashboard(request):
     data = {
         "metrics": [
             {"label": "学校", "value": School.objects.count(), "sub": "已登记学校"},
-            {"label": "学校管理员", "value": User.objects.filter(role="school_admin").count(), "sub": "本地管理账号"},
-            {"label": "教师", "value": User.objects.filter(role="teacher").count(), "sub": "教师账号"},
-            {"label": "学生档案", "value": StudentProfile.objects.count(), "sub": "已建档学生"},
-            {"label": "班级", "value": ClassGroup.objects.count(), "sub": "行政/教学班"},
-            {"label": "行为事件", "value": LearningEvent.objects.count(), "sub": "学习过程记录"},
+            {
+                "label": "学校管理员",
+                "value": User.objects.filter(role="school_admin").count(),
+                "sub": "本地管理账号",
+            },
+            {
+                "label": "教师",
+                "value": User.objects.filter(role="teacher").count(),
+                "sub": "教师账号",
+            },
+            {
+                "label": "学生档案",
+                "value": StudentProfile.objects.count(),
+                "sub": "已建档学生",
+            },
+            {
+                "label": "班级",
+                "value": ClassGroup.objects.count(),
+                "sub": "行政/教学班",
+            },
+            {
+                "label": "行为事件",
+                "value": LearningEvent.objects.count(),
+                "sub": "学习过程记录",
+            },
         ],
         "status": {
-            "pending_imports": ImportBatch.objects.filter(status=ImportBatch.Status.UPLOADED).count(),
-            "failed_imports": ImportBatch.objects.filter(status=ImportBatch.Status.FAILED).count(),
+            "pending_imports": ImportBatch.objects.filter(
+                status=ImportBatch.Status.UPLOADED
+            ).count(),
+            "failed_imports": ImportBatch.objects.filter(
+                status=ImportBatch.Status.FAILED
+            ).count(),
             "model_versions": ModelVersion.objects.count(),
-            "training_jobs_7d": TrainingJob.objects.filter(created_at__gte=timezone.now() - timedelta(days=7)).count(),
-            "pending_decisions": StratificationDecision.objects.filter(status=StratificationDecision.Status.PENDING).count(),
+            "training_jobs_7d": TrainingJob.objects.filter(
+                created_at__gte=timezone.now() - timedelta(days=7)
+            ).count(),
+            "pending_decisions": StratificationDecision.objects.filter(
+                status=StratificationDecision.Status.PENDING
+            ).count(),
         },
         "charts": {
-            "school_status": _choice_counts(School.objects.all(), "status", School.Status.choices),
-            "import_status": _choice_counts(ImportBatch.objects.all(), "status", ImportBatch.Status.choices),
-            "account_roles": _choice_counts(User.objects.all(), "role", User.Role.choices),
-            "learning_events_7d": _day_series(LearningEvent.objects.all(), "occurred_at", days=7),
+            "school_status": _choice_counts(
+                School.objects.all(), "status", School.Status.choices
+            ),
+            "import_status": _choice_counts(
+                ImportBatch.objects.all(), "status", ImportBatch.Status.choices
+            ),
+            "account_roles": _choice_counts(
+                User.objects.all(), "role", User.Role.choices
+            ),
+            "learning_events_7d": _day_series(
+                LearningEvent.objects.all(), "occurred_at", days=7
+            ),
             "training_jobs_7d": _day_series(
-                TrainingJob.objects.filter(created_at__gte=timezone.now() - timedelta(days=7)),
+                TrainingJob.objects.filter(
+                    created_at__gte=timezone.now() - timedelta(days=7)
+                ),
                 "created_at",
                 days=7,
             ),
@@ -410,10 +523,17 @@ def super_admin_dashboard(request):
                 "status_label": item.get_status_display(),
                 "uploaded_at": item.uploaded_at,
             }
-            for item in ImportBatch.objects.select_related("source_school", "uploaded_by")[:6]
+            for item in ImportBatch.objects.select_related(
+                "source_school", "uploaded_by"
+            )[:6]
         ],
         "recent_logs": [
-            {"id": log.id, "action": log.action, "actor": str(log.actor) if log.actor_id else "", "created_at": log.created_at}
+            {
+                "id": log.id,
+                "action": log.action,
+                "actor": str(log.actor) if log.actor_id else "",
+                "created_at": log.created_at,
+            }
             for log in AuditLog.objects.select_related("actor", "school")[:8]
         ],
     }
@@ -437,7 +557,11 @@ def super_admin_schools(request):
         user_count=Count("users", distinct=True),
     ).order_by("name", "code")
     if query:
-        schools = schools.filter(Q(name__icontains=query) | Q(code__icontains=query) | Q(contact_name__icontains=query))
+        schools = schools.filter(
+            Q(name__icontains=query)
+            | Q(code__icontains=query)
+            | Q(contact_name__icontains=query)
+        )
     if status:
         schools = schools.filter(status=status)
     page = _paginate(request, schools)
@@ -448,10 +572,14 @@ def super_admin_schools(request):
 @api_view(["GET", "PATCH", "DELETE"])
 @permission_classes([IsSuperAdmin])
 def super_admin_school_detail(request, pk):
-    school = School.objects.annotate(
-        class_count=Count("classes", distinct=True),
-        user_count=Count("users", distinct=True),
-    ).filter(pk=pk).first()
+    school = (
+        School.objects.annotate(
+            class_count=Count("classes", distinct=True),
+            user_count=Count("users", distinct=True),
+        )
+        .filter(pk=pk)
+        .first()
+    )
     if school is None:
         return fail("学校不存在。", status=404)
 
@@ -505,9 +633,17 @@ def super_admin_school_admins(request):
     query = request.GET.get("q", "").strip()
     school_id = request.GET.get("school", "").strip()
     status = request.GET.get("status", "").strip()
-    users = User.objects.filter(role="school_admin").select_related("school").order_by("school__name", "username")
+    users = (
+        User.objects.filter(role="school_admin")
+        .select_related("school")
+        .order_by("school__name", "username")
+    )
     if query:
-        users = users.filter(Q(username__icontains=query) | Q(display_name__icontains=query) | Q(phone__icontains=query))
+        users = users.filter(
+            Q(username__icontains=query)
+            | Q(display_name__icontains=query)
+            | Q(phone__icontains=query)
+        )
     if school_id:
         users = users.filter(school_id=school_id)
     if status == "active":
@@ -523,7 +659,9 @@ def super_admin_school_admins(request):
 @permission_classes([IsSuperAdmin])
 def super_admin_school_admin_detail(request, pk):
     User = get_user_model()
-    user = User.objects.filter(pk=pk, role="school_admin").select_related("school").first()
+    user = (
+        User.objects.filter(pk=pk, role="school_admin").select_related("school").first()
+    )
     if user is None:
         return fail("学校管理员不存在。", status=404)
 
@@ -567,7 +705,9 @@ def super_admin_school_admins_bulk_delete(request):
 @permission_classes([IsSuperAdmin])
 def super_admin_school_admin_set_active(request, pk):
     User = get_user_model()
-    user = User.objects.filter(pk=pk, role="school_admin").select_related("school").first()
+    user = (
+        User.objects.filter(pk=pk, role="school_admin").select_related("school").first()
+    )
     if user is None:
         return fail("学校管理员不存在。", status=404)
     is_active = bool(request.data.get("is_active"))
@@ -579,11 +719,15 @@ def super_admin_school_admin_set_active(request, pk):
 @permission_classes([IsSuperAdmin])
 def super_admin_school_admin_reset_password(request, pk):
     User = get_user_model()
-    user = User.objects.filter(pk=pk, role="school_admin").select_related("school").first()
+    user = (
+        User.objects.filter(pk=pk, role="school_admin").select_related("school").first()
+    )
     if user is None:
         return fail("学校管理员不存在。", status=404)
     try:
-        reset_school_admin_password(request, user, str(request.data.get("password", "")))
+        reset_school_admin_password(
+            request, user, str(request.data.get("password", ""))
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(account_row(user), "密码已重置")
@@ -602,18 +746,31 @@ def school_admin_dashboard(request):
     today = timezone.localdate()
     inactive_accounts = users.filter(is_active=False).count()
     first_login_accounts = users.filter(is_first_login=True, is_active=True).count()
-    pending_onboarding = StudentProfile.objects.filter(user__school=school, is_first_use=True, user__is_active=True).count()
+    pending_onboarding = StudentProfile.objects.filter(
+        user__school=school, is_first_use=True, user__is_active=True
+    ).count()
     pending_pretest = (
         StudentProfile.objects.filter(user__school=school, user__is_active=True)
-        .exclude(onboarding_status__in=[StudentProfile.OnboardingStatus.PRETEST_COMPLETED, StudentProfile.OnboardingStatus.ACTIVE])
+        .exclude(
+            onboarding_status__in=[
+                StudentProfile.OnboardingStatus.PRETEST_COMPLETED,
+                StudentProfile.OnboardingStatus.ACTIVE,
+            ]
+        )
         .count()
     )
     failed_training = training_jobs.filter(status=TrainingJob.Status.FAILED).count()
-    pending_decisions = decisions.filter(status=StratificationDecision.Status.PENDING).count()
-    failed_exports = ExportBatch.objects.filter(school=school, status=ExportBatch.Status.FAILED).count()
+    pending_decisions = decisions.filter(
+        status=StratificationDecision.Status.PENDING
+    ).count()
+    failed_exports = ExportBatch.objects.filter(
+        school=school, status=ExportBatch.Status.FAILED
+    ).count()
     class_rows = list(
-        classes.annotate(student_count=Count("students", distinct=True), teacher_count=Count("teachers", distinct=True))
-        .order_by("grade", "name")[:12]
+        classes.annotate(
+            student_count=Count("students", distinct=True),
+            teacher_count=Count("teachers", distinct=True),
+        ).order_by("grade", "name")[:12]
     )
     teacher_rows = list(
         users.filter(role="teacher")
@@ -623,18 +780,37 @@ def school_admin_dashboard(request):
     last_7d_events = events.filter(occurred_at__gte=timezone.now() - timedelta(days=7))
     active_students = students.filter(user__is_active=True)
     class_activity_rows = list(
-        classes.annotate(event_count=Count("learningevent", filter=Q(learningevent__occurred_at__gte=timezone.now() - timedelta(days=7)), distinct=True))
-        .order_by("-event_count", "grade", "name")[:12]
+        classes.annotate(
+            event_count=Count(
+                "learningevent",
+                filter=Q(
+                    learningevent__occurred_at__gte=timezone.now() - timedelta(days=7)
+                ),
+                distinct=True,
+            )
+        ).order_by("-event_count", "grade", "name")[:12]
     )
 
     data = {
         "school": {"id": school.id, "name": school.name, "code": school.code},
         "metrics": [
-            {"label": "教师", "value": users.filter(role="teacher").count(), "sub": "本校教师"},
+            {
+                "label": "教师",
+                "value": users.filter(role="teacher").count(),
+                "sub": "本校教师",
+            },
             {"label": "学生", "value": students.count(), "sub": "已建档学生"},
             {"label": "班级", "value": classes.count(), "sub": "本校班级"},
-            {"label": "课程", "value": Course.objects.filter(teacher__school=school).count(), "sub": "本校教师课程"},
-            {"label": "今日行为", "value": events.filter(occurred_at__date=today).count(), "sub": "学习过程事件"},
+            {
+                "label": "课程",
+                "value": Course.objects.filter(teacher__school=school).count(),
+                "sub": "本校教师课程",
+            },
+            {
+                "label": "今日行为",
+                "value": events.filter(occurred_at__date=today).count(),
+                "sub": "学习过程事件",
+            },
             {
                 "label": "待处理",
                 "value": inactive_accounts
@@ -647,32 +823,75 @@ def school_admin_dashboard(request):
                 "sub": "账号、前测、训练和导出",
             },
         ],
-        "login_series": _day_series(events.filter(event_type=LearningEvent.EventType.LOGIN), "occurred_at", days=7),
+        "login_series": _day_series(
+            events.filter(event_type=LearningEvent.EventType.LOGIN),
+            "occurred_at",
+            days=7,
+        ),
         "event_series": _day_series(events, "occurred_at", days=7),
         "charts": {
-            "account_roles": _choice_counts(users, "role", [("teacher", "教师"), ("student", "学生")]),
+            "account_roles": _choice_counts(
+                users, "role", [("teacher", "教师"), ("student", "学生")]
+            ),
             "account_status": _flag_counts(users, "is_active", "启用", "停用"),
-            "student_onboarding": _choice_counts(students, "onboarding_status", StudentProfile.OnboardingStatus.choices),
+            "student_onboarding": _choice_counts(
+                students, "onboarding_status", StudentProfile.OnboardingStatus.choices
+            ),
             "student_class_status": [
-                {"label": "已分班", "value": "assigned", "count": active_students.filter(class_group__isnull=False).count()},
-                {"label": "未分班", "value": "unassigned", "count": active_students.filter(class_group__isnull=True).count()},
+                {
+                    "label": "已分班",
+                    "value": "assigned",
+                    "count": active_students.filter(class_group__isnull=False).count(),
+                },
+                {
+                    "label": "未分班",
+                    "value": "unassigned",
+                    "count": active_students.filter(class_group__isnull=True).count(),
+                },
             ],
             "student_layers": [
-                {"label": label, "value": value, "count": students.filter(current_layer=value).count()}
+                {
+                    "label": label,
+                    "value": value,
+                    "count": students.filter(current_layer=value).count(),
+                }
                 for value, label in StudentProfile.Layer.choices
             ]
-            + [{"label": "未分层", "value": "unassigned", "count": students.filter(current_layer__isnull=True).count()}],
-            "class_status": _choice_counts(classes, "status", ClassGroup.Status.choices),
+            + [
+                {
+                    "label": "未分层",
+                    "value": "unassigned",
+                    "count": students.filter(current_layer__isnull=True).count(),
+                }
+            ],
+            "class_status": _choice_counts(
+                classes, "status", ClassGroup.Status.choices
+            ),
             "class_students": _class_student_counts(class_rows),
             "class_teachers": _class_teacher_counts(class_rows),
             "teacher_load": _teacher_class_counts(teacher_rows),
             "class_activity": _class_event_counts(class_activity_rows),
             "event_types": _event_type_counts(last_7d_events),
-            "pretest_status": _choice_counts(PretestPaper.objects.filter(school=school), "status", PretestPaper.Status.choices),
-            "training_status": _choice_counts(training_jobs, "status", TrainingJob.Status.choices),
-            "login_series": _day_series(events.filter(event_type=LearningEvent.EventType.LOGIN), "occurred_at", days=7),
+            "pretest_status": _choice_counts(
+                PretestPaper.objects.filter(school=school),
+                "status",
+                PretestPaper.Status.choices,
+            ),
+            "training_status": _choice_counts(
+                training_jobs, "status", TrainingJob.Status.choices
+            ),
+            "login_series": _day_series(
+                events.filter(event_type=LearningEvent.EventType.LOGIN),
+                "occurred_at",
+                days=7,
+            ),
             "event_series": _day_series(events, "occurred_at", days=7),
-            "active_students_7d": _day_distinct_series(last_7d_events.filter(actor__role="student"), "occurred_at", "actor", days=7),
+            "active_students_7d": _day_distinct_series(
+                last_7d_events.filter(actor__role="student"),
+                "occurred_at",
+                "actor",
+                days=7,
+            ),
         },
         "recent_classes": [
             {
@@ -686,13 +905,41 @@ def school_admin_dashboard(request):
             for class_group in class_rows[:8]
         ],
         "status_rows": [
-            {"label": "停用账号", "count": inactive_accounts, "level": "warn" if inactive_accounts else "ok"},
-            {"label": "首次登录未改密", "count": first_login_accounts, "level": "warn" if first_login_accounts else "ok"},
-            {"label": "新生首次使用", "count": pending_onboarding, "level": "warn" if pending_onboarding else "ok"},
-            {"label": "未完成前测", "count": pending_pretest, "level": "warn" if pending_pretest else "ok"},
-            {"label": "训练失败", "count": failed_training, "level": "failed" if failed_training else "ok"},
-            {"label": "待确认分层", "count": pending_decisions, "level": "warn" if pending_decisions else "ok"},
-            {"label": "导出失败", "count": failed_exports, "level": "failed" if failed_exports else "ok"},
+            {
+                "label": "停用账号",
+                "count": inactive_accounts,
+                "level": "warn" if inactive_accounts else "ok",
+            },
+            {
+                "label": "首次登录未改密",
+                "count": first_login_accounts,
+                "level": "warn" if first_login_accounts else "ok",
+            },
+            {
+                "label": "新生首次使用",
+                "count": pending_onboarding,
+                "level": "warn" if pending_onboarding else "ok",
+            },
+            {
+                "label": "未完成前测",
+                "count": pending_pretest,
+                "level": "warn" if pending_pretest else "ok",
+            },
+            {
+                "label": "训练失败",
+                "count": failed_training,
+                "level": "failed" if failed_training else "ok",
+            },
+            {
+                "label": "待确认分层",
+                "count": pending_decisions,
+                "level": "warn" if pending_decisions else "ok",
+            },
+            {
+                "label": "导出失败",
+                "count": failed_exports,
+                "level": "failed" if failed_exports else "ok",
+            },
         ],
     }
     return ok(data)
@@ -712,7 +959,11 @@ def school_admin_teachers(request):
     status = request.GET.get("status", "").strip()
     teachers = _school_users(request).filter(role="teacher").order_by("username")
     if query:
-        teachers = teachers.filter(Q(username__icontains=query) | Q(display_name__icontains=query) | Q(phone__icontains=query))
+        teachers = teachers.filter(
+            Q(username__icontains=query)
+            | Q(display_name__icontains=query)
+            | Q(phone__icontains=query)
+        )
     if status == "active":
         teachers = teachers.filter(is_active=True)
     elif status == "disabled":
@@ -729,7 +980,11 @@ def school_admin_teachers_export(request):
     status = request.GET.get("status", "").strip()
     teachers = _school_users(request).filter(role="teacher").order_by("username")
     if query:
-        teachers = teachers.filter(Q(username__icontains=query) | Q(display_name__icontains=query) | Q(phone__icontains=query))
+        teachers = teachers.filter(
+            Q(username__icontains=query)
+            | Q(display_name__icontains=query)
+            | Q(phone__icontains=query)
+        )
     if status == "active":
         teachers = teachers.filter(is_active=True)
     elif status == "disabled":
@@ -750,7 +1005,16 @@ def school_admin_teachers_export(request):
     return export_rows(
         _xlsx_filename(f"{_school(request).code}_教师管理"),
         "教师管理",
-        ["登录账号", "姓名", "联系电话", "状态", "首次登录", "最近登录", "创建时间", "任课班级数"],
+        [
+            "登录账号",
+            "姓名",
+            "联系电话",
+            "状态",
+            "首次登录",
+            "最近登录",
+            "创建时间",
+            "任课班级数",
+        ],
         rows,
     )
 
@@ -777,16 +1041,25 @@ def school_admin_teachers_template(request):
 def school_admin_teachers_import(request):
     uploaded_file = request.FILES.get("file")
     if uploaded_file is None:
-        return fail("请选择 xlsx 文件。", errors={"file": ["请选择 xlsx 文件。"]}, status=400)
+        return fail(
+            "请选择 xlsx 文件。", errors={"file": ["请选择 xlsx 文件。"]}, status=400
+        )
     if not uploaded_file.name.lower().endswith(".xlsx"):
-        return fail("只能上传 xlsx 文件。", errors={"file": ["只能上传 xlsx 文件。"]}, status=400)
+        return fail(
+            "只能上传 xlsx 文件。",
+            errors={"file": ["只能上传 xlsx 文件。"]},
+            status=400,
+        )
     try:
         result = import_teachers_from_xlsx(request, uploaded_file)
     except ServiceError as exc:
         return _service_fail(exc)
     except ValueError as exc:
         return fail(str(exc), errors={"file": [str(exc)]}, status=400)
-    return ok(result, f"教师批量导入完成：新增 {result['created_count']} 个，更新 {result['updated_count']} 个。")
+    return ok(
+        result,
+        f"教师批量导入完成：新增 {result['created_count']} 个，更新 {result['updated_count']} 个。",
+    )
 
 
 @api_view(["POST"])
@@ -870,10 +1143,14 @@ def school_admin_students(request):
     class_id = request.GET.get("class", "").strip()
     status = request.GET.get("status", "").strip()
     layer = request.GET.get("layer", "").strip()
-    students = StudentProfile.objects.filter(user__school=_school(request)).select_related("user", "class_group")
+    students = StudentProfile.objects.filter(
+        user__school=_school(request)
+    ).select_related("user", "class_group")
     if query:
         students = students.filter(
-            Q(user__username__icontains=query) | Q(user__display_name__icontains=query) | Q(student_no__icontains=query)
+            Q(user__username__icontains=query)
+            | Q(user__display_name__icontains=query)
+            | Q(student_no__icontains=query)
         )
     if class_id:
         students = students.filter(class_group_id=class_id)
@@ -885,7 +1162,10 @@ def school_admin_students(request):
         students = students.filter(current_layer=layer)
     elif layer == "unassigned":
         students = students.filter(current_layer__isnull=True)
-    page = _paginate(request, students.order_by("class_group__grade", "class_group__name", "student_no"))
+    page = _paginate(
+        request,
+        students.order_by("class_group__grade", "class_group__name", "student_no"),
+    )
     page.object_list = [student_row(profile) for profile in page.object_list]
     return ok(page_data(page))
 
@@ -897,10 +1177,14 @@ def school_admin_students_export(request):
     class_id = request.GET.get("class", "").strip()
     status = request.GET.get("status", "").strip()
     layer = request.GET.get("layer", "").strip()
-    students = StudentProfile.objects.filter(user__school=_school(request)).select_related("user", "class_group")
+    students = StudentProfile.objects.filter(
+        user__school=_school(request)
+    ).select_related("user", "class_group")
     if query:
         students = students.filter(
-            Q(user__username__icontains=query) | Q(user__display_name__icontains=query) | Q(student_no__icontains=query)
+            Q(user__username__icontains=query)
+            | Q(user__display_name__icontains=query)
+            | Q(student_no__icontains=query)
         )
     if class_id:
         students = students.filter(class_group_id=class_id)
@@ -927,12 +1211,27 @@ def school_admin_students_export(request):
             profile.user.last_login,
             profile.updated_at,
         ]
-        for profile in students.order_by("class_group__grade", "class_group__name", "student_no")
+        for profile in students.order_by(
+            "class_group__grade", "class_group__name", "student_no"
+        )
     ]
     return export_rows(
         _xlsx_filename(f"{_school(request).code}_学生管理"),
         "学生管理",
-        ["登录账号", "姓名", "学号", "班级", "联系电话", "层级", "小组号", "积分", "首次使用状态", "账号状态", "最近登录", "更新时间"],
+        [
+            "登录账号",
+            "姓名",
+            "学号",
+            "班级",
+            "联系电话",
+            "层级",
+            "小组号",
+            "积分",
+            "首次使用状态",
+            "账号状态",
+            "最近登录",
+            "更新时间",
+        ],
         rows,
     )
 
@@ -960,16 +1259,25 @@ def school_admin_students_template(request):
 def school_admin_students_import(request):
     uploaded_file = request.FILES.get("file")
     if uploaded_file is None:
-        return fail("请选择 xlsx 文件。", errors={"file": ["请选择 xlsx 文件。"]}, status=400)
+        return fail(
+            "请选择 xlsx 文件。", errors={"file": ["请选择 xlsx 文件。"]}, status=400
+        )
     if not uploaded_file.name.lower().endswith(".xlsx"):
-        return fail("只能上传 xlsx 文件。", errors={"file": ["只能上传 xlsx 文件。"]}, status=400)
+        return fail(
+            "只能上传 xlsx 文件。",
+            errors={"file": ["只能上传 xlsx 文件。"]},
+            status=400,
+        )
     try:
         result = import_students_from_xlsx(request, uploaded_file)
     except ServiceError as exc:
         return _service_fail(exc)
     except ValueError as exc:
         return fail(str(exc), errors={"file": [str(exc)]}, status=400)
-    return ok(result, f"学生批量导入完成：新增 {result['created_count']} 个，更新 {result['updated_count']} 个。")
+    return ok(
+        result,
+        f"学生批量导入完成：新增 {result['created_count']} 个，更新 {result['updated_count']} 个。",
+    )
 
 
 @api_view(["POST"])
@@ -1073,7 +1381,9 @@ def school_admin_classes(request):
     if status:
         classes = classes.filter(status=status)
     page = _paginate(request, classes.order_by("grade", "name"))
-    page.object_list = [class_group_row(class_group) for class_group in page.object_list]
+    page.object_list = [
+        class_group_row(class_group) for class_group in page.object_list
+    ]
     return ok(page_data(page))
 
 
@@ -1143,7 +1453,10 @@ def school_admin_classes_graduate(request):
         result = graduate_class_groups(request, request.data)
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok(result, f"已毕业归档 {result['graduated_count']} 个班级，并停用 {result['disabled_students']} 个学生账号。")
+    return ok(
+        result,
+        f"已毕业归档 {result['graduated_count']} 个班级，并停用 {result['disabled_students']} 个学生账号。",
+    )
 
 
 @api_view(["GET", "PATCH", "DELETE"])
@@ -1151,7 +1464,10 @@ def school_admin_classes_graduate(request):
 def school_admin_class_detail(request, pk):
     class_group = (
         ClassGroup.objects.filter(pk=pk, school=_school(request))
-        .annotate(student_count=Count("students", distinct=True), teacher_count=Count("teachers", distinct=True))
+        .annotate(
+            student_count=Count("students", distinct=True),
+            teacher_count=Count("teachers", distinct=True),
+        )
         .first()
     )
     if class_group is None:
@@ -1161,7 +1477,9 @@ def school_admin_class_detail(request, pk):
         return ok(class_group_row(class_group))
     if request.method == "PATCH":
         try:
-            class_group = save_class_group(request, request.data, class_group=class_group)
+            class_group = save_class_group(
+                request, request.data, class_group=class_group
+            )
         except ServiceError as exc:
             return _service_fail(exc)
         class_group.student_count = class_group.students.count()
@@ -1207,7 +1525,10 @@ def school_admin_subjects(request):
 def school_admin_subject_detail(request, pk):
     subject = (
         Subject.objects.filter(pk=pk, school=_school(request))
-        .annotate(course_count=Count("courses", distinct=True), pretest_count=Count("pretest_papers", distinct=True))
+        .annotate(
+            course_count=Count("courses", distinct=True),
+            pretest_count=Count("pretest_papers", distinct=True),
+        )
         .first()
     )
     if subject is None:
@@ -1239,7 +1560,10 @@ def _school_pretest_papers(request):
     papers = (
         PretestPaper.objects.filter(school=_school(request))
         .select_related("subject")
-        .annotate(question_count=Count("questions", distinct=True), submission_count=Count("submissions", distinct=True))
+        .annotate(
+            question_count=Count("questions", distinct=True),
+            submission_count=Count("submissions", distinct=True),
+        )
     )
     if subject_id:
         papers = papers.filter(subject_id=subject_id)
@@ -1248,7 +1572,11 @@ def _school_pretest_papers(request):
     if status:
         papers = papers.filter(status=status)
     if query:
-        papers = papers.filter(Q(title__icontains=query) | Q(subject__name__icontains=query) | Q(subject__code__icontains=query))
+        papers = papers.filter(
+            Q(title__icontains=query)
+            | Q(subject__name__icontains=query)
+            | Q(subject__code__icontains=query)
+        )
     return papers.order_by("subject__name", "kind", "-version", "-created_at")
 
 
@@ -1276,7 +1604,10 @@ def school_admin_pretest_paper_detail(request, pk):
         PretestPaper.objects.filter(pk=pk, school=_school(request))
         .select_related("subject")
         .prefetch_related("questions")
-        .annotate(question_count=Count("questions", distinct=True), submission_count=Count("submissions", distinct=True))
+        .annotate(
+            question_count=Count("questions", distinct=True),
+            submission_count=Count("submissions", distinct=True),
+        )
         .first()
     )
     if paper is None:
@@ -1303,7 +1634,11 @@ def school_admin_pretest_paper_detail(request, pk):
 @api_view(["POST"])
 @permission_classes([IsSchoolAdmin])
 def school_admin_pretest_paper_publish(request, pk):
-    paper = PretestPaper.objects.filter(pk=pk, school=_school(request)).select_related("subject").first()
+    paper = (
+        PretestPaper.objects.filter(pk=pk, school=_school(request))
+        .select_related("subject")
+        .first()
+    )
     if paper is None:
         return fail("前测套卷不存在。", status=404)
     try:
@@ -1318,7 +1653,11 @@ def school_admin_pretest_paper_publish(request, pk):
 @api_view(["POST"])
 @permission_classes([IsSchoolAdmin])
 def school_admin_pretest_paper_archive(request, pk):
-    paper = PretestPaper.objects.filter(pk=pk, school=_school(request)).select_related("subject").first()
+    paper = (
+        PretestPaper.objects.filter(pk=pk, school=_school(request))
+        .select_related("subject")
+        .first()
+    )
     if paper is None:
         return fail("前测套卷不存在。", status=404)
     paper = archive_pretest_paper(request, paper)
@@ -1330,7 +1669,11 @@ def school_admin_pretest_paper_archive(request, pk):
 @api_view(["GET", "POST"])
 @permission_classes([IsSchoolAdmin])
 def school_admin_pretest_questions(request, paper_id):
-    paper = PretestPaper.objects.filter(pk=paper_id, school=_school(request)).select_related("subject").first()
+    paper = (
+        PretestPaper.objects.filter(pk=paper_id, school=_school(request))
+        .select_related("subject")
+        .first()
+    )
     if paper is None:
         return fail("前测套卷不存在。", status=404)
     if request.method == "POST":
@@ -1348,7 +1691,9 @@ def school_admin_pretest_questions(request, paper_id):
 @permission_classes([IsSchoolAdmin])
 def school_admin_pretest_question_detail(request, paper_id, pk):
     question = (
-        PretestQuestion.objects.filter(pk=pk, paper_id=paper_id, paper__school=_school(request))
+        PretestQuestion.objects.filter(
+            pk=pk, paper_id=paper_id, paper__school=_school(request)
+        )
         .select_related("paper", "paper__subject")
         .first()
     )
@@ -1357,7 +1702,9 @@ def school_admin_pretest_question_detail(request, paper_id, pk):
 
     if request.method == "PATCH":
         try:
-            question = save_pretest_question(request, question.paper, request.data, question=question)
+            question = save_pretest_question(
+                request, question.paper, request.data, question=question
+            )
         except ServiceError as exc:
             return _service_fail(exc)
         return ok(pretest_question_row(question), "题目已更新")
@@ -1375,7 +1722,9 @@ def school_admin_teaching_options(request):
     User = get_user_model()
     school = _school(request)
     classes = ClassGroup.objects.filter(school=school).order_by("grade", "name")
-    teachers = User.objects.filter(school=school, role="teacher", is_active=True).order_by("username")
+    teachers = User.objects.filter(
+        school=school, role="teacher", is_active=True
+    ).order_by("username")
     return ok(
         {
             "classes": [class_group_row(class_group) for class_group in classes],
@@ -1414,8 +1763,13 @@ def _teaching_teacher_rows(teachers, school):
     )
     classes_by_teacher = {teacher_id: [] for teacher_id in teacher_ids}
     for assignment in assignments:
-        classes_by_teacher.setdefault(assignment.teacher_id, []).append(assignment.class_group)
-    return [teaching_teacher_row(teacher, classes_by_teacher.get(teacher.id, [])) for teacher in teachers]
+        classes_by_teacher.setdefault(assignment.teacher_id, []).append(
+            assignment.class_group
+        )
+    return [
+        teaching_teacher_row(teacher, classes_by_teacher.get(teacher.id, []))
+        for teacher in teachers
+    ]
 
 
 @api_view(["GET", "POST"])
@@ -1439,7 +1793,9 @@ def _filtered_teaching_assignments(request):
     query = request.GET.get("q", "").strip()
     class_id = request.GET.get("class", "").strip()
     teacher_id = request.GET.get("teacher", "").strip()
-    assignments = TeachingAssignment.objects.filter(school=school).select_related("school", "class_group", "teacher")
+    assignments = TeachingAssignment.objects.filter(school=school).select_related(
+        "school", "class_group", "teacher"
+    )
     if query:
         assignments = assignments.filter(
             Q(class_group__name__icontains=query)
@@ -1468,7 +1824,9 @@ def school_admin_teaching_export(request):
                 for class_group in item["classes"]
             ),
         ]
-        for item in _teaching_teacher_rows(list(_filtered_teaching_teachers(request)), _school(request))
+        for item in _teaching_teacher_rows(
+            list(_filtered_teaching_teachers(request)), _school(request)
+        )
     ]
     return export_rows(
         _xlsx_filename(f"{_school(request).code}_任课关系"),
@@ -1506,7 +1864,9 @@ def school_admin_teaching_assignment_detail(request, pk):
         return ok(teaching_assignment_row(assignment))
     if request.method == "PATCH":
         try:
-            assignment = save_teaching_assignment(request, request.data, assignment=assignment)
+            assignment = save_teaching_assignment(
+                request, request.data, assignment=assignment
+            )
         except ServiceError as exc:
             return _service_fail(exc)
         return ok(teaching_assignment_row(assignment), "任课关系已更新")
@@ -1530,7 +1890,10 @@ def _teacher_classes(request):
     class_ids = _teacher_class_ids(request)
     return (
         ClassGroup.objects.filter(school=_school(request), id__in=class_ids)
-        .annotate(student_count=Count("students", distinct=True), teacher_count=Count("teachers", distinct=True))
+        .annotate(
+            student_count=Count("students", distinct=True),
+            teacher_count=Count("teachers", distinct=True),
+        )
         .order_by("grade", "name")
     )
 
@@ -1549,7 +1912,9 @@ def teacher_dashboard(request):
     school = _school(request)
     class_ids = _teacher_class_ids(request)
     classes = ClassGroup.objects.filter(school=school, id__in=class_ids)
-    students = StudentProfile.objects.filter(user__school=school, class_group_id__in=class_ids)
+    students = StudentProfile.objects.filter(
+        user__school=school, class_group_id__in=class_ids
+    )
     events = LearningEvent.objects.filter(class_group_id__in=class_ids)
     decisions = StratificationDecision.objects.filter(class_group_id__in=class_ids)
     courses = Course.objects.filter(teacher=request.user)
@@ -1562,22 +1927,24 @@ def teacher_dashboard(request):
             student_count=Count("students", distinct=True),
             event_count=Count(
                 "learningevent",
-                filter=Q(learningevent__occurred_at__gte=timezone.now() - timedelta(days=7)),
+                filter=Q(
+                    learningevent__occurred_at__gte=timezone.now() - timedelta(days=7)
+                ),
                 distinct=True,
             ),
         ).order_by("grade", "name")
     )
     active_students = students.filter(user__is_active=True)
-    pending_decisions = decisions.filter(status=StratificationDecision.Status.PENDING).count()
+    pending_decisions = decisions.filter(
+        status=StratificationDecision.Status.PENDING
+    ).count()
     first_login_students = active_students.filter(user__is_first_login=True).count()
-    pending_pretest = (
-        active_students.exclude(
-            onboarding_status__in=[
-                StudentProfile.OnboardingStatus.PRETEST_COMPLETED,
-                StudentProfile.OnboardingStatus.ACTIVE,
-            ]
-        ).count()
-    )
+    pending_pretest = active_students.exclude(
+        onboarding_status__in=[
+            StudentProfile.OnboardingStatus.PRETEST_COMPLETED,
+            StudentProfile.OnboardingStatus.ACTIVE,
+        ]
+    ).count()
     inactive_students = students.filter(user__is_active=False).count()
 
     data = {
@@ -1587,12 +1954,20 @@ def teacher_dashboard(request):
             {"label": "学生", "value": students.count(), "sub": "任教班级内"},
             {"label": "课程", "value": courses.count(), "sub": "本人课程"},
             {"label": "资源", "value": resources.count(), "sub": "本人上传"},
-            {"label": "今日行为", "value": events.filter(occurred_at__date=today).count(), "sub": "任教班级内"},
+            {
+                "label": "今日行为",
+                "value": events.filter(occurred_at__date=today).count(),
+                "sub": "任教班级内",
+            },
             {"label": "待确认分层", "value": pending_decisions, "sub": "AI 分层建议"},
         ],
         "charts": {
             "event_series": _day_series(events, "occurred_at", days=7),
-            "login_series": _day_series(events.filter(event_type=LearningEvent.EventType.LOGIN), "occurred_at", days=7),
+            "login_series": _day_series(
+                events.filter(event_type=LearningEvent.EventType.LOGIN),
+                "occurred_at",
+                days=7,
+            ),
             "active_students_7d": _day_distinct_series(
                 last_7d_events.filter(actor__role="student"),
                 "occurred_at",
@@ -1602,13 +1977,27 @@ def teacher_dashboard(request):
             "class_students": _class_student_counts(class_rows),
             "class_activity": _class_event_counts(class_rows),
             "student_layers": [
-                {"label": label, "value": value, "count": students.filter(current_layer=value).count()}
+                {
+                    "label": label,
+                    "value": value,
+                    "count": students.filter(current_layer=value).count(),
+                }
                 for value, label in StudentProfile.Layer.choices
             ]
-            + [{"label": "未分层", "value": "unassigned", "count": students.filter(current_layer__isnull=True).count()}],
+            + [
+                {
+                    "label": "未分层",
+                    "value": "unassigned",
+                    "count": students.filter(current_layer__isnull=True).count(),
+                }
+            ],
             "event_types": _event_type_counts(last_7d_events),
-            "decision_status": _choice_counts(decisions, "status", StratificationDecision.Status.choices),
-            "training_status": _choice_counts(training_jobs, "status", TrainingJob.Status.choices),
+            "decision_status": _choice_counts(
+                decisions, "status", StratificationDecision.Status.choices
+            ),
+            "training_status": _choice_counts(
+                training_jobs, "status", TrainingJob.Status.choices
+            ),
         },
         "class_rows": [
             {
@@ -1622,10 +2011,26 @@ def teacher_dashboard(request):
             for class_group in class_rows[:10]
         ],
         "todo_rows": [
-            {"label": "待确认分层", "count": pending_decisions, "level": "warn" if pending_decisions else "ok"},
-            {"label": "学生首次登录", "count": first_login_students, "level": "warn" if first_login_students else "ok"},
-            {"label": "未完成前测", "count": pending_pretest, "level": "warn" if pending_pretest else "ok"},
-            {"label": "停用学生账号", "count": inactive_students, "level": "failed" if inactive_students else "ok"},
+            {
+                "label": "待确认分层",
+                "count": pending_decisions,
+                "level": "warn" if pending_decisions else "ok",
+            },
+            {
+                "label": "学生首次登录",
+                "count": first_login_students,
+                "level": "warn" if first_login_students else "ok",
+            },
+            {
+                "label": "未完成前测",
+                "count": pending_pretest,
+                "level": "warn" if pending_pretest else "ok",
+            },
+            {
+                "label": "停用学生账号",
+                "count": inactive_students,
+                "level": "failed" if inactive_students else "ok",
+            },
         ],
     }
     return ok(data)
@@ -1634,7 +2039,9 @@ def teacher_dashboard(request):
 @api_view(["GET"])
 @permission_classes([IsTeacher])
 def teacher_classes(request):
-    return ok([class_group_row(class_group) for class_group in _teacher_classes(request)])
+    return ok(
+        [class_group_row(class_group) for class_group in _teacher_classes(request)]
+    )
 
 
 @api_view(["GET", "PATCH", "POST"])
@@ -1679,9 +2086,15 @@ def teacher_students(request):
         try:
             selected_class_id = int(class_id)
         except ValueError:
-            return fail("班级筛选条件不正确。", errors={"class": ["班级筛选条件不正确。"]}, status=400)
+            return fail(
+                "班级筛选条件不正确。",
+                errors={"class": ["班级筛选条件不正确。"]},
+                status=400,
+            )
         if selected_class_id not in class_ids:
-            return fail("无权查看该班级。", errors={"class": ["无权查看该班级。"]}, status=403)
+            return fail(
+                "无权查看该班级。", errors={"class": ["无权查看该班级。"]}, status=403
+            )
         students = students.filter(class_group_id=selected_class_id)
     if status == "active":
         students = students.filter(user__is_active=True)
@@ -1692,7 +2105,12 @@ def teacher_students(request):
     elif layer == "unassigned":
         students = students.filter(current_layer__isnull=True)
 
-    page = _paginate(request, students.order_by("class_group__grade", "class_group__name", "student_no", "user__username"))
+    page = _paginate(
+        request,
+        students.order_by(
+            "class_group__grade", "class_group__name", "student_no", "user__username"
+        ),
+    )
     page.object_list = [student_row(profile) for profile in page.object_list]
     return ok(page_data(page))
 
@@ -1700,23 +2118,39 @@ def teacher_students(request):
 def _teacher_student_ids_from_payload(request):
     raw_ids = request.data.get("ids") if hasattr(request.data, "get") else None
     if not isinstance(raw_ids, list):
-        raise ServiceError("请选择要操作的学生。", errors={"ids": ["请选择要操作的学生。"]}, status=400)
+        raise ServiceError(
+            "请选择要操作的学生。", errors={"ids": ["请选择要操作的学生。"]}, status=400
+        )
 
     ids: list[int] = []
     for raw_id in raw_ids:
         try:
             student_id = int(raw_id)
         except (TypeError, ValueError):
-            raise ServiceError("所选学生包含无效编号。", errors={"ids": ["所选学生包含无效编号。"]}, status=400)
+            raise ServiceError(
+                "所选学生包含无效编号。",
+                errors={"ids": ["所选学生包含无效编号。"]},
+                status=400,
+            )
         if student_id <= 0:
-            raise ServiceError("所选学生包含无效编号。", errors={"ids": ["所选学生包含无效编号。"]}, status=400)
+            raise ServiceError(
+                "所选学生包含无效编号。",
+                errors={"ids": ["所选学生包含无效编号。"]},
+                status=400,
+            )
         if student_id not in ids:
             ids.append(student_id)
 
     if not ids:
-        raise ServiceError("请选择要操作的学生。", errors={"ids": ["请选择要操作的学生。"]}, status=400)
+        raise ServiceError(
+            "请选择要操作的学生。", errors={"ids": ["请选择要操作的学生。"]}, status=400
+        )
     if len(ids) > 100:
-        raise ServiceError("单次最多重置 100 个学生密码。", errors={"ids": ["单次最多重置 100 个学生密码。"]}, status=400)
+        raise ServiceError(
+            "单次最多重置 100 个学生密码。",
+            errors={"ids": ["单次最多重置 100 个学生密码。"]},
+            status=400,
+        )
     return ids
 
 
@@ -1756,16 +2190,31 @@ def teacher_students_bulk_reset_password(request):
     except ServiceError as exc:
         return _service_fail(exc)
 
-    profiles = list(_teacher_students(request).filter(pk__in=ids).order_by("class_group__grade", "class_group__name", "student_no"))
+    profiles = list(
+        _teacher_students(request)
+        .filter(pk__in=ids)
+        .order_by("class_group__grade", "class_group__name", "student_no")
+    )
     found_ids = {profile.id for profile in profiles}
     missing = [str(student_id) for student_id in ids if student_id not in found_ids]
     if missing:
-        return fail("部分学生不存在或不在你的任教班级中。", errors={"ids": [f"无权操作：{', '.join(missing)}"]}, status=404)
+        return fail(
+            "部分学生不存在或不在你的任教班级中。",
+            errors={"ids": [f"无权操作：{', '.join(missing)}"]},
+            status=404,
+        )
 
     inactive = [profile for profile in profiles if not profile.user.is_active]
     if inactive:
-        names = ", ".join(profile.user.display_name or profile.user.username for profile in inactive[:10])
-        return fail("所选学生包含停用账号，请联系学校管理员处理。", errors={"ids": [f"停用账号：{names}"]}, status=400)
+        names = ", ".join(
+            profile.user.display_name or profile.user.username
+            for profile in inactive[:10]
+        )
+        return fail(
+            "所选学生包含停用账号，请联系学校管理员处理。",
+            errors={"ids": [f"停用账号：{names}"]},
+            status=400,
+        )
 
     for profile in profiles:
         profile.user.set_password("123456")
@@ -1804,7 +2253,9 @@ def _teacher_courses_queryset(request):
         .prefetch_related(
             Prefetch(
                 "course_classes",
-                queryset=CourseClass.objects.select_related("class_group").order_by("class_group__grade", "class_group__name"),
+                queryset=CourseClass.objects.select_related("class_group").order_by(
+                    "class_group__grade", "class_group__name"
+                ),
                 to_attr="prefetched_course_classes",
             )
         )
@@ -1817,18 +2268,28 @@ def _teacher_course_rows(request):
     status = request.GET.get("status", "").strip()
     courses = _teacher_courses_queryset(request).order_by("-updated_at", "-created_at")
     if query:
-        courses = courses.filter(Q(title__icontains=query) | Q(introduction__icontains=query))
+        courses = courses.filter(
+            Q(title__icontains=query) | Q(introduction__icontains=query)
+        )
     if subject_id:
         try:
             courses = courses.filter(subject_id=int(subject_id))
         except ValueError:
-            return None, fail("学科筛选条件不正确。", errors={"subject": ["学科筛选条件不正确。"]}, status=400)
+            return None, fail(
+                "学科筛选条件不正确。",
+                errors={"subject": ["学科筛选条件不正确。"]},
+                status=400,
+            )
     if status == "published":
         courses = courses.filter(is_active=True)
     elif status == "draft":
         courses = courses.filter(is_active=False)
     elif status:
-        return None, fail("状态筛选条件不正确。", errors={"status": ["状态筛选条件不正确。"]}, status=400)
+        return None, fail(
+            "状态筛选条件不正确。",
+            errors={"status": ["状态筛选条件不正确。"]},
+            status=400,
+        )
     return courses, None
 
 
@@ -1839,7 +2300,11 @@ def teacher_course_options(request):
         _teacher_courses_queryset(request)
         .filter(course_classes__isnull=False)
         .prefetch_related(
-            Prefetch("lessons", queryset=Lesson.objects.order_by("sort_order", "id"), to_attr="prefetched_lessons")
+            Prefetch(
+                "lessons",
+                queryset=Lesson.objects.order_by("sort_order", "id"),
+                to_attr="prefetched_lessons",
+            )
         )
         .distinct()
         .order_by("-is_active", "-updated_at")
@@ -1848,12 +2313,17 @@ def teacher_course_options(request):
         {
             "subjects": [
                 subject_row(subject)
-                for subject in Subject.objects.filter(school=_school(request), is_active=True).annotate(
+                for subject in Subject.objects.filter(
+                    school=_school(request), is_active=True
+                ).annotate(
                     course_count=Count("courses", distinct=True),
                     pretest_count=Count("pretest_papers", distinct=True),
                 )
             ],
-            "classes": [class_group_row(class_group) for class_group in _teacher_classes(request)],
+            "classes": [
+                class_group_row(class_group)
+                for class_group in _teacher_classes(request)
+            ],
             "courses": [course_row(course, include_lessons=True) for course in courses],
             "activity_types": [
                 {"value": value, "label": label}
@@ -1881,27 +2351,71 @@ def _office_document_type(file_ext: str) -> str:
     return "word"
 
 
+def _resource_rows_queryset():
+    return Resource.objects.select_related(
+        "owner", "owner__school", "subject", "reviewed_by"
+    ).prefetch_related(
+        "target_classes",
+        "extra_files",
+    )
+
+
+def _student_resource_access_q(profile: StudentProfile) -> Q:
+    local_school = Q(owner__school_id=profile.user.school_id)
+    school_shared = local_school & Q(
+        visibility=Resource.Visibility.SCHOOL,
+        publish_status=Resource.PublishStatus.PUBLISHED,
+    )
+    class_shared = local_school & Q(
+        visibility=Resource.Visibility.CLASSES,
+        publish_status=Resource.PublishStatus.PUBLISHED,
+        target_classes=profile.class_group,
+    )
+    external_shared = Q(
+        visibility=Resource.Visibility.EXTERNAL,
+        publish_status=Resource.PublishStatus.APPROVED,
+    )
+    return school_shared | class_shared | external_shared
+
+
 def _resource_can_open(request, resource: Resource) -> bool:
     user = request.user
     if not user.is_authenticated:
         return False
     if user.role == "teacher":
-        return resource.owner_id == user.id and resource.owner.school_id == user.school_id
+        if resource.owner_id == user.id and resource.owner.school_id == user.school_id:
+            return True
+        if resource.visibility == Resource.Visibility.SCHOOL:
+            return (
+                resource.owner.school_id == user.school_id
+                and resource.publish_status == Resource.PublishStatus.PUBLISHED
+            )
+        return (
+            resource.visibility == Resource.Visibility.EXTERNAL
+            and resource.publish_status == Resource.PublishStatus.APPROVED
+        )
     if user.role == "student":
         try:
             profile = user.student_profile
         except StudentProfile.DoesNotExist:
             return False
-        if not profile.class_group_id or resource.owner.school_id != user.school_id:
+        if not profile.class_group_id:
             return False
-        return _student_teachers(profile).filter(pk=resource.owner_id).exists()
-    return user.role in {"school_admin", "super_admin"} and (not user.school_id or resource.owner.school_id == user.school_id)
+        return (
+            _resource_rows_queryset()
+            .filter(pk=resource.pk)
+            .filter(_student_resource_access_q(profile))
+            .exists()
+        )
+    return user.role in {"school_admin", "super_admin"} and (
+        not user.school_id or resource.owner.school_id == user.school_id
+    )
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def resource_office_config(request, pk):
-    resource = Resource.objects.select_related("owner", "owner__school").filter(pk=pk).first()
+    resource = _resource_rows_queryset().filter(pk=pk).first()
     if resource is None or not _resource_can_open(request, resource):
         return fail("资源不存在或无权预览。", status=404)
     file_ext = _resource_file_ext(resource)
@@ -1914,7 +2428,9 @@ def resource_office_config(request, pk):
     can_edit = request.user.role == "teacher" and resource.owner_id == request.user.id
     mode = "edit" if requested_mode == "edit" and can_edit else "view"
     attachment_name = resource.attachment.name.rsplit("/", 1)[-1]
-    attachment_url = request.build_absolute_uri(f"/{resource.attachment.url.lstrip('/')}")
+    attachment_url = request.build_absolute_uri(
+        f"/{resource.attachment.url.lstrip('/')}"
+    )
     base_url = f"{'https' if request.is_secure() else 'http'}://{request.get_host()}"
     config = {
         "document": {
@@ -1944,7 +2460,7 @@ def resource_office_config(request, pk):
             },
         },
         "height": "100%",
-            "width": "100%",
+        "width": "100%",
     }
     config = sign_editor_config(config)
     return ok(
@@ -1974,7 +2490,9 @@ def resource_office_callback(request, pk):
         try:
             with urllib.request.urlopen(payload["url"], timeout=30) as response:
                 data = response.read()
-            with resource.attachment.storage.open(resource.attachment.name, "wb") as target:
+            with resource.attachment.storage.open(
+                resource.attachment.name, "wb"
+            ) as target:
                 target.write(data)
             resource.save(update_fields=["updated_at"])
         except Exception:
@@ -1988,17 +2506,76 @@ def resource_office_callback(request, pk):
 def teacher_resources(request):
     if request.method == "POST":
         try:
-            resource = save_teacher_resource(request, request.data, uploaded_file=request.FILES.get("attachment"))
+            resource = save_teacher_resource(
+                request,
+                request.data,
+                uploaded_file=request.FILES.get("attachment"),
+                cover_file=request.FILES.get("cover"),
+                extra_files=request.FILES.getlist("extra_files"),
+            )
         except ServiceError as exc:
             return _service_fail(exc)
-        return ok(resource_row(resource), "资源已上传", status=201)
+        resource = _resource_rows_queryset().get(pk=resource.pk)
+        return ok(
+            resource_row(resource, viewer=request.user), "资源已保存。", status=201
+        )
 
     query = request.GET.get("q", "").strip()
-    resources = Resource.objects.filter(owner=request.user, owner__school=_school(request)).order_by("-is_pinned", "-updated_at")
+    scope = request.GET.get("scope", "mine").strip()
+    resources = _resource_rows_queryset()
+    if scope == "school":
+        resources = resources.filter(
+            owner__school=_school(request),
+            visibility=Resource.Visibility.SCHOOL,
+            publish_status=Resource.PublishStatus.PUBLISHED,
+        )
+    elif scope == "external":
+        resources = resources.filter(
+            visibility=Resource.Visibility.EXTERNAL,
+            publish_status=Resource.PublishStatus.APPROVED,
+        )
+    elif scope == "projects":
+        resources = resources.filter(
+            resource_type=Resource.ResourceType.STUDENT_PROJECT
+        ).filter(
+            Q(owner=request.user)
+            | Q(
+                owner__school=_school(request),
+                visibility=Resource.Visibility.SCHOOL,
+                publish_status=Resource.PublishStatus.PUBLISHED,
+            )
+            | Q(
+                visibility=Resource.Visibility.EXTERNAL,
+                publish_status=Resource.PublishStatus.APPROVED,
+            )
+        )
+    else:
+        resources = resources.filter(owner=request.user, owner__school=_school(request))
+    resource_type = request.GET.get("resource_type", "").strip()
+    category = request.GET.get("category", "").strip()
+    subject_id = request.GET.get("subject", "").strip()
+    if resource_type:
+        resources = resources.filter(resource_type=resource_type)
+    if category:
+        resources = resources.filter(category=category)
+    if subject_id.isdigit():
+        resources = resources.filter(subject_id=int(subject_id))
     if query:
-        resources = resources.filter(Q(title__icontains=query) | Q(content__icontains=query) | Q(attachment__icontains=query))
+        resources = resources.annotate(
+            tags_text=Cast("tags", output_field=TextField()),
+            project_members_text=Cast("project_members", output_field=TextField()),
+        ).filter(
+            Q(title__icontains=query)
+            | Q(content__icontains=query)
+            | Q(attachment__icontains=query)
+            | Q(tags_text__icontains=query)
+            | Q(project_members_text__icontains=query)
+        )
+    resources = resources.distinct().order_by("-is_pinned", "-updated_at")
     page = _paginate(request, resources)
-    page.object_list = [resource_row(resource) for resource in page.object_list]
+    page.object_list = [
+        resource_row(resource, viewer=request.user) for resource in page.object_list
+    ]
     return ok(page_data(page))
 
 
@@ -2012,19 +2589,202 @@ def teacher_resource_detail(request, pk):
         return _service_fail(exc)
 
     if request.method == "GET":
-        return ok(resource_row(resource))
+        resource = _resource_rows_queryset().get(pk=resource.pk)
+        return ok(resource_row(resource, viewer=request.user))
     if request.method == "PATCH":
         try:
-            resource = save_teacher_resource(request, request.data, resource=resource, uploaded_file=request.FILES.get("attachment"))
+            resource = save_teacher_resource(
+                request,
+                request.data,
+                resource=resource,
+                uploaded_file=request.FILES.get("attachment"),
+                cover_file=request.FILES.get("cover"),
+                extra_files=request.FILES.getlist("extra_files"),
+            )
         except ServiceError as exc:
             return _service_fail(exc)
-        return ok(resource_row(resource), "资源已更新")
+        resource = _resource_rows_queryset().get(pk=resource.pk)
+        return ok(resource_row(resource, viewer=request.user), "资源已更新。")
 
     try:
         delete_teacher_resource(request, resource)
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok({}, "资源已删除")
+    return ok({}, "资源已删除。")
+
+
+@api_view(["DELETE"])
+@permission_classes([IsTeacher])
+def teacher_resource_extra_file(request, pk, file_id):
+    try:
+        resource = _teacher_resource(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    extra_file = ResourceFile.objects.filter(pk=file_id, resource=resource).first()
+    if extra_file is None:
+        return fail("附件不存在或无权操作。", status=404)
+    if extra_file.file:
+        extra_file.file.delete(save=False)
+    extra_file.delete()
+    write_audit(
+        request,
+        "resource.extra_file.delete",
+        school=request.user.school,
+        target_type="resource",
+        target_id=resource.id,
+        detail={"file_id": file_id},
+    )
+    return ok({}, "附件已删除。")
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_resource_reviews(request, pk=None):
+    resources = _resource_rows_queryset().filter(
+        owner__school=_school(request),
+        visibility=Resource.Visibility.EXTERNAL,
+    )
+    if request.method == "GET":
+        status_filter = request.GET.get("status", "").strip()
+        if status_filter:
+            resources = resources.filter(publish_status=status_filter)
+        query = request.GET.get("q", "").strip()
+        if query:
+            resources = resources.filter(
+                Q(title__icontains=query) | Q(owner__display_name__icontains=query)
+            )
+        page = _paginate(request, resources.order_by("publish_status", "-updated_at"))
+        page.object_list = [
+            resource_row(resource, viewer=request.user) for resource in page.object_list
+        ]
+        return ok(page_data(page))
+
+    resource = resources.filter(pk=pk).first()
+    if resource is None:
+        return fail("资源不存在或无权审核。", status=404)
+    action = str(request.data.get("action", "")).strip()
+    note = str(request.data.get("note", "")).strip()
+    if action not in {"approve", "reject"}:
+        return fail(
+            "审核操作不正确。", errors={"action": ["请选择通过或退回。"]}, status=400
+        )
+    if action == "reject" and not note:
+        return fail(
+            "退回时需要填写原因。", errors={"note": ["请填写退回原因。"]}, status=400
+        )
+    resource.publish_status = (
+        Resource.PublishStatus.APPROVED
+        if action == "approve"
+        else Resource.PublishStatus.REJECTED
+    )
+    resource.review_note = note
+    resource.reviewed_by = request.user
+    resource.reviewed_at = timezone.now()
+    resource.published_at = timezone.now() if action == "approve" else None
+    resource.save(
+        update_fields=[
+            "publish_status",
+            "review_note",
+            "reviewed_by",
+            "reviewed_at",
+            "published_at",
+            "updated_at",
+        ]
+    )
+    write_audit(
+        request,
+        f"resource.review.{action}",
+        school=request.user.school,
+        target_type="resource",
+        target_id=resource.id,
+        detail={"title": resource.title, "note": note},
+    )
+    reviewed = _resource_rows_queryset().get(pk=resource.pk)
+    return ok(resource_row(reviewed, viewer=request.user), "资源审核结果已保存。")
+
+
+@api_view(["GET"])
+@permission_classes([IsStudent])
+def student_resources(request):
+    try:
+        profile = request.user.student_profile
+    except StudentProfile.DoesNotExist:
+        return fail("学生档案不存在。", status=404)
+    if not profile.class_group_id:
+        return ok(page_data(_paginate(request, Resource.objects.none())))
+
+    resources = _resource_rows_queryset().filter(_student_resource_access_q(profile))
+    query = request.GET.get("q", "").strip()
+    scope = request.GET.get("scope", "all").strip()
+    if scope == "projects":
+        resources = resources.filter(
+            resource_type=Resource.ResourceType.STUDENT_PROJECT
+        )
+    elif scope == "external":
+        resources = resources.filter(visibility=Resource.Visibility.EXTERNAL)
+    elif scope == "school":
+        resources = resources.filter(owner__school=request.user.school).exclude(
+            visibility=Resource.Visibility.EXTERNAL
+        )
+    subject_id = request.GET.get("subject", "").strip()
+    if subject_id.isdigit():
+        resources = resources.filter(subject_id=int(subject_id))
+    if query:
+        resources = resources.annotate(
+            tags_text=Cast("tags", output_field=TextField()),
+            project_members_text=Cast("project_members", output_field=TextField()),
+        ).filter(
+            Q(title__icontains=query)
+            | Q(content__icontains=query)
+            | Q(tags_text__icontains=query)
+            | Q(project_members_text__icontains=query)
+        )
+    page = _paginate(
+        request,
+        resources.distinct().order_by("-is_pinned", "-published_at", "-updated_at"),
+    )
+    page.object_list = [
+        resource_row(resource, viewer=request.user) for resource in page.object_list
+    ]
+    return ok(page_data(page))
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsStudent])
+def student_resource_detail(request, pk):
+    try:
+        profile = request.user.student_profile
+    except StudentProfile.DoesNotExist:
+        return fail("学生档案不存在。", status=404)
+    resource = (
+        _resource_rows_queryset()
+        .filter(pk=pk)
+        .filter(_student_resource_access_q(profile))
+        .distinct()
+        .first()
+    )
+    if resource is None:
+        return fail("资源不存在或暂未向你开放。", status=404)
+    if request.method == "POST":
+        Resource.objects.filter(pk=resource.pk).update(view_count=F("view_count") + 1)
+        LearningEvent.objects.create(
+            actor=request.user,
+            class_group=profile.class_group,
+            event_type=LearningEvent.EventType.RESOURCE_VIEW,
+            object_type="resource_center",
+            object_id=str(resource.id),
+            metadata={
+                "title": resource.title,
+                "resource_type": resource.resource_type,
+                "visibility": resource.visibility,
+                "source_school": (
+                    resource.owner.school.name if resource.owner.school_id else ""
+                ),
+            },
+            occurred_at=timezone.now(),
+        )
+        resource.view_count += 1
+    return ok(resource_row(resource, viewer=request.user))
 
 
 @api_view(["GET", "POST"])
@@ -2057,7 +2817,13 @@ def teacher_course_detail(request, pk):
     if request.method == "GET":
         course = (
             _teacher_courses_queryset(request)
-            .prefetch_related(Prefetch("lessons", queryset=Lesson.objects.order_by("sort_order", "id"), to_attr="prefetched_lessons"))
+            .prefetch_related(
+                Prefetch(
+                    "lessons",
+                    queryset=Lesson.objects.order_by("sort_order", "id"),
+                    to_attr="prefetched_lessons",
+                )
+            )
             .get(pk=course.pk)
         )
         return ok(course_row(course, include_lessons=True))
@@ -2087,7 +2853,9 @@ def teacher_course_cover(request, pk):
 
     if request.method == "POST":
         try:
-            course = save_teacher_course_cover(request, course, request.FILES.get("cover"))
+            course = save_teacher_course_cover(
+                request, course, request.FILES.get("cover")
+            )
         except ServiceError as exc:
             return _service_fail(exc)
         course = _teacher_courses_queryset(request).get(pk=course.pk)
@@ -2127,7 +2895,9 @@ def teacher_course_archive(request, pk):
 @permission_classes([IsTeacher])
 def teacher_course_classes(request, pk):
     try:
-        course = set_teacher_course_classes(request, _teacher_course(request, pk), request.data)
+        course = set_teacher_course_classes(
+            request, _teacher_course(request, pk), request.data
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     course = _teacher_courses_queryset(request).get(pk=course.pk)
@@ -2162,7 +2932,9 @@ def teacher_course_lessons(request, course_id):
         lesson = _teacher_lessons_queryset(request, course).get(pk=lesson.pk)
         return ok(lesson_row(lesson), "课时已创建", status=201)
 
-    return ok([lesson_row(lesson) for lesson in _teacher_lessons_queryset(request, course)])
+    return ok(
+        [lesson_row(lesson) for lesson in _teacher_lessons_queryset(request, course)]
+    )
 
 
 @api_view(["GET", "PATCH", "DELETE"])
@@ -2177,7 +2949,9 @@ def teacher_lesson_detail(request, pk):
         return ok(lesson_row(lesson))
     if request.method == "PATCH":
         try:
-            lesson = save_teacher_lesson(request, lesson.course, request.data, lesson=lesson)
+            lesson = save_teacher_lesson(
+                request, lesson.course, request.data, lesson=lesson
+            )
         except ServiceError as exc:
             return _service_fail(exc)
         return ok(lesson_row(lesson), "课时已更新")
@@ -2228,7 +3002,9 @@ def teacher_lesson_steps(request, lesson_id):
             return _service_fail(exc)
         return ok(lesson_step_row(step), "课时环节已创建", status=201)
 
-    return ok([lesson_step_row(step) for step in _teacher_lesson_steps_queryset(lesson)])
+    return ok(
+        [lesson_step_row(step) for step in _teacher_lesson_steps_queryset(lesson)]
+    )
 
 
 @api_view(["POST"])
@@ -2246,8 +3022,14 @@ def teacher_lesson_steps_reorder(request, lesson_id):
 @permission_classes([IsTeacher])
 def teacher_lesson_step_detail(request, pk):
     step = (
-        LessonStep.objects.select_related("lesson", "lesson__course", "lesson__course__teacher")
-        .filter(pk=pk, lesson__course__teacher=request.user, lesson__course__teacher__school=_school(request))
+        LessonStep.objects.select_related(
+            "lesson", "lesson__course", "lesson__course__teacher"
+        )
+        .filter(
+            pk=pk,
+            lesson__course__teacher=request.user,
+            lesson__course__teacher__school=_school(request),
+        )
         .first()
     )
     if step is None:
@@ -2285,7 +3067,9 @@ def _teacher_learning_web_page(request, pk) -> LearningWebPage:
     except (TypeError, ValueError):
         page_id = 0
     page = (
-        LearningWebPage.objects.select_related("school", "teacher", "course", "lesson", "lesson__course")
+        LearningWebPage.objects.select_related(
+            "school", "teacher", "course", "lesson", "lesson__course"
+        )
         .filter(pk=page_id, school=_school(request), teacher=request.user)
         .first()
     )
@@ -2302,7 +3086,9 @@ def teacher_lesson_learning_web_pages(request, lesson_id):
         if request.method == "POST":
             direction = str(request.data.get("direction") or "").strip()
             generation_mode = str(request.data.get("generation_mode") or "auto").strip()
-            schema = generate_learning_web_page_schema(request, lesson, direction, generation_mode=generation_mode)
+            schema = generate_learning_web_page_schema(
+                request, lesson, direction, generation_mode=generation_mode
+            )
             with transaction.atomic():
                 page = LearningWebPage.objects.create(
                     school=_school(request),
@@ -2328,14 +3114,20 @@ def teacher_lesson_learning_web_pages(request, lesson_id):
                 school=_school(request),
                 target_type="learning_web_page",
                 target_id=page.id,
-                detail={"lesson": lesson.id, "course": lesson.course_id, "form_count": learning_web_page_row(page)["form_count"]},
+                detail={
+                    "lesson": lesson.id,
+                    "course": lesson.course_id,
+                    "form_count": learning_web_page_row(page)["form_count"],
+                },
             )
             return ok(learning_web_page_row(page), "AI 学习网页已生成。", status=201)
     except ServiceError as exc:
         return _service_fail(exc)
 
     pages = (
-        LearningWebPage.objects.filter(lesson=lesson, teacher=request.user, school=_school(request), is_active=True)
+        LearningWebPage.objects.filter(
+            lesson=lesson, teacher=request.user, school=_school(request), is_active=True
+        )
         .select_related("school", "teacher", "course", "lesson")
         .annotate(response_count=Count("responses", distinct=True))
         .order_by("-updated_at", "-id")
@@ -2350,12 +3142,19 @@ def teacher_learning_web_page_detail(request, pk):
         page = _teacher_learning_web_page(request, pk)
         if request.method == "GET":
             row = learning_web_page_row(page)
-            row["versions"] = [learning_web_page_version_row(item) for item in page.versions.select_related("created_by").all()[:20]]
+            row["versions"] = [
+                learning_web_page_version_row(item)
+                for item in page.versions.select_related("created_by").all()[:20]
+            ]
             return ok(row)
         if request.method == "PATCH":
             title = str(request.data.get("title") or page.title).strip()
             if len(title) < 2 or len(title) > 128:
-                raise ServiceError("网页标题需为 2-128 个字符。", errors={"title": ["请填写网页标题。"]}, status=400)
+                raise ServiceError(
+                    "网页标题需为 2-128 个字符。",
+                    errors={"title": ["请填写网页标题。"]},
+                    status=400,
+                )
             page.title = title
             page.status = LearningWebPage.Status.READY
             page.save(update_fields=["title", "status", "updated_at"])
@@ -2398,9 +3197,22 @@ def teacher_learning_web_page_revise(request, pk):
             page.schema = schema
             page.generation_prompt = direction
             page.status = LearningWebPage.Status.READY
-            page.save(update_fields=["revision_no", "title", "schema", "generation_prompt", "status", "updated_at"])
-            for step in LessonStep.objects.select_for_update().filter(lesson=page.lesson):
-                items = step.resource_items if isinstance(step.resource_items, list) else []
+            page.save(
+                update_fields=[
+                    "revision_no",
+                    "title",
+                    "schema",
+                    "generation_prompt",
+                    "status",
+                    "updated_at",
+                ]
+            )
+            for step in LessonStep.objects.select_for_update().filter(
+                lesson=page.lesson
+            ):
+                items = (
+                    step.resource_items if isinstance(step.resource_items, list) else []
+                )
                 changed = False
                 updated_items = []
                 for item in items:
@@ -2410,7 +3222,11 @@ def teacher_learning_web_page_revise(request, pk):
                         except (TypeError, ValueError):
                             bound_page_id = 0
                         if bound_page_id == page.id:
-                            item = {**item, "title": page.title, "revision_no": page.revision_no}
+                            item = {
+                                **item,
+                                "title": page.title,
+                                "revision_no": page.revision_no,
+                            }
                             changed = True
                     updated_items.append(item)
                 if changed:
@@ -2431,15 +3247,21 @@ def teacher_learning_web_page_revise(request, pk):
             target_id=page.id,
             detail={"lesson": page.lesson_id, "revision_no": page.revision_no},
         )
-        return ok(learning_web_page_row(page), f"学习网页已更新至 v{page.revision_no}。")
+        return ok(
+            learning_web_page_row(page), f"学习网页已更新至 v{page.revision_no}。"
+        )
     except ServiceError as exc:
         return _service_fail(exc)
 
 
-def _learning_web_page_response_summary(page: LearningWebPage, responses: list[LearningWebPageResponse]) -> dict:
+def _learning_web_page_response_summary(
+    page: LearningWebPage, responses: list[LearningWebPageResponse]
+) -> dict:
     schema = page.schema if isinstance(page.schema, dict) else {}
     blocks = schema.get("blocks") if isinstance(schema.get("blocks"), list) else []
-    forms = [item for item in blocks if isinstance(item, dict) and item.get("type") == "form"]
+    forms = [
+        item for item in blocks if isinstance(item, dict) and item.get("type") == "form"
+    ]
     form_rows = []
     for form in forms:
         form_id = str(form.get("form_id") or "")
@@ -2451,7 +3273,11 @@ def _learning_web_page_response_summary(page: LearningWebPage, responses: list[L
                 continue
             field_id = str(field.get("id") or "")
             field_type = str(field.get("type") or "short_text")
-            values = [item.answers.get(field_id) for item in form_responses if isinstance(item.answers, dict) and field_id in item.answers]
+            values = [
+                item.answers.get(field_id)
+                for item in form_responses
+                if isinstance(item.answers, dict) and field_id in item.answers
+            ]
             stats = {"answered": len(values)}
             if field_type in {"single", "multiple", "select", "scale"}:
                 options = [str(item) for item in field.get("options", [])]
@@ -2462,12 +3288,18 @@ def _learning_web_page_response_summary(page: LearningWebPage, responses: list[L
                         key = str(selected_value)
                         if key in counts:
                             counts[key] += 1
-                stats["options"] = [{"label": option, "count": counts[option]} for option in options]
+                stats["options"] = [
+                    {"label": option, "count": counts[option]} for option in options
+                ]
             elif field_type == "number":
-                numbers = [float(value) for value in values if isinstance(value, (int, float))]
+                numbers = [
+                    float(value) for value in values if isinstance(value, (int, float))
+                ]
                 stats.update(
                     {
-                        "average": round(sum(numbers) / len(numbers), 2) if numbers else None,
+                        "average": (
+                            round(sum(numbers) / len(numbers), 2) if numbers else None
+                        ),
                         "min": min(numbers) if numbers else None,
                         "max": max(numbers) if numbers else None,
                     }
@@ -2475,17 +3307,29 @@ def _learning_web_page_response_summary(page: LearningWebPage, responses: list[L
             else:
                 recent = []
                 for response in form_responses[:20]:
-                    value = response.answers.get(field_id) if isinstance(response.answers, dict) else None
+                    value = (
+                        response.answers.get(field_id)
+                        if isinstance(response.answers, dict)
+                        else None
+                    )
                     if value is not None and value != "":
                         recent.append(
                             {
-                                "student": response.student.display_name or response.student.username,
+                                "student": response.student.display_name
+                                or response.student.username,
                                 "value": str(value)[:2000],
                                 "submitted_at": response.submitted_at,
                             }
                         )
                 stats["recent"] = recent
-            fields.append({"id": field_id, "label": field.get("label") or field_id, "type": field_type, "stats": stats})
+            fields.append(
+                {
+                    "id": field_id,
+                    "label": field.get("label") or field_id,
+                    "type": field_type,
+                    "stats": stats,
+                }
+            )
         form_rows.append(
             {
                 "form_id": form_id,
@@ -2521,22 +3365,31 @@ def teacher_learning_web_page_responses(request, pk):
         try:
             classroom_session_pk = int(classroom_session_id)
         except (TypeError, ValueError):
-            return fail("课堂场次参数不正确。", errors={"classroom_session": ["请输入有效的课堂场次编号。"]}, status=400)
+            return fail(
+                "课堂场次参数不正确。",
+                errors={"classroom_session": ["请输入有效的课堂场次编号。"]},
+                status=400,
+            )
         classroom_session = (
             ClassroomSession.objects.select_related("class_group", "course", "lesson")
-            .filter(pk=classroom_session_pk, school=_school(request), teacher=request.user)
+            .filter(
+                pk=classroom_session_pk, school=_school(request), teacher=request.user
+            )
             .first()
         )
         if classroom_session is None:
             return fail("课堂场次不存在或无权查看。", status=404)
-        if classroom_session.course_id != page.course_id or classroom_session.lesson_id != page.lesson_id:
+        if (
+            classroom_session.course_id != page.course_id
+            or classroom_session.lesson_id != page.lesson_id
+        ):
             return fail("该学习网页不属于当前课堂课时。", status=400)
         responses_query = responses_query.filter(classroom_session=classroom_session)
 
     responses = list(
-        responses_query
-        .select_related("student", "class_group", "classroom_session")
-        .order_by("-submitted_at", "-id")
+        responses_query.select_related(
+            "student", "class_group", "classroom_session"
+        ).order_by("-submitted_at", "-id")
     )
     payload = _learning_web_page_response_summary(page, responses)
     if classroom_session is not None:
@@ -2544,7 +3397,9 @@ def teacher_learning_web_page_responses(request, pk):
         form_ids = {
             str(item.get("form_id") or "")
             for item in schema.get("blocks", [])
-            if isinstance(item, dict) and item.get("type") == "form" and str(item.get("form_id") or "")
+            if isinstance(item, dict)
+            and item.get("type") == "form"
+            and str(item.get("form_id") or "")
         }
         responses_by_student: dict[int, list[LearningWebPageResponse]] = {}
         for response in responses:
@@ -2564,7 +3419,9 @@ def teacher_learning_web_page_responses(request, pk):
         started_count = 0
         for profile in profiles:
             student_responses = responses_by_student.get(profile.user_id, [])
-            submitted_form_ids = {item.form_id for item in student_responses if item.form_id}
+            submitted_form_ids = {
+                item.form_id for item in student_responses if item.form_id
+            }
             completed = bool(form_ids) and form_ids.issubset(submitted_form_ids)
             started = bool(student_responses)
             if completed:
@@ -2576,12 +3433,22 @@ def teacher_learning_web_page_responses(request, pk):
                     "student": user_summary(profile.user),
                     "student_no": profile.student_no,
                     "current_layer": profile.current_layer or "",
-                    "status": "completed" if completed else "started" if started else "pending",
-                    "status_label": "已完成" if completed else "进行中" if started else "未开始",
+                    "status": (
+                        "completed"
+                        if completed
+                        else "started"
+                        if started
+                        else "pending"
+                    ),
+                    "status_label": (
+                        "已完成" if completed else "进行中" if started else "未开始"
+                    ),
                     "submitted_form_count": len(submitted_form_ids & form_ids),
                     "form_count": len(form_ids),
                     "submission_count": len(student_responses),
-                    "last_submitted_at": student_responses[0].submitted_at if student_responses else None,
+                    "last_submitted_at": (
+                        student_responses[0].submitted_at if student_responses else None
+                    ),
                 }
             )
         total_count = len(profiles)
@@ -2590,8 +3457,12 @@ def teacher_learning_web_page_responses(request, pk):
                 "class_student_count": total_count,
                 "completed_student_count": completed_count,
                 "started_student_count": started_count,
-                "pending_student_count": max(total_count - completed_count - started_count, 0),
-                "completion_rate": round(completed_count * 100 / total_count, 1) if total_count else 0,
+                "pending_student_count": max(
+                    total_count - completed_count - started_count, 0
+                ),
+                "completion_rate": (
+                    round(completed_count * 100 / total_count, 1) if total_count else 0
+                ),
             }
         )
         payload["scope"] = {
@@ -2614,32 +3485,65 @@ def _teacher_classroom_sessions(request):
     course_id = request.GET.get("course", "").strip()
     sessions = (
         ClassroomSession.objects.filter(school=_school(request), teacher=request.user)
-        .select_related("school", "teacher", "course", "course__subject", "lesson", "class_group", "current_step", "current_step__lesson")
+        .select_related(
+            "school",
+            "teacher",
+            "course",
+            "course__subject",
+            "lesson",
+            "class_group",
+            "current_step",
+            "current_step__lesson",
+        )
         .annotate(
             activity_count=Count("activities", distinct=True),
-            open_activity_count=Count("activities", filter=Q(activities__status=ClassroomActivity.Status.OPEN), distinct=True),
+            open_activity_count=Count(
+                "activities",
+                filter=Q(activities__status=ClassroomActivity.Status.OPEN),
+                distinct=True,
+            ),
         )
         .order_by("-created_at")
     )
     if query:
-        sessions = sessions.filter(Q(title__icontains=query) | Q(course__title__icontains=query) | Q(lesson__title__icontains=query))
+        sessions = sessions.filter(
+            Q(title__icontains=query)
+            | Q(course__title__icontains=query)
+            | Q(lesson__title__icontains=query)
+        )
     if status:
         if status not in {item.value for item in ClassroomSession.Status}:
-            return None, fail("课堂状态筛选条件不正确。", errors={"status": ["课堂状态筛选条件不正确。"]}, status=400)
+            return None, fail(
+                "课堂状态筛选条件不正确。",
+                errors={"status": ["课堂状态筛选条件不正确。"]},
+                status=400,
+            )
         sessions = sessions.filter(status=status)
     if class_id:
         try:
             selected_class_id = int(class_id)
         except ValueError:
-            return None, fail("班级筛选条件不正确。", errors={"class": ["班级筛选条件不正确。"]}, status=400)
+            return None, fail(
+                "班级筛选条件不正确。",
+                errors={"class": ["班级筛选条件不正确。"]},
+                status=400,
+            )
         if selected_class_id not in set(_teacher_class_ids(request)):
-            return None, fail("无权查看该班级课堂。", errors={"class": ["无权查看该班级课堂。"]}, status=403)
+            return None, fail(
+                "无权查看该班级课堂。",
+                errors={"class": ["无权查看该班级课堂。"]},
+                status=403,
+            )
         sessions = sessions.filter(class_group_id=selected_class_id)
     if course_id:
         try:
             sessions = sessions.filter(course_id=int(course_id))
         except ValueError:
-            return None, fail("课程筛选条件不正确。", errors={"course": ["课程筛选条件不正确。"]}, status=400)
+            return None, fail(
+                "课程筛选条件不正确。",
+                errors={"course": ["课程筛选条件不正确。"]},
+                status=400,
+            )
     return sessions, None
 
 
@@ -2652,7 +3556,11 @@ def teacher_classroom_sessions(request):
         except ServiceError as exc:
             return _service_fail(exc)
         session = _teacher_classroom_session(request, session.pk)
-        return ok(classroom_session_row(session, include_activities=True), "课堂已创建", status=201)
+        return ok(
+            classroom_session_row(session, include_activities=True),
+            "课堂已创建",
+            status=201,
+        )
 
     sessions, error_response = _teacher_classroom_sessions(request)
     if error_response is not None:
@@ -2691,7 +3599,9 @@ def teacher_classroom_session_detail(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_session_start(request, pk):
     try:
-        session = start_classroom_session(request, _teacher_classroom_session(request, pk))
+        session = start_classroom_session(
+            request, _teacher_classroom_session(request, pk)
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(classroom_session_row(session), "课堂已开始")
@@ -2701,7 +3611,9 @@ def teacher_classroom_session_start(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_session_finish(request, pk):
     try:
-        session = finish_classroom_session(request, _teacher_classroom_session(request, pk))
+        session = finish_classroom_session(
+            request, _teacher_classroom_session(request, pk)
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(classroom_session_row(session), "课堂已结束")
@@ -2711,7 +3623,9 @@ def teacher_classroom_session_finish(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_session_restart(request, pk):
     try:
-        session = restart_classroom_session(request, _teacher_classroom_session(request, pk))
+        session = restart_classroom_session(
+            request, _teacher_classroom_session(request, pk)
+        )
         session = _teacher_classroom_session(request, session.pk)
     except ServiceError as exc:
         return _service_fail(exc)
@@ -2722,7 +3636,9 @@ def teacher_classroom_session_restart(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_step_open(request, pk):
     try:
-        session = set_classroom_current_step(request, _teacher_classroom_session(request, pk), request.data)
+        session = set_classroom_current_step(
+            request, _teacher_classroom_session(request, pk), request.data
+        )
         session = _teacher_classroom_session(request, session.pk)
     except ServiceError as exc:
         return _service_fail(exc)
@@ -2733,7 +3649,9 @@ def teacher_classroom_step_open(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_step_lock(request, pk):
     try:
-        session = lock_classroom_current_step(request, _teacher_classroom_session(request, pk))
+        session = lock_classroom_current_step(
+            request, _teacher_classroom_session(request, pk)
+        )
         session = _teacher_classroom_session(request, session.pk)
     except ServiceError as exc:
         return _service_fail(exc)
@@ -2744,7 +3662,9 @@ def teacher_classroom_step_lock(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_step_close(request, pk):
     try:
-        session = close_classroom_current_step(request, _teacher_classroom_session(request, pk))
+        session = close_classroom_current_step(
+            request, _teacher_classroom_session(request, pk)
+        )
         session = _teacher_classroom_session(request, session.pk)
     except ServiceError as exc:
         return _service_fail(exc)
@@ -2931,35 +3851,135 @@ def _blank_office_bytes(file_ext: str, title: str) -> bytes:
     return _blank_docx_bytes(title)
 
 
+def _group_document_key(group: ClassroomGroup) -> str:
+    return (
+        f"classroom-group-{group.id}-{group.document_version}-"
+        f"{int(group.updated_at.timestamp())}"
+    )
+
+
+def _group_document_bytes(group: ClassroomGroup) -> bytes:
+    if not group.collaboration_document:
+        return b""
+    with group.collaboration_document.storage.open(
+        group.collaboration_document.name, "rb"
+    ) as source:
+        return source.read()
+
+
+def _save_group_document_version(
+    group: ClassroomGroup,
+    *,
+    data: bytes,
+    version_no: int,
+    source: str,
+    callback_status: int | None = None,
+    callback_key: str = "",
+    verified_editor_ids: list[str] | None = None,
+    deduplicate: bool = True,
+) -> tuple[ClassroomGroupDocumentVersion, bool]:
+    file_sha256 = hashlib.sha256(data).hexdigest()
+    existing = (
+        group.document_versions.filter(file_sha256=file_sha256).first()
+        if deduplicate
+        else None
+    )
+    if existing:
+        return existing, False
+    version = ClassroomGroupDocumentVersion(
+        group=group,
+        version_no=version_no,
+        file_sha256=file_sha256,
+        file_size=len(data),
+        source=source,
+        callback_status=callback_status,
+        callback_key=callback_key[:255],
+        verified_editor_ids=list(verified_editor_ids or []),
+    )
+    filename = f"version_{version_no}.{group.document_file_ext or group.collaboration.document_type}"
+    version.file.save(filename, ContentFile(data), save=False)
+    try:
+        version.save()
+    except Exception:
+        if version.file:
+            version.file.delete(save=False)
+        raise
+    return version, True
+
+
 def _ensure_group_document(group: ClassroomGroup) -> ClassroomGroup:
     file_ext = group.collaboration.document_type
     if group.collaboration_document and group.document_file_ext == file_ext:
+        if not group.document_versions.filter(
+            version_no=group.document_version
+        ).exists():
+            _save_group_document_version(
+                group,
+                data=_group_document_bytes(group),
+                version_no=group.document_version,
+                source=ClassroomGroupDocumentVersion.Source.INITIAL,
+                deduplicate=False,
+            )
         return group
     has_existing_document = bool(group.collaboration_document)
     if group.collaboration_document:
         group.collaboration_document.delete(save=False)
     filename = f"{group.name}.{file_ext}"
-    group.collaboration_document.save(filename, ContentFile(_blank_office_bytes(file_ext, group.name)), save=False)
+    group.collaboration_document.save(
+        filename, ContentFile(_blank_office_bytes(file_ext, group.name)), save=False
+    )
     group.document_original_name = filename
     group.document_file_ext = file_ext
-    group.document_version = (group.document_version + 1) if has_existing_document else 1
-    group.save(update_fields=["collaboration_document", "document_original_name", "document_file_ext", "document_version", "updated_at"])
+    group.document_version = (
+        (group.document_version + 1) if has_existing_document else 1
+    )
+    group.save(
+        update_fields=[
+            "collaboration_document",
+            "document_original_name",
+            "document_file_ext",
+            "document_version",
+            "updated_at",
+        ]
+    )
+    _save_group_document_version(
+        group,
+        data=_group_document_bytes(group),
+        version_no=group.document_version,
+        source=ClassroomGroupDocumentVersion.Source.INITIAL,
+        deduplicate=False,
+    )
     return group
 
 
 def _classroom_group_queryset(collaboration: ClassroomGroupCollaboration):
     return (
-        collaboration.groups.annotate(used_storage_bytes=Sum("files__file_size"), file_count=Count("files", distinct=True))
+        collaboration.groups.annotate(
+            used_storage_bytes=Sum("files__file_size"),
+            file_count=Count("files", distinct=True),
+        )
         .prefetch_related(
-            Prefetch("members", queryset=ClassroomGroupMember.objects.select_related("student", "student_profile"), to_attr="prefetched_members"),
-            Prefetch("files", queryset=ClassroomGroupFile.objects.select_related("uploader"), to_attr="prefetched_files"),
+            Prefetch(
+                "members",
+                queryset=ClassroomGroupMember.objects.select_related(
+                    "student", "student_profile"
+                ),
+                to_attr="prefetched_members",
+            ),
+            Prefetch(
+                "files",
+                queryset=ClassroomGroupFile.objects.select_related("uploader"),
+                to_attr="prefetched_files",
+            ),
         )
         .select_related("leader", "collaboration", "collaboration__session")
         .order_by("group_no", "id")
     )
 
 
-def _with_prefetched_groups(collaboration: ClassroomGroupCollaboration) -> ClassroomGroupCollaboration:
+def _with_prefetched_groups(
+    collaboration: ClassroomGroupCollaboration,
+) -> ClassroomGroupCollaboration:
     collaboration.prefetched_groups = list(_classroom_group_queryset(collaboration))
     return collaboration
 
@@ -2968,12 +3988,19 @@ def _student_profiles_for_grouping(session: ClassroomSession) -> list[StudentPro
     return list(
         StudentProfile.objects.select_related("user")
         .filter(class_group=session.class_group, user__is_active=True)
-        .order_by("current_layer", "student_no", "user__display_name", "user__username", "id")
+        .order_by(
+            "current_layer", "student_no", "user__display_name", "user__username", "id"
+        )
     )
 
 
-def _profile_chunks(profiles: list[StudentProfile], group_size: int) -> list[list[StudentProfile]]:
-    return [profiles[index : index + group_size] for index in range(0, len(profiles), group_size)]
+def _profile_chunks(
+    profiles: list[StudentProfile], group_size: int
+) -> list[list[StudentProfile]]:
+    return [
+        profiles[index : index + group_size]
+        for index in range(0, len(profiles), group_size)
+    ]
 
 
 def _default_group_chunks(
@@ -2991,18 +4018,26 @@ def _default_group_chunks(
 
     buckets = {"A": [], "B": [], "C": [], "": []}
     for profile in rows:
-        layer = profile.current_layer if profile.current_layer in {"A", "B", "C"} else ""
+        layer = (
+            profile.current_layer if profile.current_layer in {"A", "B", "C"} else ""
+        )
         buckets[layer].append(profile)
 
     chunks: list[tuple[str, list[StudentProfile]]] = []
     for layer in ["A", "B", "C"]:
-        chunks.extend((layer, chunk) for chunk in _profile_chunks(buckets[layer], group_size))
+        chunks.extend(
+            (layer, chunk) for chunk in _profile_chunks(buckets[layer], group_size)
+        )
 
     unlayered = buckets[""]
-    if strategy in {
-        ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER,
-        ClassroomGroupCollaboration.GroupingStrategy.AI_LAYER,
-    } and chunks:
+    if (
+        strategy
+        in {
+            ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER,
+            ClassroomGroupCollaboration.GroupingStrategy.AI_LAYER,
+        }
+        and chunks
+    ):
         index = 0
         for profile in unlayered:
             placed = False
@@ -3026,6 +4061,9 @@ def _delete_existing_group_files(collaboration: ClassroomGroupCollaboration) -> 
         if file.attachment:
             file.attachment.delete(save=False)
     for group in collaboration.groups.all():
+        for version in group.document_versions.all():
+            if version.file:
+                version.file.delete(save=False)
         if group.collaboration_document:
             group.collaboration_document.delete(save=False)
     collaboration.groups.all().delete()
@@ -3043,15 +4081,10 @@ def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> No
         strategy=collaboration.grouping_strategy,
         seed=collaboration.session_id,
     )
-    layer_counts: dict[str, int] = {}
     for group_no, (layer_hint, members) in enumerate(chunks, start=1):
         if not members:
             continue
-        if layer_hint:
-            layer_counts[layer_hint] = layer_counts.get(layer_hint, 0) + 1
-            group_name = f"{layer_hint}层第{layer_counts[layer_hint]}组"
-        else:
-            group_name = f"第{group_no}组"
+        group_name = f"第{group_no}组"
         leader = members[0].user
         group = ClassroomGroup.objects.create(
             collaboration=collaboration,
@@ -3067,7 +4100,11 @@ def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> No
                     group=group,
                     student=profile.user,
                     student_profile=profile,
-                    role=ClassroomGroupMember.Role.LEADER if index == 0 else ClassroomGroupMember.Role.MEMBER,
+                    role=(
+                        ClassroomGroupMember.Role.LEADER
+                        if index == 0
+                        else ClassroomGroupMember.Role.MEMBER
+                    ),
                 )
                 for index, profile in enumerate(members)
             ]
@@ -3075,21 +4112,51 @@ def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> No
         _ensure_group_document(group)
 
 
-def _setup_classroom_group_collaboration(request, session: ClassroomSession, data) -> ClassroomGroupCollaboration:
+def _setup_classroom_group_collaboration(
+    request, session: ClassroomSession, data
+) -> ClassroomGroupCollaboration:
+    if session.status != ClassroomSession.Status.RUNNING:
+        raise ServiceError("只有进行中的课堂可以开启小组合作。", status=409)
     group_size = _int_in_range(data.get("group_size"), 4, 2, 12)
     storage_quota_mb = _int_in_range(data.get("storage_quota_mb"), 100, 10, 2048)
-    strategy = str(data.get("grouping_strategy") or ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER).strip()
-    if strategy not in {item.value for item in ClassroomGroupCollaboration.GroupingStrategy}:
-        raise ServiceError("分组策略不正确。", errors={"grouping_strategy": ["分组策略不正确。"]}, status=400)
-    document_type = str(data.get("document_type") or ClassroomGroupCollaboration.DocumentType.DOCX).strip().lower()
-    if document_type not in {item.value for item in ClassroomGroupCollaboration.DocumentType}:
-        raise ServiceError("协作文档类型不正确。", errors={"document_type": ["协作文档类型不正确。"]}, status=400)
-    allow_student_upload = str(data.get("allow_student_upload", "true")).lower() not in {"0", "false", "no"}
-    allow_onlyoffice_edit = str(data.get("allow_onlyoffice_edit", "true")).lower() not in {"0", "false", "no"}
+    strategy = str(
+        data.get("grouping_strategy")
+        or ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER
+    ).strip()
+    if strategy not in {
+        item.value for item in ClassroomGroupCollaboration.GroupingStrategy
+    }:
+        raise ServiceError(
+            "分组策略不正确。",
+            errors={"grouping_strategy": ["分组策略不正确。"]},
+            status=400,
+        )
+    document_type = (
+        str(data.get("document_type") or ClassroomGroupCollaboration.DocumentType.DOCX)
+        .strip()
+        .lower()
+    )
+    if document_type not in {
+        item.value for item in ClassroomGroupCollaboration.DocumentType
+    }:
+        raise ServiceError(
+            "协作文档类型不正确。",
+            errors={"document_type": ["协作文档类型不正确。"]},
+            status=400,
+        )
+    allow_student_upload = str(
+        data.get("allow_student_upload", "true")
+    ).lower() not in {"0", "false", "no"}
+    allow_onlyoffice_edit = str(
+        data.get("allow_onlyoffice_edit", "true")
+    ).lower() not in {"0", "false", "no"}
     regenerate = str(data.get("regenerate", "")).lower() in {"1", "true", "yes"}
 
     with transaction.atomic():
-        collaboration, created = ClassroomGroupCollaboration.objects.select_for_update().get_or_create(
+        (
+            collaboration,
+            created,
+        ) = ClassroomGroupCollaboration.objects.select_for_update().get_or_create(
             session=session,
             defaults={
                 "created_by": request.user,
@@ -3102,8 +4169,29 @@ def _setup_classroom_group_collaboration(request, session: ClassroomSession, dat
             },
         )
         has_groups = collaboration.groups.exists()
-        if has_groups and collaboration.document_type != document_type and not regenerate:
-            raise ServiceError("已有小组文档，如需切换 Word/PPT/Excel 类型，请勾选重新分组。", status=400)
+        if (
+            regenerate
+            and has_groups
+            and group_collaboration_has_student_activity(collaboration)
+        ):
+            raise ServiceError(
+                "已有打开、保存或上传记录，不能重新分组；请保留本次课堂证据。",
+                status=409,
+            )
+        grouping_configuration_changed = has_groups and (
+            collaboration.group_size != group_size
+            or collaboration.grouping_strategy != strategy
+            or collaboration.document_type != document_type
+        )
+        if grouping_configuration_changed and not regenerate:
+            raise ServiceError(
+                "已有分组；修改人数、策略或文档类型时必须执行重新分组。",
+                status=400,
+            )
+        collaboration_was_open = (
+            collaboration.is_enabled
+            and collaboration.status == ClassroomGroupCollaboration.Status.OPEN
+        )
         collaboration.group_size = group_size
         collaboration.grouping_strategy = strategy
         collaboration.document_type = document_type
@@ -3112,15 +4200,33 @@ def _setup_classroom_group_collaboration(request, session: ClassroomSession, dat
         collaboration.allow_onlyoffice_edit = allow_onlyoffice_edit
         collaboration.is_enabled = True
         collaboration.status = ClassroomGroupCollaboration.Status.OPEN
-        collaboration.opened_at = collaboration.opened_at or timezone.now()
+        if not collaboration_was_open:
+            collaboration.opened_at = timezone.now()
         collaboration.closed_at = None
         collaboration.save()
+
+        if regenerate and has_groups:
+            try:
+                withdraw_group_collaboration_opportunities(
+                    collaboration=collaboration,
+                    actor=request.user,
+                    reason_code="group_regenerated",
+                )
+            except GroupCollaborationEventError as exc:
+                raise ServiceError(exc.message, status=400) from exc
 
         if created or regenerate or not has_groups:
             _generate_classroom_groups(collaboration)
         else:
             for group in collaboration.groups.all():
                 _ensure_group_document(group)
+        try:
+            release_group_collaboration_opportunities(
+                collaboration=collaboration,
+                actor=request.user,
+            )
+        except GroupCollaborationEventError as exc:
+            raise ServiceError(exc.message, status=400) from exc
 
     write_audit(
         request,
@@ -3139,10 +4245,14 @@ def _setup_classroom_group_collaboration(request, session: ClassroomSession, dat
     return _with_prefetched_groups(collaboration)
 
 
-def _teacher_classroom_group(request, session: ClassroomSession, group_id) -> ClassroomGroup:
+def _teacher_classroom_group(
+    request, session: ClassroomSession, group_id
+) -> ClassroomGroup:
     try:
         group = (
-            ClassroomGroup.objects.select_related("collaboration", "collaboration__session", "leader")
+            ClassroomGroup.objects.select_related(
+                "collaboration", "collaboration__session", "leader"
+            )
             .filter(pk=int(group_id), collaboration__session=session)
             .first()
         )
@@ -3157,17 +4267,27 @@ def _group_storage_used(group: ClassroomGroup) -> int:
     return group.files.aggregate(total=Sum("file_size")).get("total") or 0
 
 
-def _validate_group_file_upload(collaboration: ClassroomGroupCollaboration, group: ClassroomGroup, uploaded_file) -> tuple[str, int]:
+def _validate_group_file_upload(
+    collaboration: ClassroomGroupCollaboration, group: ClassroomGroup, uploaded_file
+) -> tuple[str, int]:
     if uploaded_file is None:
-        raise ServiceError("请选择要上传的小组文件。", errors={"attachment": ["请选择要上传的小组文件。"]}, status=400)
+        raise ServiceError(
+            "请选择要上传的小组文件。",
+            errors={"attachment": ["请选择要上传的小组文件。"]},
+            status=400,
+        )
     file_size = int(getattr(uploaded_file, "size", 0) or 0)
     if file_size <= 0:
-        raise ServiceError("上传文件为空。", errors={"attachment": ["上传文件为空。"]}, status=400)
+        raise ServiceError(
+            "上传文件为空。", errors={"attachment": ["上传文件为空。"]}, status=400
+        )
     ext = clean_resource_ext(Path(getattr(uploaded_file, "name", "")).suffix)
     if ext not in GROUP_FILE_ALLOWED_EXTENSIONS:
         raise ServiceError(
             "文件格式不在小组共享区允许范围内。",
-            errors={"attachment": ["支持 Office、PDF、压缩包、图片、音视频和常见文本文件。"]},
+            errors={
+                "attachment": ["支持 Office、PDF、压缩包、图片、音视频和常见文本文件。"]
+            },
             status=400,
         )
     quota_bytes = collaboration.storage_quota_mb * 1024 * 1024
@@ -3182,14 +4302,20 @@ def _validate_group_file_upload(collaboration: ClassroomGroupCollaboration, grou
     return ext, file_size
 
 
-def _save_group_file(request, group: ClassroomGroup, uploaded_file, description: str = "") -> ClassroomGroupFile:
+def _save_group_file(
+    request, group: ClassroomGroup, uploaded_file, description: str = ""
+) -> ClassroomGroupFile:
     collaboration = group.collaboration
-    file_ext, file_size = _validate_group_file_upload(collaboration, group, uploaded_file)
+    file_ext, file_size = _validate_group_file_upload(
+        collaboration, group, uploaded_file
+    )
     return ClassroomGroupFile.objects.create(
         group=group,
         uploader=request.user,
         attachment=uploaded_file,
-        original_name=Path(getattr(uploaded_file, "name", "") or "attachment").name[:255],
+        original_name=Path(getattr(uploaded_file, "name", "") or "attachment").name[
+            :255
+        ],
         file_ext=file_ext,
         file_size=file_size,
         description=description[:255],
@@ -3204,11 +4330,21 @@ def teacher_classroom_group_collaboration(request, pk):
     except ServiceError as exc:
         return _service_fail(exc)
     collaboration = (
-        ClassroomGroupCollaboration.objects.select_related("session", "session__school", "session__course", "session__lesson", "session__class_group")
+        ClassroomGroupCollaboration.objects.select_related(
+            "session",
+            "session__school",
+            "session__course",
+            "session__lesson",
+            "session__class_group",
+        )
         .filter(session=session)
         .first()
     )
-    return ok(classroom_group_collaboration_row(_with_prefetched_groups(collaboration)) if collaboration else None)
+    return ok(
+        classroom_group_collaboration_row(_with_prefetched_groups(collaboration))
+        if collaboration
+        else None
+    )
 
 
 @api_view(["POST"])
@@ -3216,7 +4352,9 @@ def teacher_classroom_group_collaboration(request, pk):
 def teacher_classroom_group_collaboration_setup(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
-        collaboration = _setup_classroom_group_collaboration(request, session, request.data)
+        collaboration = _setup_classroom_group_collaboration(
+            request, session, request.data
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(classroom_group_collaboration_row(collaboration), "小组合作已开启")
@@ -3227,15 +4365,29 @@ def teacher_classroom_group_collaboration_setup(request, pk):
 def teacher_classroom_group_collaboration_close(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
-        collaboration = ClassroomGroupCollaboration.objects.filter(session=session).first()
-        if collaboration is None:
-            raise ServiceError("当前课堂尚未开启小组合作。", status=404)
+        with transaction.atomic():
+            collaboration = (
+                ClassroomGroupCollaboration.objects.select_for_update()
+                .filter(session=session)
+                .first()
+            )
+            if collaboration is None:
+                raise ServiceError("当前课堂尚未开启小组合作。", status=404)
+            withdraw_group_collaboration_opportunities(
+                collaboration=collaboration,
+                actor=request.user,
+                reason_code="group_collaboration_closed",
+            )
+            collaboration.is_enabled = False
+            collaboration.status = ClassroomGroupCollaboration.Status.CLOSED
+            collaboration.closed_at = timezone.now()
+            collaboration.save(
+                update_fields=["is_enabled", "status", "closed_at", "updated_at"]
+            )
     except ServiceError as exc:
         return _service_fail(exc)
-    collaboration.is_enabled = False
-    collaboration.status = ClassroomGroupCollaboration.Status.CLOSED
-    collaboration.closed_at = timezone.now()
-    collaboration.save(update_fields=["is_enabled", "status", "closed_at", "updated_at"])
+    except GroupCollaborationEventError as exc:
+        return fail(exc.message, status=400)
     write_audit(
         request,
         "teacher.classroom.group_collaboration.close",
@@ -3243,7 +4395,10 @@ def teacher_classroom_group_collaboration_close(request, pk):
         target_type="classroom_session",
         target_id=session.id,
     )
-    return ok(classroom_group_collaboration_row(_with_prefetched_groups(collaboration)), "小组合作已关闭")
+    return ok(
+        classroom_group_collaboration_row(_with_prefetched_groups(collaboration)),
+        "小组合作已关闭",
+    )
 
 
 @api_view(["GET", "POST"])
@@ -3256,9 +4411,25 @@ def teacher_classroom_group_files(request, pk, group_id):
     except ServiceError as exc:
         return _service_fail(exc)
     if request.method == "GET":
-        return ok([classroom_group_file_row(file) for file in group.files.select_related("uploader").all()])
+        return ok(
+            [
+                classroom_group_file_row(file)
+                for file in group.files.select_related("uploader").all()
+            ]
+        )
+    if (
+        session.status != ClassroomSession.Status.RUNNING
+        or not group.collaboration.is_enabled
+        or group.collaboration.status != ClassroomGroupCollaboration.Status.OPEN
+    ):
+        return fail("只有进行中的小组合作可以上传共享文件。", status=409)
     try:
-        file = _save_group_file(request, group, request.FILES.get("attachment"), str(request.data.get("description") or "").strip())
+        file = _save_group_file(
+            request,
+            group,
+            request.FILES.get("attachment"),
+            str(request.data.get("description") or "").strip(),
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(classroom_group_file_row(file), "小组文件已上传", status=201)
@@ -3331,19 +4502,20 @@ def _clean_evaluation_criteria(raw_items, *, required: bool, label: str) -> list
     if required and not rows:
         errors.append(f"开启{label}后至少需要 1 个评价项。")
     if errors:
-        raise ServiceError("评价内容校验失败。", errors={"criteria": errors}, status=400)
+        raise ServiceError(
+            "评价内容校验失败。", errors={"criteria": errors}, status=400
+        )
     return sorted(rows, key=lambda row: (row["sort_order"], row["id"]))
 
 
-def _open_group_collaboration(session: ClassroomSession) -> ClassroomGroupCollaboration | None:
-    return (
-        ClassroomGroupCollaboration.objects.filter(
-            session=session,
-            is_enabled=True,
-            status=ClassroomGroupCollaboration.Status.OPEN,
-        )
-        .first()
-    )
+def _open_group_collaboration(
+    session: ClassroomSession,
+) -> ClassroomGroupCollaboration | None:
+    return ClassroomGroupCollaboration.objects.filter(
+        session=session,
+        is_enabled=True,
+        status=ClassroomGroupCollaboration.Status.OPEN,
+    ).first()
 
 
 def _classroom_student_profiles(session: ClassroomSession) -> list[StudentProfile]:
@@ -3375,7 +4547,9 @@ def _course_class_group(course: Course, class_group_id=None) -> ClassGroup | Non
     return class_groups[0] if class_groups else None
 
 
-def _course_student_profiles(course: Course, class_group: ClassGroup | None) -> list[StudentProfile]:
+def _course_student_profiles(
+    course: Course, class_group: ClassGroup | None
+) -> list[StudentProfile]:
     if class_group is None:
         return []
     return list(
@@ -3388,11 +4562,15 @@ def _course_student_profiles(course: Course, class_group: ClassGroup | None) -> 
 def _evaluation_student_row(profile: StudentProfile) -> dict:
     return {
         "student": account_row(profile.user),
-        "profile": student_profile_summary(profile),
+        "profile": teacher_student_profile_summary(profile),
     }
 
 
-def _validate_evaluation_ratings(config: ClassroomEvaluationConfig, evaluation_type: str, ratings) -> dict[str, int]:
+def _validate_evaluation_ratings(
+    config: ClassroomEvaluationConfig | ClassroomEvaluationConfigVersion,
+    evaluation_type: str,
+    ratings,
+) -> dict[str, int]:
     field = _evaluation_criteria_field(evaluation_type)
     criteria = classroom_evaluation_config_row(config).get(field, [])
     criterion_ids = {item["id"] for item in criteria}
@@ -3420,7 +4598,9 @@ def _validate_evaluation_ratings(config: ClassroomEvaluationConfig, evaluation_t
     return cleaned
 
 
-def _evaluation_submission_average(criteria: list[dict], submissions: list[ClassroomEvaluationSubmission]) -> dict:
+def _evaluation_submission_average(
+    criteria: list[dict], submissions: list[ClassroomEvaluationSubmission]
+) -> dict:
     criterion_rows = []
     values = []
     for criterion in criteria:
@@ -3439,7 +4619,11 @@ def _evaluation_submission_average(criteria: list[dict], submissions: list[Class
             {
                 "id": criterion["id"],
                 "title": criterion["title"],
-                "average": round(sum(criterion_values) / len(criterion_values), 2) if criterion_values else None,
+                "average": (
+                    round(sum(criterion_values) / len(criterion_values), 2)
+                    if criterion_values
+                    else None
+                ),
                 "count": len(criterion_values),
             }
         )
@@ -3447,6 +4631,25 @@ def _evaluation_submission_average(criteria: list[dict], submissions: list[Class
         "average": round(sum(values) / len(values), 2) if values else None,
         "criteria": criterion_rows,
     }
+
+
+def _latest_evaluation_submissions(
+    submissions: list[ClassroomEvaluationSubmission],
+) -> list[ClassroomEvaluationSubmission]:
+    rows = []
+    seen = set()
+    for submission in submissions:
+        key = (
+            submission.session_id,
+            submission.evaluation_type,
+            submission.evaluator_id,
+            submission.target_id,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(submission)
+    return rows
 
 
 def _peer_possible_count(session: ClassroomSession) -> int:
@@ -3460,24 +4663,40 @@ def _peer_possible_count(session: ClassroomSession) -> int:
     return count
 
 
-def _teacher_evaluation_payload(session: ClassroomSession, config: ClassroomEvaluationConfig | None = None) -> dict:
-    config = config or ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+def _teacher_evaluation_payload(
+    session: ClassroomSession,
+    config: ClassroomEvaluationConfig | ClassroomEvaluationConfigVersion | None = None,
+) -> dict:
+    config = (
+        config
+        or session.evaluation_config_version
+        or ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+    )
     config_row = classroom_evaluation_config_row(config)
     runtime_enabled = bool(session.evaluation_enabled)
     profiles = _classroom_student_profiles(session)
     submissions = list(
-        ClassroomEvaluationSubmission.objects.select_related("evaluator", "target", "group")
+        ClassroomEvaluationSubmission.objects.select_related(
+            "evaluator", "target", "group", "rubric_version"
+        )
         .filter(course=session.course, session=session)
         .order_by("-updated_at", "-id")
     )
+    current_submissions = _latest_evaluation_submissions(submissions)
     submissions_by_type = {
-        evaluation_type: [item for item in submissions if item.evaluation_type == evaluation_type]
+        evaluation_type: [
+            item
+            for item in current_submissions
+            if item.evaluation_type == evaluation_type
+        ]
         for evaluation_type in EVALUATION_TYPE_LABELS
     }
     summary = {}
     totals = {
         ClassroomEvaluationSubmission.EvaluationType.SELF: len(profiles),
-        ClassroomEvaluationSubmission.EvaluationType.PEER: _peer_possible_count(session),
+        ClassroomEvaluationSubmission.EvaluationType.PEER: _peer_possible_count(
+            session
+        ),
         ClassroomEvaluationSubmission.EvaluationType.TEACHER: len(profiles),
     }
     for evaluation_type, label in EVALUATION_TYPE_LABELS.items():
@@ -3492,8 +4711,13 @@ def _teacher_evaluation_payload(session: ClassroomSession, config: ClassroomEval
         }
 
     teacher_by_target = {}
-    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.TEACHER]:
-        if item.evaluator_id == session.teacher_id and item.target_id not in teacher_by_target:
+    for item in submissions_by_type[
+        ClassroomEvaluationSubmission.EvaluationType.TEACHER
+    ]:
+        if (
+            item.evaluator_id == session.teacher_id
+            and item.target_id not in teacher_by_target
+        ):
             teacher_by_target[item.target_id] = item
     self_by_target = {}
     for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.SELF]:
@@ -3510,10 +4734,20 @@ def _teacher_evaluation_payload(session: ClassroomSession, config: ClassroomEval
         student_rows.append(
             {
                 **_evaluation_student_row(profile),
-                "self_submission": classroom_evaluation_submission_row(self_by_target.get(profile.user_id)),
-                "teacher_submission": classroom_evaluation_submission_row(teacher_by_target.get(profile.user_id)),
+                "self_submission": classroom_evaluation_submission_row(
+                    self_by_target.get(profile.user_id)
+                ),
+                "teacher_submission": classroom_evaluation_submission_row(
+                    teacher_by_target.get(profile.user_id)
+                ),
                 "peer_submission_count": len(peer_submissions),
-                "peer_average": _evaluation_submission_average(peer_criteria, peer_submissions)["average"] if peer_criteria else None,
+                "peer_average": (
+                    _evaluation_submission_average(peer_criteria, peer_submissions)[
+                        "average"
+                    ]
+                    if peer_criteria
+                    else None
+                ),
             }
         )
 
@@ -3523,7 +4757,10 @@ def _teacher_evaluation_payload(session: ClassroomSession, config: ClassroomEval
         "config": config_row,
         "summary": summary,
         "students": student_rows,
-        "recent_submissions": [classroom_evaluation_submission_row(item) for item in submissions[:50]],
+        "recent_submissions": [
+            classroom_evaluation_submission_row(item)
+            for item in current_submissions[:50]
+        ],
         "peer_available": _open_group_collaboration(session) is not None,
     }
 
@@ -3541,18 +4778,27 @@ def _teacher_course_evaluation_payload(
     profiles = _course_student_profiles(course, class_group)
     target_ids = [profile.user_id for profile in profiles]
     submissions = list(
-        ClassroomEvaluationSubmission.objects.select_related("evaluator", "target", "group", "session")
+        ClassroomEvaluationSubmission.objects.select_related(
+            "evaluator", "target", "group", "session", "rubric_version"
+        )
         .filter(course=course, target_id__in=target_ids)
         .order_by("-updated_at", "-id")
     )
+    current_submissions = _latest_evaluation_submissions(submissions)
     submissions_by_type = {
-        evaluation_type: [item for item in submissions if item.evaluation_type == evaluation_type]
+        evaluation_type: [
+            item
+            for item in current_submissions
+            if item.evaluation_type == evaluation_type
+        ]
         for evaluation_type in EVALUATION_TYPE_LABELS
     }
     summary = {}
     totals = {
         ClassroomEvaluationSubmission.EvaluationType.SELF: len(profiles),
-        ClassroomEvaluationSubmission.EvaluationType.PEER: len(submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.PEER]),
+        ClassroomEvaluationSubmission.EvaluationType.PEER: len(
+            submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.PEER]
+        ),
         ClassroomEvaluationSubmission.EvaluationType.TEACHER: len(profiles),
     }
     for evaluation_type, label in EVALUATION_TYPE_LABELS.items():
@@ -3567,8 +4813,14 @@ def _teacher_course_evaluation_payload(
         }
 
     teacher_by_target = {}
-    for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.TEACHER]:
-        if item.evaluator_id == course.teacher_id and item.session_id is None and item.target_id not in teacher_by_target:
+    for item in submissions_by_type[
+        ClassroomEvaluationSubmission.EvaluationType.TEACHER
+    ]:
+        if (
+            item.evaluator_id == course.teacher_id
+            and item.session_id is None
+            and item.target_id not in teacher_by_target
+        ):
             teacher_by_target[item.target_id] = item
     self_by_target = {}
     for item in submissions_by_type[ClassroomEvaluationSubmission.EvaluationType.SELF]:
@@ -3585,10 +4837,20 @@ def _teacher_course_evaluation_payload(
         student_rows.append(
             {
                 **_evaluation_student_row(profile),
-                "self_submission": classroom_evaluation_submission_row(self_by_target.get(profile.user_id)),
-                "teacher_submission": classroom_evaluation_submission_row(teacher_by_target.get(profile.user_id)),
+                "self_submission": classroom_evaluation_submission_row(
+                    self_by_target.get(profile.user_id)
+                ),
+                "teacher_submission": classroom_evaluation_submission_row(
+                    teacher_by_target.get(profile.user_id)
+                ),
                 "peer_submission_count": len(peer_submissions),
-                "peer_average": _evaluation_submission_average(peer_criteria, peer_submissions)["average"] if peer_criteria else None,
+                "peer_average": (
+                    _evaluation_submission_average(peer_criteria, peer_submissions)[
+                        "average"
+                    ]
+                    if peer_criteria
+                    else None
+                ),
             }
         )
 
@@ -3599,18 +4861,29 @@ def _teacher_course_evaluation_payload(
         "config": config_row,
         "summary": summary,
         "students": student_rows,
-        "recent_submissions": [classroom_evaluation_submission_row(item) for item in submissions[:50]],
+        "recent_submissions": [
+            classroom_evaluation_submission_row(item)
+            for item in current_submissions[:50]
+        ],
         "peer_available": False,
     }
 
 
-def _save_course_evaluation_config(request, course: Course, data) -> ClassroomEvaluationConfig:
+def _save_course_evaluation_config(
+    request, course: Course, data
+) -> ClassroomEvaluationConfig:
     enable_self = _bool_value(data.get("enable_self", False))
     enable_peer = _bool_value(data.get("enable_peer", False))
     enable_teacher = _bool_value(data.get("enable_teacher", False))
-    self_criteria = _clean_evaluation_criteria(data.get("self_criteria"), required=enable_self, label="自评")
-    peer_criteria = _clean_evaluation_criteria(data.get("peer_criteria"), required=enable_peer, label="互评")
-    teacher_criteria = _clean_evaluation_criteria(data.get("teacher_criteria"), required=enable_teacher, label="师评")
+    self_criteria = _clean_evaluation_criteria(
+        data.get("self_criteria"), required=enable_self, label="自评"
+    )
+    peer_criteria = _clean_evaluation_criteria(
+        data.get("peer_criteria"), required=enable_peer, label="互评"
+    )
+    teacher_criteria = _clean_evaluation_criteria(
+        data.get("teacher_criteria"), required=enable_teacher, label="师评"
+    )
     enable_self = bool(enable_self or self_criteria)
     enable_peer = bool(enable_peer or peer_criteria)
     enable_teacher = bool(enable_teacher or teacher_criteria)
@@ -3628,6 +4901,7 @@ def _save_course_evaluation_config(request, course: Course, data) -> ClassroomEv
     if (enable_self or enable_peer or enable_teacher) and config.opened_at is None:
         config.opened_at = timezone.now()
     config.save()
+    publish_evaluation_config_version(config=config, actor=request.user)
     write_audit(
         request,
         "teacher.course.evaluation.save",
@@ -3663,19 +4937,51 @@ def teacher_classroom_evaluation(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
         if request.method in {"POST", "PATCH"}:
-            config = ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+            config = ClassroomEvaluationConfig.objects.filter(
+                course=session.course
+            ).first()
             if "evaluation_enabled" in request.data:
                 enabled = _bool_value(request.data.get("evaluation_enabled", False))
                 if enabled and session.status != ClassroomSession.Status.RUNNING:
                     raise ServiceError("请先开启课堂，再开放评价。", status=400)
                 if enabled and _configured_evaluation_type_count(config) == 0:
-                    raise ServiceError("请先回到课时设计设置并启用至少一类评价项。", status=400)
-                session.evaluation_enabled = enabled
-                update_fields = ["evaluation_enabled", "updated_at"]
-                if enabled and session.evaluation_opened_at is None:
-                    session.evaluation_opened_at = timezone.now()
-                    update_fields.append("evaluation_opened_at")
-                session.save(update_fields=update_fields)
+                    raise ServiceError(
+                        "请先回到课时设计设置并启用至少一类评价项。", status=400
+                    )
+                with transaction.atomic():
+                    session = ClassroomSession.objects.select_for_update().get(
+                        pk=session.pk
+                    )
+                    was_enabled = session.evaluation_enabled
+                    version = session.evaluation_config_version
+                    if enabled and version is None:
+                        version = publish_evaluation_config_version(
+                            config=config, actor=request.user
+                        )
+                        session.evaluation_config_version = version
+                    session.evaluation_enabled = enabled
+                    update_fields = [
+                        "evaluation_enabled",
+                        "evaluation_config_version",
+                        "updated_at",
+                    ]
+                    if enabled and not was_enabled:
+                        session.evaluation_opened_at = timezone.now()
+                        update_fields.append("evaluation_opened_at")
+                    session.save(update_fields=update_fields)
+                    if enabled:
+                        release_classroom_evaluation_opportunities(
+                            session=session,
+                            actor=request.user,
+                            version=version,
+                            occurred_at=session.evaluation_opened_at,
+                        )
+                    elif was_enabled:
+                        withdraw_classroom_evaluation_opportunities(
+                            session=session,
+                            actor=request.user,
+                            reason_code="evaluation_closed",
+                        )
                 write_audit(
                     request,
                     "teacher.classroom.evaluation.toggle",
@@ -3690,13 +4996,24 @@ def teacher_classroom_evaluation(request, pk):
                     },
                 )
                 return ok(
-                    _teacher_evaluation_payload(session, config),
+                    _teacher_evaluation_payload(
+                        session, session.evaluation_config_version or config
+                    ),
                     "课堂评价已开启。" if enabled else "课堂评价已关闭。",
                 )
-            config = _save_course_evaluation_config(request, session.course, request.data)
-            return ok(_teacher_evaluation_payload(session, config), "课堂评价设置已保存。")
+            config = _save_course_evaluation_config(
+                request, session.course, request.data
+            )
+            return ok(
+                _teacher_evaluation_payload(
+                    session, session.evaluation_config_version or config
+                ),
+                "课堂评价设置已保存。",
+            )
     except ServiceError as exc:
         return _service_fail(exc)
+    except EvaluationEventError as exc:
+        return fail(exc.message, status=400)
     return ok(_teacher_evaluation_payload(session))
 
 
@@ -3705,7 +5022,9 @@ def teacher_classroom_evaluation(request, pk):
 def teacher_classroom_evaluation_ai_generate(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
-        payload = generate_classroom_evaluation_criteria_with_ai(request, session, request.data)
+        payload = generate_classroom_evaluation_criteria_with_ai(
+            request, session, request.data
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(payload, "AI 已生成评价项草稿，请教师确认后保存。")
@@ -3716,58 +5035,61 @@ def teacher_classroom_evaluation_ai_generate(request, pk):
 def teacher_classroom_evaluation_submit(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
-        config = ClassroomEvaluationConfig.objects.filter(course=session.course).first()
-        config_row = classroom_evaluation_config_row(config)
-        if config is None or not config_row["enable_teacher"]:
+        version = session.evaluation_config_version
+        if not session.evaluation_enabled or version is None:
+            raise ServiceError("本课堂尚未开启评价。", status=400)
+        config_row = classroom_evaluation_config_row(version)
+        if not config_row["enable_teacher"]:
             raise ServiceError("本课堂尚未开启师评。", status=400)
         try:
             target_id = int(request.data.get("target"))
         except (TypeError, ValueError):
-            raise ServiceError("请选择要评价的学生。", errors={"target": ["请选择学生。"]}, status=400)
+            raise ServiceError(
+                "请选择要评价的学生。", errors={"target": ["请选择学生。"]}, status=400
+            )
         profile = (
             StudentProfile.objects.select_related("user")
-            .filter(user_id=target_id, class_group=session.class_group, user__is_active=True)
+            .filter(
+                user_id=target_id, class_group=session.class_group, user__is_active=True
+            )
             .first()
         )
         if profile is None:
             raise ServiceError("学生不属于当前课堂班级。", status=404)
-        ratings = _validate_evaluation_ratings(config, ClassroomEvaluationSubmission.EvaluationType.TEACHER, request.data.get("ratings"))
+        ratings = _validate_evaluation_ratings(
+            version,
+            ClassroomEvaluationSubmission.EvaluationType.TEACHER,
+            request.data.get("ratings"),
+        )
         comment = str(request.data.get("comment") or "").strip()
         if len(comment) > 1000:
-            raise ServiceError("评价备注不能超过 1000 个字符。", errors={"comment": ["评价备注不能超过 1000 个字符。"]}, status=400)
-        submission, _ = ClassroomEvaluationSubmission.objects.update_or_create(
+            raise ServiceError(
+                "评价备注不能超过 1000 个字符。",
+                errors={"comment": ["评价备注不能超过 1000 个字符。"]},
+                status=400,
+            )
+        append_evaluation_submission(
             course=session.course,
             class_group=session.class_group,
             session=session,
             evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             evaluator=request.user,
             target=profile.user,
-            defaults={"ratings": ratings, "comment": comment, "group": None},
-        )
-        LearningEvent.objects.create(
-            actor=request.user,
-            class_group=session.class_group,
-            course=session.course,
-            lesson=session.lesson,
-            event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
-            object_type="classroom_evaluation",
-            object_id=str(submission.id),
-            metadata={
-                "action": "teacher_evaluation_submit",
-                "classroom_session": session.id,
-                "target_id": profile.user_id,
-                "ratings": ratings,
-                "comment": comment,
-                "ai_feature": "classroom_teacher_evaluation",
-            },
-            occurred_at=timezone.now(),
+            rubric_version=version,
+            ratings=ratings,
+            comment=comment,
+            group=None,
         )
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok(_teacher_evaluation_payload(session, config), "师评已保存。")
+    except EvaluationEventError as exc:
+        return fail(exc.message, status=400)
+    return ok(_teacher_evaluation_payload(session, version), "师评已保存。")
 
 
-def _teacher_course_evaluation_class_group(request, course: Course) -> ClassGroup | None:
+def _teacher_course_evaluation_class_group(
+    request, course: Course
+) -> ClassGroup | None:
     raw_value = request.GET.get("class_group")
     if request.method in {"POST", "PATCH"}:
         raw_value = request.data.get("class_group", raw_value)
@@ -3782,7 +5104,12 @@ def teacher_course_evaluation(request, pk):
         class_group = _teacher_course_evaluation_class_group(request, course)
         if request.method in {"POST", "PATCH"}:
             config = _save_course_evaluation_config(request, course, request.data)
-            return ok(_teacher_course_evaluation_payload(course, class_group=class_group, config=config), "课程评价设置已保存。")
+            return ok(
+                _teacher_course_evaluation_payload(
+                    course, class_group=class_group, config=config
+                ),
+                "课程评价设置已保存。",
+            )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(_teacher_course_evaluation_payload(course, class_group=class_group))
@@ -3793,7 +5120,9 @@ def teacher_course_evaluation(request, pk):
 def teacher_course_evaluation_ai_generate(request, pk):
     try:
         course = _teacher_course(request, pk)
-        payload = generate_classroom_evaluation_criteria_with_ai(request, None, request.data, course=course)
+        payload = generate_classroom_evaluation_criteria_with_ai(
+            request, None, request.data, course=course
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(payload, "AI 已生成评价项草稿，请教师确认后保存。")
@@ -3806,7 +5135,11 @@ def teacher_course_evaluation_submit(request, pk):
         course = _teacher_course(request, pk)
         class_group = _teacher_course_evaluation_class_group(request, course)
         if class_group is None:
-            raise ServiceError("请先为课程绑定班级。", errors={"class_group": ["课程暂无可评价班级。"]}, status=400)
+            raise ServiceError(
+                "请先为课程绑定班级。",
+                errors={"class_group": ["课程暂无可评价班级。"]},
+                status=400,
+            )
         config = ClassroomEvaluationConfig.objects.filter(course=course).first()
         config_row = classroom_evaluation_config_row(config)
         if config is None or not config_row["enable_teacher"]:
@@ -3814,7 +5147,9 @@ def teacher_course_evaluation_submit(request, pk):
         try:
             target_id = int(request.data.get("target"))
         except (TypeError, ValueError):
-            raise ServiceError("请选择要评价的学生。", errors={"target": ["请选择学生。"]}, status=400)
+            raise ServiceError(
+                "请选择要评价的学生。", errors={"target": ["请选择学生。"]}, status=400
+            )
         profile = (
             StudentProfile.objects.select_related("user")
             .filter(user_id=target_id, class_group=class_group, user__is_active=True)
@@ -3822,52 +5157,66 @@ def teacher_course_evaluation_submit(request, pk):
         )
         if profile is None:
             raise ServiceError("学生不属于当前课程班级。", status=404)
-        ratings = _validate_evaluation_ratings(config, ClassroomEvaluationSubmission.EvaluationType.TEACHER, request.data.get("ratings"))
+        version = publish_evaluation_config_version(config=config, actor=request.user)
+        ratings = _validate_evaluation_ratings(
+            version,
+            ClassroomEvaluationSubmission.EvaluationType.TEACHER,
+            request.data.get("ratings"),
+        )
         comment = str(request.data.get("comment") or "").strip()
         if len(comment) > 1000:
-            raise ServiceError("评价备注不能超过 1000 个字符。", errors={"comment": ["评价备注不能超过 1000 个字符。"]}, status=400)
-        submission, _ = ClassroomEvaluationSubmission.objects.update_or_create(
+            raise ServiceError(
+                "评价备注不能超过 1000 个字符。",
+                errors={"comment": ["评价备注不能超过 1000 个字符。"]},
+                status=400,
+            )
+        append_evaluation_submission(
             course=course,
+            class_group=class_group,
             session=None,
             evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             evaluator=request.user,
             target=profile.user,
-            defaults={"ratings": ratings, "comment": comment, "group": None, "class_group": class_group},
-        )
-        LearningEvent.objects.create(
-            actor=request.user,
-            class_group=class_group,
-            course=course,
-            event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
-            object_type="course_evaluation",
-            object_id=str(submission.id),
-            metadata={
-                "action": "course_teacher_evaluation_submit",
-                "target_id": profile.user_id,
-                "class_group": class_group.id,
-                "ratings": ratings,
-                "comment": comment,
-                "ai_feature": "course_teacher_evaluation",
-            },
-            occurred_at=timezone.now(),
+            rubric_version=version,
+            ratings=ratings,
+            comment=comment,
+            group=None,
         )
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok(_teacher_course_evaluation_payload(course, class_group=class_group, config=config), "师评已保存。")
+    except EvaluationEventError as exc:
+        return fail(exc.message, status=400)
+    return ok(
+        _teacher_course_evaluation_payload(
+            course, class_group=class_group, config=config
+        ),
+        "师评已保存。",
+    )
 
 
 def _student_evaluation_context(request, session_id):
     profile = _student_profile(request)
     session = (
-        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
-        .filter(pk=session_id, school=request.user.school, class_group=profile.class_group)
+        ClassroomSession.objects.select_related(
+            "teacher",
+            "course",
+            "lesson",
+            "class_group",
+            "evaluation_config_version",
+        )
+        .filter(
+            pk=session_id, school=request.user.school, class_group=profile.class_group
+        )
         .first()
     )
     if session is None:
         raise ServiceError("课堂不存在或无权进入。", status=404)
     if session.status != ClassroomSession.Status.RUNNING:
         raise ServiceError("课堂尚未开始，暂不能评价。", status=403)
-    config = ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+    config = (
+        session.evaluation_config_version
+        or ClassroomEvaluationConfig.objects.filter(course=session.course).first()
+    )
     collaboration = _open_group_collaboration(session)
     group = None
     if collaboration is not None:
@@ -3880,16 +5229,46 @@ def _student_evaluation_context(request, session_id):
     return profile, session, config, collaboration, group
 
 
-def _student_evaluation_payload(request, session: ClassroomSession, config: ClassroomEvaluationConfig | None, group: ClassroomGroup | None) -> dict:
+def _student_evaluation_payload(
+    request,
+    session: ClassroomSession,
+    config: ClassroomEvaluationConfig | None,
+    group: ClassroomGroup | None,
+) -> dict:
     config_row = classroom_evaluation_config_row(config)
+    public_config = {
+        key: config_row.get(key)
+        for key in (
+            "id",
+            "course",
+            "session",
+            "enable_self",
+            "enable_peer",
+            "enable_teacher",
+            "self_criteria",
+            "peer_criteria",
+            "teacher_criteria",
+            "opened_at",
+            "created_at",
+            "updated_at",
+        )
+    }
     runtime_enabled = bool(session.evaluation_enabled)
     submissions = list(
-        ClassroomEvaluationSubmission.objects.select_related("evaluator", "target", "group")
+        ClassroomEvaluationSubmission.objects.select_related(
+            "evaluator", "target", "group", "rubric_version"
+        )
         .filter(course=session.course, session=session, evaluator=request.user)
         .order_by("-updated_at", "-id")
     )
+    submissions = _latest_evaluation_submissions(submissions)
     self_submission = next(
-        (item for item in submissions if item.evaluation_type == ClassroomEvaluationSubmission.EvaluationType.SELF and item.target_id == request.user.id),
+        (
+            item
+            for item in submissions
+            if item.evaluation_type == ClassroomEvaluationSubmission.EvaluationType.SELF
+            and item.target_id == request.user.id
+        ),
         None,
     )
     peer_submissions = [
@@ -3910,28 +5289,45 @@ def _student_evaluation_payload(request, session: ClassroomSession, config: Clas
                 {
                     "student_id": member.student_id,
                     "username": member.student.username,
-                    "display_name": member.student.display_name or member.student.username,
-                    "student_no": member.student_profile.student_no if member.student_profile else "",
-                    "current_layer": member.student_profile.current_layer if member.student_profile else "",
-                    "current_layer_label": member.student_profile.get_current_layer_display() if member.student_profile and member.student_profile.current_layer else "",
-                    "submission": classroom_evaluation_submission_row(existing_by_target.get(member.student_id)),
+                    "display_name": member.student.display_name
+                    or member.student.username,
+                    "student_no": (
+                        member.student_profile.student_no
+                        if member.student_profile
+                        else ""
+                    ),
+                    "submission": classroom_evaluation_submission_row(
+                        existing_by_target.get(member.student_id)
+                    ),
                 }
             )
     return {
         "runtime_enabled": runtime_enabled,
         "runtime_opened_at": session.evaluation_opened_at,
         "config": {
-            **config_row,
+            **public_config,
             "enable_self": bool(runtime_enabled and config_row["enable_self"]),
-            "enable_peer": bool(runtime_enabled and config_row["enable_peer"] and group is not None),
+            "enable_peer": bool(
+                runtime_enabled and config_row["enable_peer"] and group is not None
+            ),
             "teacher_criteria": [],
             "enable_teacher": False,
-            "self_criteria": config_row["self_criteria"] if runtime_enabled and config_row["enable_self"] else [],
-            "peer_criteria": config_row["peer_criteria"] if runtime_enabled and config_row["enable_peer"] and group is not None else [],
+            "self_criteria": (
+                config_row["self_criteria"]
+                if runtime_enabled and config_row["enable_self"]
+                else []
+            ),
+            "peer_criteria": (
+                config_row["peer_criteria"]
+                if runtime_enabled and config_row["enable_peer"] and group is not None
+                else []
+            ),
         },
         "self_submission": classroom_evaluation_submission_row(self_submission),
         "peer_targets": peer_targets,
-        "my_group": classroom_group_row(group, include_files=False) if group else None,
+        "my_group": (
+            student_classroom_group_row(group, include_files=False) if group else None
+        ),
     }
 
 
@@ -3939,7 +5335,9 @@ def _student_evaluation_payload(request, session: ClassroomSession, config: Clas
 @permission_classes([IsStudent])
 def student_classroom_evaluation(request, pk):
     try:
-        profile, session, config, collaboration, group = _student_evaluation_context(request, pk)
+        _profile, session, config, _collaboration, group = _student_evaluation_context(
+            request, pk
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(_student_evaluation_payload(request, session, config, group))
@@ -3949,20 +5347,28 @@ def student_classroom_evaluation(request, pk):
 @permission_classes([IsStudent])
 def student_classroom_evaluation_submit(request, pk):
     try:
-        profile, session, config, collaboration, group = _student_evaluation_context(request, pk)
+        _profile, session, config, _collaboration, group = _student_evaluation_context(
+            request, pk
+        )
         if not session.evaluation_enabled:
             raise ServiceError("教师尚未开放课堂评价。", status=400)
-        if config is None:
+        if config is None or not isinstance(config, ClassroomEvaluationConfigVersion):
             raise ServiceError("教师尚未开启课堂评价。", status=400)
         evaluation_type = str(request.data.get("evaluation_type") or "").strip()
         if evaluation_type not in {
             ClassroomEvaluationSubmission.EvaluationType.SELF,
             ClassroomEvaluationSubmission.EvaluationType.PEER,
         }:
-            raise ServiceError("评价类型不正确。", errors={"evaluation_type": ["请选择自评或互评。"]}, status=400)
+            raise ServiceError(
+                "评价类型不正确。",
+                errors={"evaluation_type": ["请选择自评或互评。"]},
+                status=400,
+            )
         config_row = classroom_evaluation_config_row(config)
         if not config_row.get(_evaluation_enabled_field(evaluation_type)):
-            raise ServiceError(f"教师尚未开启{EVALUATION_TYPE_LABELS[evaluation_type]}。", status=400)
+            raise ServiceError(
+                f"教师尚未开启{EVALUATION_TYPE_LABELS[evaluation_type]}。", status=400
+            )
         if evaluation_type == ClassroomEvaluationSubmission.EvaluationType.SELF:
             target = request.user
             target_group = None
@@ -3972,49 +5378,56 @@ def student_classroom_evaluation_submit(request, pk):
             try:
                 target_id = int(request.data.get("target"))
             except (TypeError, ValueError):
-                raise ServiceError("请选择互评对象。", errors={"target": ["请选择同组成员。"]}, status=400)
+                raise ServiceError(
+                    "请选择互评对象。",
+                    errors={"target": ["请选择同组成员。"]},
+                    status=400,
+                )
             if target_id == request.user.id:
-                raise ServiceError("互评对象不能是自己。", errors={"target": ["请选择同组成员。"]}, status=400)
-            member = group.members.select_related("student").filter(student_id=target_id).first()
+                raise ServiceError(
+                    "互评对象不能是自己。",
+                    errors={"target": ["请选择同组成员。"]},
+                    status=400,
+                )
+            member = (
+                group.members.select_related("student")
+                .filter(student_id=target_id)
+                .first()
+            )
             if member is None:
                 raise ServiceError("互评对象必须是同组成员。", status=403)
             target = member.student
             target_group = group
-        ratings = _validate_evaluation_ratings(config, evaluation_type, request.data.get("ratings"))
+        ratings = _validate_evaluation_ratings(
+            config, evaluation_type, request.data.get("ratings")
+        )
         comment = str(request.data.get("comment") or "").strip()
         if len(comment) > 1000:
-            raise ServiceError("评价备注不能超过 1000 个字符。", errors={"comment": ["评价备注不能超过 1000 个字符。"]}, status=400)
-        submission, _ = ClassroomEvaluationSubmission.objects.update_or_create(
+            raise ServiceError(
+                "评价备注不能超过 1000 个字符。",
+                errors={"comment": ["评价备注不能超过 1000 个字符。"]},
+                status=400,
+            )
+        append_evaluation_submission(
             course=session.course,
             class_group=session.class_group,
             session=session,
             evaluation_type=evaluation_type,
             evaluator=request.user,
             target=target,
-            defaults={"ratings": ratings, "comment": comment, "group": target_group},
-        )
-        _write_student_event(
-            request,
-            profile,
-            LearningEvent.EventType.ANSWER_SUBMIT,
-            course=session.course,
-            lesson=session.lesson,
-            object_type="classroom_evaluation",
-            object_id=submission.id,
-            metadata={
-                "action": f"{evaluation_type}_evaluation_submit",
-                "classroom_session": session.id,
-                "evaluation_type": evaluation_type,
-                "target_id": target.id,
-                "group_id": target_group.id if target_group else None,
-                "ratings": ratings,
-                "comment": comment,
-                "ai_feature": f"classroom_{evaluation_type}_evaluation",
-            },
+            rubric_version=config,
+            ratings=ratings,
+            comment=comment,
+            group=target_group,
         )
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok(_student_evaluation_payload(request, session, config, group), f"{EVALUATION_TYPE_LABELS[evaluation_type]}已提交。")
+    except EvaluationEventError as exc:
+        return fail(exc.message, status=400)
+    return ok(
+        _student_evaluation_payload(request, session, config, group),
+        f"{EVALUATION_TYPE_LABELS[evaluation_type]}已提交。",
+    )
 
 
 def _office_group(group_id) -> ClassroomGroup | None:
@@ -4049,17 +5462,22 @@ def _group_document_access(request, group: ClassroomGroup) -> tuple[bool, bool]:
             profile = user.student_profile
         except StudentProfile.DoesNotExist:
             return False, False
-        if profile.class_group_id != session.class_group_id or session.school_id != user.school_id:
+        if (
+            profile.class_group_id != session.class_group_id
+            or session.school_id != user.school_id
+        ):
             return False, False
-        is_member = ClassroomGroupMember.objects.filter(group=group, student=user).exists()
-        can_edit = (
+        is_member = ClassroomGroupMember.objects.filter(
+            group=group, student=user
+        ).exists()
+        can_open = (
             is_member
             and session.status == ClassroomSession.Status.RUNNING
             and group.collaboration.is_enabled
             and group.collaboration.status == ClassroomGroupCollaboration.Status.OPEN
-            and group.collaboration.allow_onlyoffice_edit
         )
-        return is_member, can_edit
+        can_edit = can_open and group.collaboration.allow_onlyoffice_edit
+        return can_open, can_edit
     if user.role == "school_admin":
         return user.school_id == session.school_id, False
     if user.role == "super_admin":
@@ -4067,31 +5485,65 @@ def _group_document_access(request, group: ClassroomGroup) -> tuple[bool, bool]:
     return False, False
 
 
-def _write_group_document_open_event(request, group: ClassroomGroup) -> None:
+def _write_group_document_open_event(
+    request, group: ClassroomGroup, *, presentation: str, editor_mode: str
+) -> None:
     if request.user.role != "student":
         return
-    try:
-        profile = request.user.student_profile
-    except StudentProfile.DoesNotExist:
-        return
-    session = group.collaboration.session
-    LearningEvent.objects.create(
-        actor=request.user,
-        class_group=profile.class_group,
-        course=session.course,
-        lesson=session.lesson,
-        event_type=LearningEvent.EventType.RESOURCE_VIEW,
-        object_type="classroom_group_document",
-        object_id=str(group.id),
-        metadata={
-            "action": "group_document_open",
-            "classroom_session": session.id,
-            "collaboration": group.collaboration_id,
-            "group": group.id,
-            "document_type": group.document_file_ext or group.collaboration.document_type,
-        },
-        occurred_at=timezone.now(),
+    record_group_document_opened(
+        group=group,
+        student=request.user,
+        presentation=presentation,
+        editor_mode=editor_mode,
     )
+
+
+def _onlyoffice_callback_token(request, payload: dict) -> str:
+    authorization = str(request.headers.get("Authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return str(payload.get("token") or "").strip()
+
+
+def _url_origin(value: str) -> tuple[str, str, int | None]:
+    parsed = urlparse(value)
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+
+
+def _download_onlyoffice_callback_file(url: str, *, max_bytes: int) -> bytes:
+    allowed_origin = _url_origin(settings.ONLYOFFICE_DOCUMENT_SERVER_URL)
+    requested_origin = _url_origin(url)
+    if (
+        requested_origin != allowed_origin
+        or requested_origin[0] not in {"http", "https"}
+        or not requested_origin[1]
+    ):
+        raise ValueError("ONLYOFFICE 回调下载地址不属于已配置文档服务器。")
+    with urllib.request.urlopen(url, timeout=30) as response:
+        if _url_origin(response.geturl()) != allowed_origin:
+            raise ValueError("ONLYOFFICE 回调下载发生了跨主机跳转。")
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > max_bytes:
+            raise ValueError("ONLYOFFICE 回调文件超过允许大小。")
+        data = response.read(max_bytes + 1)
+    if not data or len(data) > max_bytes:
+        raise ValueError("ONLYOFFICE 回调文件为空或超过允许大小。")
+    return data
+
+
+def _verified_onlyoffice_editor_ids(payload: dict) -> list[str]:
+    values = []
+    raw_values = list(payload.get("users") or [])
+    for action in payload.get("actions") or []:
+        if isinstance(action, dict):
+            raw_values.append(action.get("userId"))
+    for value in raw_values:
+        text = str(value or "").strip()[:128]
+        if text and text not in values:
+            values.append(text)
+        if len(values) >= 2000:
+            break
+    return values
 
 
 @api_view(["GET"])
@@ -4111,13 +5563,18 @@ def classroom_group_office_config(request, group_id):
 
     requested_mode = request.GET.get("mode", "view").strip().lower()
     mode = "edit" if requested_mode == "edit" and can_edit else "view"
-    attachment_url = request.build_absolute_uri(f"/{group.collaboration_document.url.lstrip('/')}")
+    attachment_url = request.build_absolute_uri(
+        f"/{group.collaboration_document.url.lstrip('/')}"
+    )
     base_url = f"{'https' if request.is_secure() else 'http'}://{request.get_host()}"
+    document_title = group.document_original_name or f"{group.name}.{file_ext}"
+    if request.user.role == "student":
+        document_title = f"第{group.group_no}组.{file_ext}"
     config = {
         "document": {
             "fileType": file_ext,
-            "key": f"classroom-group-{group.id}-{group.document_version}-{int(group.updated_at.timestamp())}",
-            "title": group.document_original_name or f"{group.name}.{file_ext}",
+            "key": _group_document_key(group),
+            "title": document_title,
             "url": attachment_url,
             "permissions": {
                 "edit": mode == "edit",
@@ -4143,7 +5600,15 @@ def classroom_group_office_config(request, group_id):
         "height": "100%",
         "width": "100%",
     }
-    _write_group_document_open_event(request, group)
+    try:
+        _write_group_document_open_event(
+            request,
+            group,
+            presentation="embedded",
+            editor_mode=mode,
+        )
+    except GroupCollaborationEventError as exc:
+        return fail(exc.message, status=400)
     return ok(
         {
             "server_url": settings.ONLYOFFICE_DOCUMENT_SERVER_URL,
@@ -4161,22 +5626,88 @@ def classroom_group_office_callback(request, group_id):
     group = _office_group(group_id)
     if group is None or not group.collaboration_document:
         return JsonResponse({"error": 1}, status=404)
+    payload = request.data if isinstance(request.data, dict) else {}
+    if not payload:
+        return JsonResponse({"error": 1}, status=400)
+    token = _onlyoffice_callback_token(request, payload)
+    unsigned_payload = {key: value for key, value in payload.items() if key != "token"}
     try:
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": 1})
+        verified_payload = verify_callback_payload(token, unsigned_payload)
+    except OnlyOfficeJWTError:
+        return JsonResponse({"error": 1}, status=403)
 
-    status = payload.get("status")
-    if status in {2, 6} and payload.get("url"):
+    callback_key = str(unsigned_payload.get("key") or "")
+    valid_keys = {_group_document_key(group)}
+    valid_keys.update(
+        item
+        for item in group.document_versions.order_by("-version_no").values_list(
+            "callback_key", flat=True
+        )[:5]
+        if item
+    )
+    if callback_key not in valid_keys:
+        return JsonResponse({"error": 1}, status=409)
+
+    status = unsigned_payload.get("status")
+    if status in {2, 6} and unsigned_payload.get("url"):
         try:
-            with urllib.request.urlopen(payload["url"], timeout=30) as response:
-                data = response.read()
-            with group.collaboration_document.storage.open(group.collaboration_document.name, "wb") as target:
-                target.write(data)
-            group.document_version += 1
-            group.updated_at = timezone.now()
-            group.save(update_fields=["document_version", "updated_at"])
-        except Exception:
+            max_bytes = (
+                min(max(group.collaboration.storage_quota_mb, 10), 512) * 1024 * 1024
+            )
+            data = _download_onlyoffice_callback_file(
+                str(unsigned_payload["url"]), max_bytes=max_bytes
+            )
+            file_sha256 = hashlib.sha256(data).hexdigest()
+            with transaction.atomic():
+                group = (
+                    ClassroomGroup.objects.select_for_update()
+                    .select_related(
+                        "collaboration",
+                        "collaboration__session",
+                        "collaboration__session__teacher",
+                        "collaboration__session__school",
+                        "collaboration__session__class_group",
+                        "collaboration__session__course",
+                        "collaboration__session__course__subject",
+                        "collaboration__session__lesson",
+                    )
+                    .get(pk=group.pk)
+                )
+                latest = group.document_versions.order_by("-version_no").first()
+                if latest and latest.file_sha256 == file_sha256:
+                    return JsonResponse({"error": 0})
+                next_version = (
+                    max(
+                        group.document_version,
+                        latest.version_no if latest else 0,
+                    )
+                    + 1
+                )
+                editor_ids = _verified_onlyoffice_editor_ids(verified_payload)
+                version, created = _save_group_document_version(
+                    group,
+                    data=data,
+                    version_no=next_version,
+                    source=ClassroomGroupDocumentVersion.Source.ONLYOFFICE_CALLBACK,
+                    callback_status=int(status),
+                    callback_key=callback_key,
+                    verified_editor_ids=editor_ids,
+                )
+                if not created:
+                    return JsonResponse({"error": 0})
+                group.document_version = next_version
+                group.updated_at = timezone.now()
+                group.save(update_fields=["document_version", "updated_at"])
+                record_group_document_saved(
+                    group=group,
+                    version=version,
+                    verified_editor_ids=editor_ids,
+                )
+                with group.collaboration_document.storage.open(
+                    group.collaboration_document.name, "wb"
+                ) as target:
+                    target.write(data)
+        except (ValueError, OSError, GroupCollaborationEventError):
             return JsonResponse({"error": 1})
     return JsonResponse({"error": 0})
 
@@ -4204,7 +5735,11 @@ def _answer_display(value) -> str:
     if isinstance(value, list):
         return "、".join(_answer_to_list(value))
     if isinstance(value, dict):
-        attachment_name = _clean_answer_text(value.get("attachment_name") or value.get("original_name") or value.get("filename"))
+        attachment_name = _clean_answer_text(
+            value.get("attachment_name")
+            or value.get("original_name")
+            or value.get("filename")
+        )
         if attachment_name:
             return attachment_name
         return json.dumps(value, ensure_ascii=False)
@@ -4244,7 +5779,11 @@ def _answer_attachment_value(value) -> dict | None:
     if not isinstance(value, dict):
         return None
     attachment_url = _clean_answer_text(value.get("attachment_url") or value.get("url"))
-    attachment_name = _clean_answer_text(value.get("attachment_name") or value.get("original_name") or value.get("filename"))
+    attachment_name = _clean_answer_text(
+        value.get("attachment_name")
+        or value.get("original_name")
+        or value.get("filename")
+    )
     attachment_id = value.get("attachment_id") or value.get("id")
     if not (attachment_id or attachment_url or attachment_name):
         return None
@@ -4261,8 +5800,12 @@ def _answer_attachment_value(value) -> dict | None:
         "id": attachment_id,
         "attachment_url": attachment_url,
         "attachment_name": attachment_name,
-        "file_ext": clean_resource_ext(value.get("file_ext"), attachment_name, attachment_url),
-        "attachment_size": int(value.get("attachment_size") or value.get("file_size") or 0),
+        "file_ext": clean_resource_ext(
+            value.get("file_ext"), attachment_name, attachment_url
+        ),
+        "attachment_size": int(
+            value.get("attachment_size") or value.get("file_size") or 0
+        ),
         "score": score,
         "feedback": _clean_answer_text(value.get("feedback")),
         "evaluated_at": value.get("evaluated_at"),
@@ -4275,7 +5818,9 @@ def _score_lesson_question(question: dict, value) -> dict:
     actual = [] if question_type == "file" else _answer_to_list(value)
     max_score = _score_float(question.get("score"))
     answer_text = _answer_display(value)
-    auto_gradable = question_type in {"single", "multiple", "judge", "blank"} and bool(expected)
+    auto_gradable = question_type in {"single", "multiple", "judge", "blank"} and bool(
+        expected
+    )
     attachment = _answer_attachment_value(value) if question_type == "file" else None
     is_correct = None
     score = attachment.get("score") if attachment else None
@@ -4284,7 +5829,9 @@ def _score_lesson_question(question: dict, value) -> dict:
         if question_type == "multiple":
             is_correct = sorted(actual) == sorted(expected)
         elif question_type == "blank":
-            is_correct = bool(actual) and (actual[0] in expected or sorted(actual) == sorted(expected))
+            is_correct = bool(actual) and (
+                actual[0] in expected or sorted(actual) == sorted(expected)
+            )
         else:
             is_correct = bool(actual) and actual[0] == expected[0]
         score = max_score if is_correct else 0
@@ -4330,7 +5877,9 @@ def _lesson_step_answer_progress(questions: list[dict], answer) -> dict:
         "text": _answer_text_value(answer),
         "answered_count": answered_count,
         "question_count": len(questions),
-        "required_count": sum(1 for question in questions if question.get("is_required", True)),
+        "required_count": sum(
+            1 for question in questions if question.get("is_required", True)
+        ),
         "auto_score": round(auto_score, 2),
         "auto_score_max": round(auto_score_max, 2),
         "auto_gradable_count": auto_gradable_count,
@@ -4339,7 +5888,11 @@ def _lesson_step_answer_progress(questions: list[dict], answer) -> dict:
 
 
 def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
-    step = session.current_step if getattr(session, "current_step", None) and session.current_step_id else None
+    step = (
+        session.current_step
+        if getattr(session, "current_step", None) and session.current_step_id
+        else None
+    )
     if step is None:
         return {
             "step": None,
@@ -4373,13 +5926,25 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
     latest_by_student = {}
     for event in events.order_by("actor_id", "-occurred_at", "-id"):
         latest_by_student.setdefault(event.actor_id, event)
-    work_by_student_question = {
-        (item.student_id, item.question_id): item
-        for item in StudentWorkAttachment.objects.filter(
+    latest_attempt_by_student = {}
+    attempts = (
+        LessonStepAttempt.objects.filter(
+            classroom_session=session,
             lesson_step=step,
             student_id__in=[profile.user_id for profile in profiles],
         )
-    }
+        .prefetch_related("answer_rows__attachment")
+        .order_by("student_id", "-attempt_no", "-id")
+    )
+    for attempt in attempts:
+        latest_attempt_by_student.setdefault(attempt.student_id, attempt)
+    work_by_student_question = {}
+    works = StudentWorkAttachment.objects.filter(
+        lesson_step=step,
+        student_id__in=[profile.user_id for profile in profiles],
+    ).order_by("student_id", "question_id", "-upload_version", "-id")
+    for item in works:
+        work_by_student_question.setdefault((item.student_id, item.question_id), item)
 
     apply_layering = lesson_step_has_layered_questions(step)
     rows = []
@@ -4393,14 +5958,29 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
             student_layer=profile.current_layer,
             apply_layering=apply_layering,
         )
-        event = latest_by_student.get(profile.user_id)
+        attempt = latest_attempt_by_student.get(profile.user_id)
+        event = latest_by_student.get(profile.user_id) if attempt is None else None
         metadata = event.metadata if event and isinstance(event.metadata, dict) else {}
-        answer = metadata.get("answer") if event else None
+        answer = (
+            attempt.answer if attempt else metadata.get("answer") if event else None
+        )
         progress = _lesson_step_answer_progress(questions, answer)
+        attempt_answer_rows = (
+            {item.question_id: item for item in attempt.answer_rows.all()}
+            if attempt
+            else {}
+        )
         for answer_row in progress["answers"]:
             if answer_row["question_type"] != "file":
                 continue
-            work = work_by_student_question.get((profile.user_id, answer_row["question_id"]))
+            attempt_answer = attempt_answer_rows.get(answer_row["question_id"])
+            work = (
+                attempt_answer.attachment
+                if attempt_answer and attempt_answer.attachment_id
+                else work_by_student_question.get(
+                    (profile.user_id, answer_row["question_id"])
+                )
+            )
             if not work:
                 continue
             attachment_payload = student_work_attachment_row(work)
@@ -4408,7 +5988,7 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
             answer_row["answer_text"] = attachment_payload["attachment_name"]
             answer_row["is_answered"] = True
             answer_row["score"] = attachment_payload["score"]
-        submitted = event is not None
+        submitted = attempt is not None or event is not None
         if submitted and progress["auto_score_max"] > 0:
             auto_score_sum += progress["auto_score"]
             auto_score_rows += 1
@@ -4421,10 +6001,20 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
                 "display_name": profile.user.display_name or profile.user.username,
                 "student_no": profile.student_no,
                 "current_layer": profile.current_layer or "",
-                "current_layer_label": profile.get_current_layer_display() if profile.current_layer else "",
+                "current_layer_label": (
+                    profile.get_current_layer_display() if profile.current_layer else ""
+                ),
                 "submitted": submitted,
-                "submitted_at": event.occurred_at if event else None,
+                "submitted_at": (
+                    attempt.submitted_at
+                    if attempt
+                    else event.occurred_at
+                    if event
+                    else None
+                ),
                 "event_id": event.id if event else None,
+                "attempt_id": str(attempt.attempt_id) if attempt else None,
+                "attempt_no": attempt.attempt_no if attempt else None,
                 "text": progress["text"],
                 "answered_count": progress["answered_count"],
                 "question_count": progress["question_count"],
@@ -4452,7 +6042,9 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
             "not_submitted": len(rows) - submitted_count,
             "question_count": max((row["question_count"] for row in rows), default=0),
             "required_count": max((row["required_count"] for row in rows), default=0),
-            "auto_score_avg": round(auto_score_sum / auto_score_rows, 2) if auto_score_rows else None,
+            "auto_score_avg": (
+                round(auto_score_sum / auto_score_rows, 2) if auto_score_rows else None
+            ),
             "auto_score_max": round(max_auto_score, 2),
         },
         "rows": rows,
@@ -4477,8 +6069,14 @@ def teacher_classroom_attachment_score(request, pk, attachment_id):
     except ServiceError as exc:
         return _service_fail(exc)
     attachment = (
-        StudentWorkAttachment.objects.select_related("student", "lesson_step", "lesson", "course", "class_group")
-        .filter(pk=attachment_id, class_group=session.class_group, lesson_step=session.current_step)
+        StudentWorkAttachment.objects.select_related(
+            "student", "lesson_step", "lesson", "course", "class_group"
+        )
+        .filter(
+            pk=attachment_id,
+            class_group=session.class_group,
+            lesson_step=session.current_step,
+        )
         .first()
     )
     if attachment is None:
@@ -4486,46 +6084,77 @@ def teacher_classroom_attachment_score(request, pk, attachment_id):
     question = next(
         (
             item
-            for item in normalize_lesson_question_items(attachment.lesson_step.question_items, include_answer=True)
+            for item in normalize_lesson_question_items(
+                attachment.lesson_step.question_items, include_answer=True
+            )
             if str(item.get("id")) == attachment.question_id
         ),
         None,
     )
+    if question is None:
+        return fail("附件对应的课堂题目已不存在，不能评分。", status=409)
     max_score = _score_float(question.get("score") if question else 100, 100)
+    if max_score <= 0:
+        return fail("该附件题未设置有效分值，不能评分。", status=400)
     try:
         score = float(request.data.get("score"))
     except (TypeError, ValueError):
-        return fail("分数必须是数字。", errors={"score": ["分数必须是数字。"]}, status=400)
+        return fail(
+            "分数必须是数字。", errors={"score": ["分数必须是数字。"]}, status=400
+        )
     if score < 0 or score > max_score:
-        return fail(f"分数需在 0-{max_score:g} 之间。", errors={"score": [f"分数需在 0-{max_score:g} 之间。"]}, status=400)
+        return fail(
+            f"分数需在 0-{max_score:g} 之间。",
+            errors={"score": [f"分数需在 0-{max_score:g} 之间。"]},
+            status=400,
+        )
     feedback = str(request.data.get("feedback") or "").strip()
     if len(feedback) > 1000:
-        return fail("反馈不能超过 1000 个字符。", errors={"feedback": ["反馈不能超过 1000 个字符。"]}, status=400)
+        return fail(
+            "反馈不能超过 1000 个字符。",
+            errors={"feedback": ["反馈不能超过 1000 个字符。"]},
+            status=400,
+        )
 
-    attachment.score = score
-    attachment.feedback = feedback
-    attachment.evaluated_by = request.user
-    attachment.evaluated_at = timezone.now()
-    attachment.save(update_fields=["score", "feedback", "evaluated_by", "evaluated_at", "updated_at"])
-    LearningEvent.objects.create(
-        actor=request.user,
-        class_group=session.class_group,
-        course=session.course,
-        lesson=session.lesson,
-        event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
-        object_type="student_work_attachment",
-        object_id=str(attachment.id),
-        score=score,
-        metadata={
-            "action": "student_work_attachment_score",
-            "classroom_session": session.id,
-            "student_id": attachment.student_id,
-            "lesson_step": attachment.lesson_step_id,
-            "question_id": attachment.question_id,
-            "feedback": feedback,
-        },
-        occurred_at=timezone.now(),
-    )
+    try:
+        with transaction.atomic():
+            ensure_classroom_step_opportunities(session=session)
+            ensure_classroom_attachment_submission(work=attachment)
+            grading_state = next_classroom_grading_state(
+                session=session,
+                student=attachment.student,
+                question=question,
+                attempt_id=attachment.submission_id,
+            )
+            evaluated_at = timezone.now()
+            attachment.score = score
+            attachment.feedback = feedback
+            attachment.evaluated_by = request.user
+            attachment.evaluated_at = evaluated_at
+            attachment.save(
+                update_fields=[
+                    "score",
+                    "feedback",
+                    "evaluated_by",
+                    "evaluated_at",
+                    "updated_at",
+                ]
+            )
+            record_classroom_item_grade(
+                session=session,
+                student=attachment.student,
+                question=question,
+                attempt_id=attachment.submission_id,
+                score_raw=score,
+                score_max=max_score,
+                is_correct=None,
+                grading_state=grading_state,
+                grader_type="teacher",
+                actor=request.user,
+                occurred_at=evaluated_at,
+            )
+    except ClassroomEventError as exc:
+        return fail(exc.message, status=400)
     return ok(student_work_attachment_row(attachment), "附件评分已保存。")
 
 
@@ -4551,7 +6180,12 @@ def _teacher_attendance_payload(activity: ClassroomActivity) -> dict:
     latest_by_student = {}
     for event in _attendance_events_for_activity(activity):
         latest_by_student.setdefault(event.actor_id, event)
-    rows = [classroom_attendance_row(activity, profile, latest_by_student.get(profile.user_id)) for profile in profiles]
+    rows = [
+        classroom_attendance_row(
+            activity, profile, latest_by_student.get(profile.user_id)
+        )
+        for profile in profiles
+    ]
     summary = {
         "total": len(rows),
         "signed": sum(1 for row in rows if row["status"] == "signed"),
@@ -4560,7 +6194,11 @@ def _teacher_attendance_payload(activity: ClassroomActivity) -> dict:
         "absent": sum(1 for row in rows if row["status"] == "absent"),
         "not_signed": sum(1 for row in rows if row["status"] == "not_signed"),
     }
-    return {"activity": classroom_activity_row(activity), "summary": summary, "rows": rows}
+    return {
+        "activity": classroom_activity_row(activity),
+        "summary": summary,
+        "rows": rows,
+    }
 
 
 def _quick_answer_response_events(activity: ClassroomActivity):
@@ -4591,7 +6229,11 @@ def _quick_answer_score_events(activity: ClassroomActivity):
 
 def _quick_answer_defaults(activity: ClassroomActivity) -> dict:
     metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
-    defaults = metadata.get("score_defaults") if isinstance(metadata.get("score_defaults"), dict) else {}
+    defaults = (
+        metadata.get("score_defaults")
+        if isinstance(metadata.get("score_defaults"), dict)
+        else {}
+    )
     try:
         plus = float(defaults.get("plus", 2))
     except (TypeError, ValueError):
@@ -4612,7 +6254,11 @@ def _teacher_quick_answer_payload(activity: ClassroomActivity) -> dict:
     for index, event in enumerate(_quick_answer_response_events(activity), start=1):
         profile = getattr(event.actor, "student_profile", None)
         score_event = score_by_student.get(event.actor_id)
-        score_metadata = score_event.metadata if score_event and isinstance(score_event.metadata, dict) else {}
+        score_metadata = (
+            score_event.metadata
+            if score_event and isinstance(score_event.metadata, dict)
+            else {}
+        )
         rows.append(
             {
                 "rank": index,
@@ -4622,7 +6268,11 @@ def _teacher_quick_answer_payload(activity: ClassroomActivity) -> dict:
                 "display_name": event.actor.display_name or event.actor.username,
                 "student_no": getattr(profile, "student_no", "") if profile else "",
                 "current_layer": getattr(profile, "current_layer", "") or "",
-                "current_layer_label": profile.get_current_layer_display() if profile and profile.current_layer else "",
+                "current_layer_label": (
+                    profile.get_current_layer_display()
+                    if profile and profile.current_layer
+                    else ""
+                ),
                 "responded_at": event.occurred_at,
                 "score": score_event.score if score_event else None,
                 "score_action": str(score_metadata.get("score_action") or ""),
@@ -4638,7 +6288,12 @@ def _teacher_quick_answer_payload(activity: ClassroomActivity) -> dict:
         "plus": sum(1 for row in rows if row["score_action"] == "plus"),
         "minus": sum(1 for row in rows if row["score_action"] == "minus"),
     }
-    return {"activity": classroom_activity_row(activity), "summary": summary, "score_defaults": defaults, "rows": rows}
+    return {
+        "activity": classroom_activity_row(activity),
+        "summary": summary,
+        "score_defaults": defaults,
+        "rows": rows,
+    }
 
 
 def _random_pick_score_events(activity: ClassroomActivity):
@@ -4669,7 +6324,11 @@ def _teacher_random_pick_student_rows(
     )
     for profile in profiles:
         score_event = score_by_student.get(profile.user_id)
-        score_metadata = score_event.metadata if score_event and isinstance(score_event.metadata, dict) else {}
+        score_metadata = (
+            score_event.metadata
+            if score_event and isinstance(score_event.metadata, dict)
+            else {}
+        )
         row = {
             "student_id": profile.user_id,
             "profile_id": profile.id,
@@ -4677,7 +6336,9 @@ def _teacher_random_pick_student_rows(
             "display_name": profile.user.display_name or profile.user.username,
             "student_no": profile.student_no,
             "current_layer": profile.current_layer or "",
-            "current_layer_label": profile.get_current_layer_display() if profile.current_layer else "",
+            "current_layer_label": (
+                profile.get_current_layer_display() if profile.current_layer else ""
+            ),
             "is_picked": profile.user_id == picked_user_id,
             "score": score_event.score if score_event else None,
             "score_action": str(score_metadata.get("score_action") or ""),
@@ -4702,7 +6363,11 @@ def _teacher_random_pick_preview_payload(session: ClassroomSession) -> dict:
 
 def _teacher_random_pick_payload(activity: ClassroomActivity) -> dict:
     metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
-    picked = metadata.get("picked_student") if isinstance(metadata.get("picked_student"), dict) else {}
+    picked = (
+        metadata.get("picked_student")
+        if isinstance(metadata.get("picked_student"), dict)
+        else {}
+    )
     picked_user_id = int(picked.get("user_id") or 0)
     score_by_student = {}
     for event in _random_pick_score_events(activity):
@@ -4751,8 +6416,7 @@ def teacher_classroom_attendance(request, pk, activity_id):
         return _service_fail(exc)
     if activity.session_id != session.id:
         return fail("签到活动不属于当前课堂。", status=404)
-    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
-    if metadata.get("command") != "sign_in":
+    if not is_attendance_activity(activity):
         return fail("该课堂活动不是签到。", status=400)
     return ok(_teacher_attendance_payload(activity))
 
@@ -4802,7 +6466,11 @@ def teacher_classroom_random_pick_score(request, pk, activity_id):
     metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
     if metadata.get("command") != "random_pick":
         return fail("该课堂活动不是随机点名。", status=400)
-    picked = metadata.get("picked_student") if isinstance(metadata.get("picked_student"), dict) else {}
+    picked = (
+        metadata.get("picked_student")
+        if isinstance(metadata.get("picked_student"), dict)
+        else {}
+    )
     picked_user_id = int(picked.get("user_id") or 0)
     action = str(request.data.get("action") or "").strip()
     defaults = _quick_answer_defaults(activity)
@@ -4813,7 +6481,9 @@ def teacher_classroom_random_pick_score(request, pk, activity_id):
         default_score = defaults["minus"]
         default_label = "减分"
     else:
-        return fail("评分动作不正确。", errors={"action": ["请选择加分或减分。"]}, status=400)
+        return fail(
+            "评分动作不正确。", errors={"action": ["请选择加分或减分。"]}, status=400
+        )
     try:
         student_id = int(request.data.get("student_id") or picked_user_id)
     except (TypeError, ValueError):
@@ -4822,7 +6492,9 @@ def teacher_classroom_random_pick_score(request, pk, activity_id):
         return fail("只能给本次被点名的学生评分。", status=400)
     profile = (
         StudentProfile.objects.select_related("user")
-        .filter(user_id=student_id, class_group=session.class_group, user__is_active=True)
+        .filter(
+            user_id=student_id, class_group=session.class_group, user__is_active=True
+        )
         .first()
     )
     if profile is None:
@@ -4834,33 +6506,30 @@ def teacher_classroom_random_pick_score(request, pk, activity_id):
     score = abs(score) if action == "plus" else -abs(score)
     score = min(max(score, -100), 100)
     note = str(request.data.get("note") or default_label).strip()[:500]
-    previous_score_event = _random_pick_score_events(activity).filter(actor_id=student_id).first()
-    previous_score = float(previous_score_event.score or 0) if previous_score_event else 0
-    LearningEvent.objects.create(
-        actor=profile.user,
-        class_group=profile.class_group,
-        course=session.course,
-        lesson=session.lesson,
-        event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
-        object_type="classroom_activity",
-        object_id=str(activity.id),
-        score=score,
-        metadata={
-            "action": "random_pick_score",
-            "command": "random_pick",
-            "response_type": "random_pick_score",
-            "score_action": action,
-            "score_note": note,
-            "activity_title": activity.title,
-            "session": session.id,
-            "default_score": default_score,
-            "previous_score": previous_score,
-            "ai_feature": "random_pick_score",
-        },
-        occurred_at=timezone.now(),
-    )
-    profile.score = max(float(profile.score or 0) - previous_score + score, 0)
-    profile.save(update_fields=["score", "updated_at"])
+    try:
+        record_classroom_point_adjustment(
+            teacher=request.user,
+            student_profile=profile,
+            classroom_session=session,
+            object_type="classroom_activity",
+            object_id=activity.id,
+            reason_code="random_pick_score_adjustment",
+            requested_score=score,
+            previous_event_action="random_pick_score",
+            legacy_metadata={
+                "action": "random_pick_score",
+                "command": "random_pick",
+                "response_type": "random_pick_score",
+                "score_action": action,
+                "score_note": note,
+                "activity_title": activity.title,
+                "session": session.id,
+                "default_score": default_score,
+                "ai_feature": "random_pick_score",
+            },
+        )
+    except EventWriteError as exc:
+        return fail(exc.message, status=400)
     return ok(_teacher_random_pick_payload(activity), "随机点名评分已记录。")
 
 
@@ -4887,19 +6556,27 @@ def teacher_classroom_quick_answer_score(request, pk, activity_id):
         default_score = defaults["minus"]
         default_label = "减分"
     else:
-        return fail("评分动作不正确。", errors={"action": ["请选择加分或减分。"]}, status=400)
+        return fail(
+            "评分动作不正确。", errors={"action": ["请选择加分或减分。"]}, status=400
+        )
     try:
         student_id = int(request.data.get("student_id"))
     except (TypeError, ValueError):
-        return fail("学生编号不正确。", errors={"student_id": ["请选择学生。"]}, status=400)
+        return fail(
+            "学生编号不正确。", errors={"student_id": ["请选择学生。"]}, status=400
+        )
     profile = (
         StudentProfile.objects.select_related("user")
-        .filter(user_id=student_id, class_group=session.class_group, user__is_active=True)
+        .filter(
+            user_id=student_id, class_group=session.class_group, user__is_active=True
+        )
         .first()
     )
     if profile is None:
         return fail("学生不属于当前课堂班级。", status=404)
-    has_responded = _quick_answer_response_events(activity).filter(actor_id=student_id).exists()
+    has_responded = (
+        _quick_answer_response_events(activity).filter(actor_id=student_id).exists()
+    )
     if not has_responded:
         return fail("该学生还没有参与本次抢答。", status=400)
     try:
@@ -4912,33 +6589,30 @@ def teacher_classroom_quick_answer_score(request, pk, activity_id):
         score = -abs(score)
     score = min(max(score, -100), 100)
     note = str(request.data.get("note") or default_label).strip()[:500]
-    previous_score_event = _quick_answer_score_events(activity).filter(actor_id=student_id).first()
-    previous_score = float(previous_score_event.score or 0) if previous_score_event else 0
-    LearningEvent.objects.create(
-        actor=profile.user,
-        class_group=profile.class_group,
-        course=session.course,
-        lesson=session.lesson,
-        event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
-        object_type="classroom_activity",
-        object_id=str(activity.id),
-        score=score,
-        metadata={
-            "action": "quick_answer_score",
-            "command": "quick_answer",
-            "response_type": "quick_answer_score",
-            "score_action": action,
-            "score_note": note,
-            "activity_title": activity.title,
-            "session": session.id,
-            "default_score": default_score,
-            "previous_score": previous_score,
-            "ai_feature": "quick_answer_score",
-        },
-        occurred_at=timezone.now(),
-    )
-    profile.score = max(float(profile.score or 0) - previous_score + score, 0)
-    profile.save(update_fields=["score", "updated_at"])
+    try:
+        record_classroom_point_adjustment(
+            teacher=request.user,
+            student_profile=profile,
+            classroom_session=session,
+            object_type="classroom_activity",
+            object_id=activity.id,
+            reason_code="quick_answer_score_adjustment",
+            requested_score=score,
+            previous_event_action="quick_answer_score",
+            legacy_metadata={
+                "action": "quick_answer_score",
+                "command": "quick_answer",
+                "response_type": "quick_answer_score",
+                "score_action": action,
+                "score_note": note,
+                "activity_title": activity.title,
+                "session": session.id,
+                "default_score": default_score,
+                "ai_feature": "quick_answer_score",
+            },
+        )
+    except EventWriteError as exc:
+        return fail(exc.message, status=400)
     return ok(_teacher_quick_answer_payload(activity), "抢答评分已记录。")
 
 
@@ -4952,45 +6626,42 @@ def teacher_classroom_attendance_mark(request, pk, activity_id):
         return _service_fail(exc)
     if activity.session_id != session.id:
         return fail("签到活动不属于当前课堂。", status=404)
-    metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
-    if metadata.get("command") != "sign_in":
+    if not is_attendance_activity(activity):
         return fail("该课堂活动不是签到。", status=400)
     status = str(request.data.get("status") or "").strip()
-    labels = {"signed": "已签到", "late": "迟到", "leave": "请假", "absent": "缺勤"}
-    if status not in labels:
-        return fail("签到状态不正确。", errors={"status": ["请选择已签到、迟到、请假或缺勤。"]}, status=400)
+    if status not in {"signed", "late", "leave", "absent"}:
+        return fail(
+            "签到状态不正确。",
+            errors={"status": ["请选择已签到、迟到、请假或缺勤。"]},
+            status=400,
+        )
     try:
         student_id = int(request.data.get("student_id"))
     except (TypeError, ValueError):
-        return fail("学生编号不正确。", errors={"student_id": ["请选择学生。"]}, status=400)
+        return fail(
+            "学生编号不正确。", errors={"student_id": ["请选择学生。"]}, status=400
+        )
     profile = (
         StudentProfile.objects.select_related("user")
-        .filter(user_id=student_id, class_group=session.class_group, user__is_active=True)
+        .filter(
+            user_id=student_id, class_group=session.class_group, user__is_active=True
+        )
         .first()
     )
     if profile is None:
         return fail("学生不属于当前课堂班级。", status=404)
     note = str(request.data.get("note") or "").strip()[:500]
-    LearningEvent.objects.create(
-        actor=profile.user,
-        class_group=profile.class_group,
-        course=session.course,
-        lesson=session.lesson,
-        event_type=LearningEvent.EventType.PAGE_VIEW,
-        object_type="classroom_activity",
-        object_id=str(activity.id),
-        metadata={
-            "action": "classroom_activity_response",
-            "response_type": "sign_in",
-            "command": "sign_in",
-            "attendance_status": status,
-            "attendance_status_label": labels[status],
-            "source": "teacher",
-            "note": note,
-            "activity_title": activity.title,
-        },
-        occurred_at=timezone.now(),
-    )
+    try:
+        record_attendance_status(
+            activity=activity,
+            student=profile.user,
+            recorder=request.user,
+            attendance_status=status,
+            recorded_by="teacher",
+            note=note,
+        )
+    except AttendanceEventError as exc:
+        return fail(exc.message, status=400)
     return ok(_teacher_attendance_payload(activity), "签到状态已更新。")
 
 
@@ -5009,7 +6680,12 @@ def teacher_classroom_activities(request, session_id):
             return _service_fail(exc)
         return ok(classroom_activity_row(activity), "课堂活动已创建", status=201)
 
-    return ok([classroom_activity_row(activity) for activity in session.activities.order_by("-created_at")])
+    return ok(
+        [
+            classroom_activity_row(activity)
+            for activity in session.activities.order_by("-created_at")
+        ]
+    )
 
 
 @api_view(["GET", "PATCH", "DELETE"])
@@ -5024,7 +6700,9 @@ def teacher_classroom_activity_detail(request, pk):
         return ok(classroom_activity_row(activity))
     if request.method == "PATCH":
         try:
-            activity = save_classroom_activity(request, activity.session, request.data, activity=activity)
+            activity = save_classroom_activity(
+                request, activity.session, request.data, activity=activity
+            )
         except ServiceError as exc:
             return _service_fail(exc)
         return ok(classroom_activity_row(activity), "课堂活动已更新")
@@ -5040,7 +6718,9 @@ def teacher_classroom_activity_detail(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_activity_open(request, pk):
     try:
-        activity = open_classroom_activity(request, _teacher_classroom_activity(request, pk))
+        activity = open_classroom_activity(
+            request, _teacher_classroom_activity(request, pk)
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(classroom_activity_row(activity), "课堂活动已开启")
@@ -5050,7 +6730,9 @@ def teacher_classroom_activity_open(request, pk):
 @permission_classes([IsTeacher])
 def teacher_classroom_activity_close(request, pk):
     try:
-        activity = close_classroom_activity(request, _teacher_classroom_activity(request, pk))
+        activity = close_classroom_activity(
+            request, _teacher_classroom_activity(request, pk)
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     return ok(classroom_activity_row(activity), "课堂活动已关闭")
@@ -5066,16 +6748,26 @@ def _teacher_notices(request):
         .order_by("-is_pinned", "-published_at", "-created_at")
     )
     if query:
-        notices = notices.filter(Q(title__icontains=query) | Q(content__icontains=query))
+        notices = notices.filter(
+            Q(title__icontains=query) | Q(content__icontains=query)
+        )
     if status:
         notices = notices.filter(status=status)
     if class_id:
         try:
             selected_class_id = int(class_id)
         except ValueError:
-            return None, fail("班级筛选条件不正确。", errors={"class": ["班级筛选条件不正确。"]}, status=400)
+            return None, fail(
+                "班级筛选条件不正确。",
+                errors={"class": ["班级筛选条件不正确。"]},
+                status=400,
+            )
         if selected_class_id not in set(_teacher_class_ids(request)):
-            return None, fail("无权查看该班级公告。", errors={"class": ["无权查看该班级公告。"]}, status=403)
+            return None, fail(
+                "无权查看该班级公告。",
+                errors={"class": ["无权查看该班级公告。"]},
+                status=403,
+            )
         notices = notices.filter(target_classes__id=selected_class_id)
     return notices.distinct(), None
 
@@ -5185,9 +6877,17 @@ def _teacher_feedback_items(request):
         try:
             selected_class_id = int(class_id)
         except ValueError:
-            return None, fail("班级筛选条件不正确。", errors={"class": ["班级筛选条件不正确。"]}, status=400)
+            return None, fail(
+                "班级筛选条件不正确。",
+                errors={"class": ["班级筛选条件不正确。"]},
+                status=400,
+            )
         if selected_class_id not in set(_teacher_class_ids(request)):
-            return None, fail("无权查看该班级反馈。", errors={"class": ["无权查看该班级反馈。"]}, status=403)
+            return None, fail(
+                "无权查看该班级反馈。",
+                errors={"class": ["无权查看该班级反馈。"]},
+                status=403,
+            )
         feedback_items = feedback_items.filter(class_group_id=selected_class_id)
     return feedback_items, None
 
@@ -5249,7 +6949,9 @@ def teacher_feedback_close(request, pk):
 
 def _student_profile(request) -> StudentProfile:
     profile = (
-        StudentProfile.objects.select_related("user", "class_group", "class_group__school")
+        StudentProfile.objects.select_related(
+            "user", "class_group", "class_group__school"
+        )
         .filter(user=request.user, user__school=_school(request))
         .first()
     )
@@ -5270,14 +6972,26 @@ def _student_teachers(profile: StudentProfile):
         .values_list("teacher_id", flat=True)
         .distinct()
     )
-    return get_user_model().objects.filter(id__in=teacher_ids, role="teacher", school=profile.user.school).order_by("display_name", "username")
+    return (
+        get_user_model()
+        .objects.filter(id__in=teacher_ids, role="teacher", school=profile.user.school)
+        .order_by("display_name", "username")
+    )
 
 
 def _student_current_classroom(profile: StudentProfile) -> ClassroomSession | None:
     if not profile.class_group_id:
         return None
     session = (
-        ClassroomSession.objects.select_related("teacher", "course", "course__subject", "lesson", "class_group", "current_step", "current_step__lesson")
+        ClassroomSession.objects.select_related(
+            "teacher",
+            "course",
+            "course__subject",
+            "lesson",
+            "class_group",
+            "current_step",
+            "current_step__lesson",
+        )
         .filter(
             school=profile.user.school,
             class_group=profile.class_group,
@@ -5287,7 +7001,11 @@ def _student_current_classroom(profile: StudentProfile) -> ClassroomSession | No
         .first()
     )
     if session is not None:
-        session.prefetched_activities = list(session.activities.filter(status=ClassroomActivity.Status.OPEN).order_by("-opened_at", "-created_at"))
+        session.prefetched_activities = list(
+            session.activities.filter(status=ClassroomActivity.Status.OPEN).order_by(
+                "-opened_at", "-created_at"
+            )
+        )
     return session
 
 
@@ -5310,8 +7028,9 @@ def _student_required_pretest_status(user, subject: Subject | None) -> dict:
         latest_by_kind.setdefault(paper.kind, paper)
 
     submitted_paper_ids = set(
-        PretestSubmission.objects.filter(student=user, paper_id__in=[paper.id for paper in latest_by_kind.values()])
-        .values_list("paper_id", flat=True)
+        PretestSubmission.objects.filter(
+            student=user, paper_id__in=[paper.id for paper in latest_by_kind.values()]
+        ).values_list("paper_id", flat=True)
     )
     missing = [
         {
@@ -5323,7 +7042,11 @@ def _student_required_pretest_status(user, subject: Subject | None) -> dict:
         for paper in latest_by_kind.values()
         if paper.id not in submitted_paper_ids
     ]
-    return {"required": bool(latest_by_kind), "completed": not missing, "missing": missing}
+    return {
+        "required": bool(latest_by_kind),
+        "completed": not missing,
+        "missing": missing,
+    }
 
 
 def _ensure_student_can_learn_course(user, course: Course) -> None:
@@ -5344,17 +7067,24 @@ def _student_course_queryset(profile: StudentProfile):
         )
         .select_related("subject", "teacher")
         .annotate(
-            lesson_count=Count("lessons", filter=Q(lessons__is_active=True), distinct=True),
+            lesson_count=Count(
+                "lessons", filter=Q(lessons__is_active=True), distinct=True
+            ),
             step_count=Count(
                 "lessons__steps",
-                filter=Q(lessons__is_active=True, lessons__steps__status=LessonStep.Status.READY),
+                filter=Q(
+                    lessons__is_active=True,
+                    lessons__steps__status=LessonStep.Status.READY,
+                ),
                 distinct=True,
             ),
         )
         .prefetch_related(
             Prefetch(
                 "lessons",
-                queryset=Lesson.objects.filter(is_active=True).order_by("sort_order", "id"),
+                queryset=Lesson.objects.filter(is_active=True).order_by(
+                    "sort_order", "id"
+                ),
                 to_attr="student_lessons",
             )
         )
@@ -5376,7 +7106,9 @@ def _student_course(profile: StudentProfile, course_id) -> Course:
 def _student_lesson(profile: StudentProfile, lesson_id) -> Lesson:
     try:
         lesson = (
-            Lesson.objects.select_related("course", "course__subject", "course__teacher")
+            Lesson.objects.select_related(
+                "course", "course__subject", "course__teacher"
+            )
             .filter(
                 pk=int(lesson_id),
                 is_active=True,
@@ -5394,18 +7126,31 @@ def _student_lesson(profile: StudentProfile, lesson_id) -> Lesson:
     return lesson
 
 
-def _student_lesson_classroom_session(profile: StudentProfile, lesson: Lesson) -> ClassroomSession | None:
+def _student_lesson_classroom_session(
+    profile: StudentProfile, lesson: Lesson
+) -> ClassroomSession | None:
     if not profile.class_group_id:
         return None
     return (
-        ClassroomSession.objects.select_related("teacher", "course", "course__subject", "lesson", "class_group", "current_step")
-        .filter(school=profile.user.school, class_group=profile.class_group, lesson=lesson)
+        ClassroomSession.objects.select_related(
+            "teacher",
+            "course",
+            "course__subject",
+            "lesson",
+            "class_group",
+            "current_step",
+        )
+        .filter(
+            school=profile.user.school, class_group=profile.class_group, lesson=lesson
+        )
         .order_by("-created_at", "-id")
         .first()
     )
 
 
-def _ensure_student_lesson_workspace_allowed(profile: StudentProfile, lesson: Lesson) -> None:
+def _ensure_student_lesson_workspace_allowed(
+    profile: StudentProfile, lesson: Lesson
+) -> None:
     session = _student_lesson_classroom_session(profile, lesson)
     if session is None:
         raise ServiceError("该课时尚未启用课堂教学，暂不能进入。", status=403)
@@ -5414,13 +7159,18 @@ def _ensure_student_lesson_workspace_allowed(profile: StudentProfile, lesson: Le
     raise ServiceError("该课时属于课堂教学，教师启用课堂后才能进入。", status=403)
 
 
-def _ensure_student_step_classroom_open(profile: StudentProfile, step: LessonStep, *, for_answer: bool = False) -> ClassroomSession:
+def _ensure_student_step_classroom_open(
+    profile: StudentProfile, step: LessonStep, *, for_answer: bool = False
+) -> ClassroomSession:
     session = _student_lesson_classroom_session(profile, step.lesson)
     if session is None:
         raise ServiceError("该课时尚未启用课堂教学，暂不能学习该环节。", status=403)
     if session.status != ClassroomSession.Status.RUNNING:
         raise ServiceError("课堂尚未开始，暂不能学习该环节。", status=403)
-    if session.current_step_id != step.id or session.current_step_status == ClassroomSession.StepStatus.IDLE:
+    if (
+        session.current_step_id != step.id
+        or session.current_step_status == ClassroomSession.StepStatus.IDLE
+    ):
         raise ServiceError("教师尚未投放该环节。", status=403)
     if session.current_step_status == ClassroomSession.StepStatus.CLOSED:
         raise ServiceError("当前环节已关闭。", status=403)
@@ -5432,7 +7182,12 @@ def _ensure_student_step_classroom_open(profile: StudentProfile, step: LessonSte
 def _student_lesson_step(profile: StudentProfile, step_id) -> LessonStep:
     try:
         step = (
-            LessonStep.objects.select_related("lesson", "lesson__course", "lesson__course__subject", "lesson__course__teacher")
+            LessonStep.objects.select_related(
+                "lesson",
+                "lesson__course",
+                "lesson__course__subject",
+                "lesson__course__teacher",
+            )
             .filter(
                 pk=int(step_id),
                 status=LessonStep.Status.READY,
@@ -5480,7 +7235,9 @@ def _write_student_event(
     )
 
 
-def _lesson_step_contains_learning_web_page(step: LessonStep | None, page_id: int) -> bool:
+def _lesson_step_contains_learning_web_page(
+    step: LessonStep | None, page_id: int
+) -> bool:
     if step is None or not isinstance(step.resource_items, list):
         return False
     for item in step.resource_items:
@@ -5498,13 +7255,22 @@ def _student_learning_web_page_context(request, page_id, *, for_submit: bool = F
     profile = _student_profile(request)
     page = (
         LearningWebPage.objects.select_related("school", "teacher", "course", "lesson")
-        .filter(pk=page_id, school=request.user.school, is_active=True, status=LearningWebPage.Status.READY)
+        .filter(
+            pk=page_id,
+            school=request.user.school,
+            is_active=True,
+            status=LearningWebPage.Status.READY,
+        )
         .first()
     )
     if page is None:
         raise ServiceError("学习网页不存在或已停用。", status=404)
     session = _student_current_classroom(profile)
-    if session is None or session.course_id != page.course_id or session.lesson_id != page.lesson_id:
+    if (
+        session is None
+        or session.course_id != page.course_id
+        or session.lesson_id != page.lesson_id
+    ):
         raise ServiceError("该学习网页不属于当前课堂。", status=403)
     step = session.current_step
     if step is None or not _lesson_step_contains_learning_web_page(step, page.id):
@@ -5514,12 +7280,18 @@ def _student_learning_web_page_context(request, page_id, *, for_submit: bool = F
 
 
 def _learning_web_page_form(schema: dict, form_id: str) -> dict | None:
-    blocks = schema.get("blocks") if isinstance(schema, dict) and isinstance(schema.get("blocks"), list) else []
+    blocks = (
+        schema.get("blocks")
+        if isinstance(schema, dict) and isinstance(schema.get("blocks"), list)
+        else []
+    )
     return next(
         (
             item
             for item in blocks
-            if isinstance(item, dict) and item.get("type") == "form" and str(item.get("form_id") or "") == form_id
+            if isinstance(item, dict)
+            and item.get("type") == "form"
+            and str(item.get("form_id") or "") == form_id
         ),
         None,
     )
@@ -5595,42 +7367,86 @@ def learning_web_page_view(request, pk):
         if request.user.role == "teacher":
             page = _teacher_learning_web_page(request, pk)
         elif request.user.role == "student":
-            profile, page, session, step = _student_learning_web_page_context(request, pk)
-            _write_student_event(
-                request,
-                profile,
-                LearningEvent.EventType.RESOURCE_VIEW,
-                course=page.course,
-                lesson=page.lesson,
-                object_type="learning_web_page",
-                object_id=page.id,
-                metadata={
-                    "action": "learning_web_page_view",
-                    "page_version": page.revision_no,
-                    "lesson_step": step.id,
-                    "classroom_session": session.id,
-                },
+            _profile, page, session, step = _student_learning_web_page_context(
+                request, pk
+            )
+            ensure_classroom_step_opportunities(session=session)
+            record_learning_page_opened(
+                session=session,
+                step=step,
+                page=page,
+                student=request.user,
+                presentation=str(request.GET.get("presentation") or "unknown"),
             )
         else:
             raise ServiceError("当前角色无权查看学习网页。", status=403)
     except ServiceError as exc:
         return _service_fail(exc)
+    except ClassroomEventError as exc:
+        return fail(exc.message, status=400)
     return ok(learning_web_page_row(page))
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_learning_web_page_block_viewed(request, pk):
+    try:
+        _profile, page, session, step = _student_learning_web_page_context(request, pk)
+        block_id = str(request.data.get("block_id") or "").strip()
+        block_type = str(request.data.get("block_type") or "").strip()
+        try:
+            visible_ms = int(request.data.get("visible_ms"))
+            visibility_ratio = float(request.data.get("visibility_ratio", 0.5))
+        except (TypeError, ValueError) as exc:
+            raise ServiceError("区块可见时长或比例格式不正确。", status=400) from exc
+        if not block_id or len(block_id) > 64:
+            raise ServiceError("学习网页区块编号不正确。", status=400)
+        if not 250 <= visible_ms <= 3_600_000:
+            raise ServiceError("区块可见时长需在 0.25 秒至 1 小时之间。", status=400)
+        if not 0 <= visibility_ratio <= 1:
+            raise ServiceError("区块可见比例需在 0 到 1 之间。", status=400)
+        ensure_classroom_step_opportunities(session=session)
+        record_learning_page_block_viewed(
+            session=session,
+            step=step,
+            page=page,
+            student=request.user,
+            block_id=block_id,
+            block_type=block_type,
+            visible_ms=visible_ms,
+            visibility_ratio=visibility_ratio,
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    except ClassroomEventError as exc:
+        return fail(exc.message, status=400)
+    return ok({}, "区块学习行为已记录。", status=201)
 
 
 @api_view(["POST"])
 @permission_classes([IsStudent])
 def student_learning_web_page_submit(request, pk):
     try:
-        profile, page, session, step = _student_learning_web_page_context(request, pk, for_submit=True)
+        profile, page, session, step = _student_learning_web_page_context(
+            request, pk, for_submit=True
+        )
         form_id = str(request.data.get("form_id") or "").strip()
-        form = _learning_web_page_form(page.schema if isinstance(page.schema, dict) else {}, form_id)
+        form = _learning_web_page_form(
+            page.schema if isinstance(page.schema, dict) else {}, form_id
+        )
         if form is None:
-            raise ServiceError("表单不存在或已被教师修改。", errors={"form_id": ["请刷新网页后重试。"]}, status=400)
+            raise ServiceError(
+                "表单不存在或已被教师修改。",
+                errors={"form_id": ["请刷新网页后重试。"]},
+                status=400,
+            )
         answers = _clean_learning_web_page_answers(form, request.data.get("answers"))
         with transaction.atomic():
+            ensure_classroom_step_opportunities(session=session)
             latest_attempt = (
-                LearningWebPageResponse.objects.filter(page=page, student=request.user, form_id=form_id)
+                LearningWebPageResponse.objects.filter(
+                    page=page, student=request.user, form_id=form_id
+                )
                 .aggregate(max_attempt=Max("attempt_no"))
                 .get("max_attempt")
                 or 0
@@ -5649,35 +7465,22 @@ def student_learning_web_page_submit(request, pk):
                 answers=answers,
                 attempt_no=latest_attempt + 1,
             )
-            _write_student_event(
-                request,
-                profile,
-                LearningEvent.EventType.ANSWER_SUBMIT,
-                course=page.course,
-                lesson=page.lesson,
-                object_type="learning_web_page_form",
-                object_id=response.id,
-                metadata={
-                    "action": "learning_web_page_form_submit",
-                    "learning_web_page": page.id,
-                    "page_version": page.revision_no,
-                    "form_id": form_id,
-                    "lesson_step": step.id,
-                    "classroom_session": session.id,
-                    "attempt_no": response.attempt_no,
-                    "answers": answers,
-                    "ai_feature": "learning_web_page_form",
-                },
-            )
+            record_learning_page_form_submission(response=response)
     except ServiceError as exc:
         return _service_fail(exc)
+    except ClassroomEventError as exc:
+        return fail(exc.message, status=400)
     return ok(learning_web_page_response_row(response), "表单已提交。", status=201)
 
 
 def _student_dashboard_data(request, profile: StudentProfile) -> dict:
     courses = list(_student_course_queryset(profile)[:8])
     for course in courses:
-        course.latest_lesson = course.student_lessons[0] if getattr(course, "student_lessons", []) else None
+        course.latest_lesson = (
+            course.student_lessons[0]
+            if getattr(course, "student_lessons", [])
+            else None
+        )
 
     events = LearningEvent.objects.filter(actor=request.user)
     notices = (
@@ -5695,7 +7498,14 @@ def _student_dashboard_data(request, profile: StudentProfile) -> dict:
 
     todo_rows = []
     if request.user.is_first_login or profile.is_first_use:
-        todo_rows.append({"label": "首次使用", "detail": "请完成改密、选班和前测。", "level": "warn", "path": "/student/onboarding"})
+        todo_rows.append(
+            {
+                "label": "首次使用",
+                "detail": "请完成改密、选班和前测。",
+                "level": "warn",
+                "path": "/student/onboarding",
+            }
+        )
     for course in courses:
         status = _student_required_pretest_status(request.user, course.subject)
         if status["required"] and not status["completed"]:
@@ -5731,7 +7541,10 @@ def _student_dashboard_data(request, profile: StudentProfile) -> dict:
             .filter(Q(end_at__isnull=True) | Q(end_at__gt=now))
             .exclude(
                 attempts__student=request.user,
-                attempts__status__in=[TestAttempt.Status.SUBMITTED, TestAttempt.Status.GRADED],
+                attempts__status__in=[
+                    TestAttempt.Status.SUBMITTED,
+                    TestAttempt.Status.GRADED,
+                ],
             )
             .order_by("end_at", "opened_at", "id")
             .first()
@@ -5748,20 +7561,37 @@ def _student_dashboard_data(request, profile: StudentProfile) -> dict:
 
     return {
         "profile": student_profile_summary(profile),
-        "current_classroom": student_classroom_row(current_classroom, student_layer=profile.current_layer, student_user=request.user),
+        "current_classroom": student_classroom_row(
+            current_classroom,
+            student_layer=profile.current_layer,
+            student_user=request.user,
+        ),
         "metrics": [
             {"label": "我的课程", "value": len(courses), "sub": "当前班级可见"},
             {"label": "学习事件", "value": events.count(), "sub": "已记录行为"},
-            {"label": "近 7 天学习", "value": events.filter(occurred_at__gte=timezone.now() - timedelta(days=7)).count(), "sub": "行为事件"},
+            {
+                "label": "近 7 天学习",
+                "value": events.filter(
+                    occurred_at__gte=timezone.now() - timedelta(days=7)
+                ).count(),
+                "sub": "行为事件",
+            },
             {"label": "公告", "value": len(notices), "sub": "近期发布"},
         ],
         "todo_rows": todo_rows[:6],
         "course_rows": [
-            student_course_row(course, pretest_status=_student_required_pretest_status(request.user, course.subject))
+            student_course_row(
+                course,
+                pretest_status=_student_required_pretest_status(
+                    request.user, course.subject
+                ),
+            )
             for course in courses
         ],
         "notice_rows": [student_notice_row(notice) for notice in notices],
-        "teachers": [student_teacher_row(teacher) for teacher in _student_teachers(profile)],
+        "teachers": [
+            student_teacher_row(teacher) for teacher in _student_teachers(profile)
+        ],
     }
 
 
@@ -5776,8 +7606,14 @@ def student_me(request):
         {
             "user": user_summary(request.user),
             "profile": student_profile_summary(profile),
-            "current_classroom": student_classroom_row(_student_current_classroom(profile), student_layer=profile.current_layer, student_user=request.user),
-            "teachers": [student_teacher_row(teacher) for teacher in _student_teachers(profile)],
+            "current_classroom": student_classroom_row(
+                _student_current_classroom(profile),
+                student_layer=profile.current_layer,
+                student_user=request.user,
+            ),
+            "teachers": [
+                student_teacher_row(teacher) for teacher in _student_teachers(profile)
+            ],
         }
     )
 
@@ -5817,7 +7653,11 @@ def _student_archive_event_label(event: LearningEvent) -> str:
         "student_work_attachment_upload": "提交课堂作品",
         "lesson_step_answer_submit": "提交课堂题目",
     }
-    return action_labels.get(action) or STUDENT_ARCHIVE_EVENT_LABELS.get(event.event_type) or event.get_event_type_display()
+    return (
+        action_labels.get(action)
+        or STUDENT_ARCHIVE_EVENT_LABELS.get(event.event_type)
+        or event.get_event_type_display()
+    )
 
 
 def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
@@ -5827,17 +7667,30 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
         try:
             subject_id = int(raw_subject)
         except (TypeError, ValueError):
-            raise ServiceError("学科参数不正确。", errors={"subject": ["请选择有效学科。"]}, status=400)
-        selected_subject = Subject.objects.filter(pk=subject_id, school=request.user.school, is_active=True).first()
+            raise ServiceError(
+                "学科参数不正确。", errors={"subject": ["请选择有效学科。"]}, status=400
+            )
+        selected_subject = Subject.objects.filter(
+            pk=subject_id, school=request.user.school, is_active=True
+        ).first()
         if selected_subject is None:
-            raise ServiceError("学科不存在或已停用。", errors={"subject": ["请选择有效学科。"]}, status=404)
+            raise ServiceError(
+                "学科不存在或已停用。",
+                errors={"subject": ["请选择有效学科。"]},
+                status=404,
+            )
     else:
         selected_subject = None
 
     courses = list(_student_course_queryset(profile))
     attempts = list(
         TestAttempt.objects.filter(student=request.user)
-        .select_related("assessment", "assessment__subject", "assessment__course", "assessment__teacher")
+        .select_related(
+            "assessment",
+            "assessment__subject",
+            "assessment__course",
+            "assessment__teacher",
+        )
         .annotate(total_possible=Sum("assessment__questions__score"))
         .order_by("-submitted_at", "-started_at")
     )
@@ -5848,7 +7701,9 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
     )
     works = list(
         StudentWorkAttachment.objects.filter(student=request.user)
-        .select_related("course", "course__subject", "lesson", "lesson_step", "evaluated_by")
+        .select_related(
+            "course", "course__subject", "lesson", "lesson_step", "evaluated_by"
+        )
         .order_by("-updated_at")
     )
     evaluations = list(
@@ -5863,7 +7718,9 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
             relevant_subjects[course.subject_id] = course.subject
     for attempt in attempts:
         if attempt.assessment.subject_id:
-            relevant_subjects[attempt.assessment.subject_id] = attempt.assessment.subject
+            relevant_subjects[attempt.assessment.subject_id] = (
+                attempt.assessment.subject
+            )
     for submission in pretests:
         relevant_subjects[submission.subject_id] = submission.subject
     if selected_subject is not None:
@@ -5871,10 +7728,14 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
 
     if subject_id:
         courses = [item for item in courses if item.subject_id == subject_id]
-        attempts = [item for item in attempts if item.assessment.subject_id == subject_id]
+        attempts = [
+            item for item in attempts if item.assessment.subject_id == subject_id
+        ]
         pretests = [item for item in pretests if item.subject_id == subject_id]
         works = [item for item in works if item.course.subject_id == subject_id]
-        evaluations = [item for item in evaluations if item.course.subject_id == subject_id]
+        evaluations = [
+            item for item in evaluations if item.course.subject_id == subject_id
+        ]
 
     events = LearningEvent.objects.filter(actor=request.user)
     if subject_id:
@@ -5883,12 +7744,19 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
     course_rows = []
     for course in courses:
         course_events = events.filter(course=course)
-        visited_lessons = course_events.filter(
-            event_type=LearningEvent.EventType.LESSON_ENTER,
-            lesson_id__isnull=False,
-        ).values("lesson_id").distinct().count()
+        visited_lessons = (
+            course_events.filter(
+                event_type=LearningEvent.EventType.LESSON_ENTER,
+                lesson_id__isnull=False,
+            )
+            .values("lesson_id")
+            .distinct()
+            .count()
+        )
         completed_steps = set(
-            course_events.filter(object_type="lesson_step", metadata__action="step_complete")
+            course_events.filter(
+                object_type="lesson_step", metadata__action="step_complete"
+            )
             .exclude(object_id="")
             .values_list("object_id", flat=True)
         )
@@ -5903,8 +7771,16 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
                 "lesson_count": int(getattr(course, "lesson_count", 0) or 0),
                 "visited_lesson_count": visited_lessons,
                 "step_count": step_count,
-                "completed_step_count": min(len(completed_steps), step_count) if step_count else len(completed_steps),
-                "progress_percent": round(min(len(completed_steps) * 100 / step_count, 100), 1) if step_count else 0,
+                "completed_step_count": (
+                    min(len(completed_steps), step_count)
+                    if step_count
+                    else len(completed_steps)
+                ),
+                "progress_percent": (
+                    round(min(len(completed_steps) * 100 / step_count, 100), 1)
+                    if step_count
+                    else 0
+                ),
                 "event_count": course_events.count(),
                 "last_activity_at": latest_event.occurred_at if latest_event else None,
             }
@@ -5916,7 +7792,14 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
             "assessment_id": attempt.assessment_id,
             "title": attempt.assessment.title,
             "subject": subject_row(attempt.assessment.subject),
-            "course": {"id": attempt.assessment.course_id, "title": attempt.assessment.course.title} if attempt.assessment.course_id else None,
+            "course": (
+                {
+                    "id": attempt.assessment.course_id,
+                    "title": attempt.assessment.course.title,
+                }
+                if attempt.assessment.course_id
+                else None
+            ),
             "status": attempt.status,
             "status_label": attempt.get_status_display(),
             "objective_score": attempt.objective_score,
@@ -5950,7 +7833,9 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
             {
                 **payload,
                 "course_title": work.course.title,
-                "subject": subject_row(work.course.subject) if work.course.subject_id else None,
+                "subject": (
+                    subject_row(work.course.subject) if work.course.subject_id else None
+                ),
                 "lesson_title": work.lesson.title,
                 "step_title": work.lesson_step.title,
                 "status": "evaluated" if work.evaluated_at else "submitted",
@@ -5961,24 +7846,46 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
     evaluation_rows = []
     for submission in evaluations[:50]:
         ratings = submission.ratings if isinstance(submission.ratings, dict) else {}
-        numeric_ratings = [float(value) for value in ratings.values() if isinstance(value, (int, float))]
+        numeric_ratings = [
+            float(value)
+            for value in ratings.values()
+            if isinstance(value, (int, float))
+        ]
         evaluation_rows.append(
             {
                 "id": submission.id,
-                "course": {"id": submission.course_id, "title": submission.course.title},
-                "subject": subject_row(submission.course.subject) if submission.course.subject_id else None,
+                "course": {
+                    "id": submission.course_id,
+                    "title": submission.course.title,
+                },
+                "subject": (
+                    subject_row(submission.course.subject)
+                    if submission.course.subject_id
+                    else None
+                ),
                 "evaluation_type": submission.evaluation_type,
                 "evaluation_type_label": submission.get_evaluation_type_display(),
-                "average_rating": round(sum(numeric_ratings) / len(numeric_ratings), 1) if numeric_ratings else None,
+                "average_rating": (
+                    round(sum(numeric_ratings) / len(numeric_ratings), 1)
+                    if numeric_ratings
+                    else None
+                ),
                 "comment": submission.comment,
-                "evaluator_label": submission.evaluator.display_name if submission.evaluation_type == ClassroomEvaluationSubmission.EvaluationType.TEACHER else submission.get_evaluation_type_display(),
+                "evaluator_label": (
+                    submission.evaluator.display_name
+                    if submission.evaluation_type
+                    == ClassroomEvaluationSubmission.EvaluationType.TEACHER
+                    else submission.get_evaluation_type_display()
+                ),
                 "updated_at": submission.updated_at,
             }
         )
 
     event_distribution = []
     event_count = events.count()
-    distribution_counts = events.values("event_type").annotate(value=Count("id")).order_by("-value")
+    distribution_counts = (
+        events.values("event_type").annotate(value=Count("id")).order_by("-value")
+    )
     for item in distribution_counts:
         label = STUDENT_ARCHIVE_EVENT_LABELS.get(item["event_type"])
         if not label:
@@ -5988,25 +7895,39 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
                 "event_type": item["event_type"],
                 "label": label,
                 "value": item["value"],
-                "percent": round(item["value"] * 100 / event_count, 1) if event_count else 0,
+                "percent": (
+                    round(item["value"] * 100 / event_count, 1) if event_count else 0
+                ),
             }
         )
 
     recent_events = []
-    for event in events.select_related("course", "lesson").order_by("-occurred_at")[:60]:
+    for event in events.select_related("course", "lesson").order_by("-occurred_at")[
+        :60
+    ]:
         recent_events.append(
             {
                 "id": event.id,
                 "event_type": event.event_type,
                 "label": _student_archive_event_label(event),
-                "course": {"id": event.course_id, "title": event.course.title} if event.course_id else None,
-                "lesson": {"id": event.lesson_id, "title": event.lesson.title} if event.lesson_id else None,
+                "course": (
+                    {"id": event.course_id, "title": event.course.title}
+                    if event.course_id
+                    else None
+                ),
+                "lesson": (
+                    {"id": event.lesson_id, "title": event.lesson.title}
+                    if event.lesson_id
+                    else None
+                ),
                 "duration_ms": event.duration_ms,
                 "occurred_at": event.occurred_at,
             }
         )
 
-    active_days = events.annotate(day=TruncDate("occurred_at")).values("day").distinct().count()
+    active_days = (
+        events.annotate(day=TruncDate("occurred_at")).values("day").distinct().count()
+    )
     completed_tests = sum(item.status == TestAttempt.Status.GRADED for item in attempts)
     latest_event = events.order_by("-occurred_at").first()
     return {
@@ -6015,10 +7936,19 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
             "username": request.user.username,
             "display_name": request.user.display_name or request.user.username,
             "student_no": profile.student_no,
-            "school": {"id": request.user.school_id, "name": request.user.school.name} if request.user.school_id else None,
-            "class_group": class_group_row(profile.class_group) if profile.class_group_id else None,
+            "school": (
+                {"id": request.user.school_id, "name": request.user.school.name}
+                if request.user.school_id
+                else None
+            ),
+            "class_group": (
+                class_group_row(profile.class_group) if profile.class_group_id else None
+            ),
         },
-        "subjects": [subject_row(item) for item in sorted(relevant_subjects.values(), key=lambda row: row.name)],
+        "subjects": [
+            subject_row(item)
+            for item in sorted(relevant_subjects.values(), key=lambda row: row.name)
+        ],
         "selected_subject": subject_id,
         "metrics": {
             "course_count": len(courses),
@@ -6064,7 +7994,9 @@ def student_onboarding_classes(request):
     return ok(
         [
             class_group_row(class_group)
-            for class_group in ClassGroup.objects.filter(school=_school(request), status=ClassGroup.Status.ACTIVE).order_by("grade", "name")
+            for class_group in ClassGroup.objects.filter(
+                school=_school(request), status=ClassGroup.Status.ACTIVE
+            ).order_by("grade", "name")
         ]
     )
 
@@ -6077,16 +8009,32 @@ def student_onboarding_password(request):
     except ServiceError as exc:
         return _service_fail(exc)
     password = str(request.data.get("password", "")).strip()
-    if len(password) < 6 or len(password) > 32 or any(char.isspace() for char in password):
-        return fail("密码需为 6-32 位，不能包含空格。", errors={"password": ["密码需为 6-32 位，不能包含空格。"]}, status=400)
+    if (
+        len(password) < 6
+        or len(password) > 32
+        or any(char.isspace() for char in password)
+    ):
+        return fail(
+            "密码需为 6-32 位，不能包含空格。",
+            errors={"password": ["密码需为 6-32 位，不能包含空格。"]},
+            status=400,
+        )
     request.user.set_password(password)
     request.user.is_first_login = False
     request.user.save(update_fields=["password", "is_first_login"])
     update_session_auth_hash(request, request.user)
     profile.password_updated_at = timezone.now()
     profile.onboarding_status = StudentProfile.OnboardingStatus.PASSWORD_UPDATED
-    profile.save(update_fields=["password_updated_at", "onboarding_status", "updated_at"])
-    write_audit(request, "student.onboarding.password", school=request.user.school, target_type="student_profile", target_id=profile.id)
+    profile.save(
+        update_fields=["password_updated_at", "onboarding_status", "updated_at"]
+    )
+    write_audit(
+        request,
+        "student.onboarding.password",
+        school=request.user.school,
+        target_type="student_profile",
+        target_id=profile.id,
+    )
     return ok(student_profile_summary(profile), "密码已更新。")
 
 
@@ -6099,14 +8047,29 @@ def student_onboarding_class(request):
     except (ServiceError, TypeError, ValueError) as exc:
         if isinstance(exc, ServiceError):
             return _service_fail(exc)
-        return fail("请选择班级。", errors={"class_group": ["请选择班级。"]}, status=400)
-    class_group = ClassGroup.objects.filter(id=class_id, school=request.user.school, status=ClassGroup.Status.ACTIVE).first()
+        return fail(
+            "请选择班级。", errors={"class_group": ["请选择班级。"]}, status=400
+        )
+    class_group = ClassGroup.objects.filter(
+        id=class_id, school=request.user.school, status=ClassGroup.Status.ACTIVE
+    ).first()
     if class_group is None:
-        return fail("班级不存在或不可选择。", errors={"class_group": ["班级不存在或不可选择。"]}, status=404)
+        return fail(
+            "班级不存在或不可选择。",
+            errors={"class_group": ["班级不存在或不可选择。"]},
+            status=404,
+        )
     profile.class_group = class_group
     profile.class_selected_at = timezone.now()
     profile.onboarding_status = StudentProfile.OnboardingStatus.CLASS_SELECTED
-    profile.save(update_fields=["class_group", "class_selected_at", "onboarding_status", "updated_at"])
+    profile.save(
+        update_fields=[
+            "class_group",
+            "class_selected_at",
+            "onboarding_status",
+            "updated_at",
+        ]
+    )
     write_audit(
         request,
         "student.onboarding.class",
@@ -6121,10 +8084,17 @@ def student_onboarding_class(request):
 @api_view(["GET"])
 @permission_classes([IsStudent])
 def student_pretests_required(request):
-    subjects = Subject.objects.filter(school=request.user.school, is_active=True).order_by("name")
+    subjects = Subject.objects.filter(
+        school=request.user.school, is_active=True
+    ).order_by("name")
     return ok(
         [
-            {"subject": subject_row(subject), "pretest_status": _student_required_pretest_status(request.user, subject)}
+            {
+                "subject": subject_row(subject),
+                "pretest_status": _student_required_pretest_status(
+                    request.user, subject
+                ),
+            }
             for subject in subjects
         ]
     )
@@ -6133,12 +8103,21 @@ def student_pretests_required(request):
 @api_view(["GET"])
 @permission_classes([IsStudent])
 def student_pretests_for_subject(request, subject_id):
-    subject = Subject.objects.filter(id=subject_id, school=request.user.school, is_active=True).first()
+    subject = Subject.objects.filter(
+        id=subject_id, school=request.user.school, is_active=True
+    ).first()
     if subject is None:
         return fail("学科不存在或已停用。", status=404)
     papers = (
-        PretestPaper.objects.filter(school=request.user.school, subject=subject, status=PretestPaper.Status.PUBLISHED)
-        .annotate(question_count=Count("questions", distinct=True), submission_count=Count("submissions", distinct=True))
+        PretestPaper.objects.filter(
+            school=request.user.school,
+            subject=subject,
+            status=PretestPaper.Status.PUBLISHED,
+        )
+        .annotate(
+            question_count=Count("questions", distinct=True),
+            submission_count=Count("submissions", distinct=True),
+        )
         .order_by("kind", "-version")
     )
     latest_by_kind: dict[str, PretestPaper] = {}
@@ -6159,7 +8138,11 @@ def student_pretest_paper(request, paper_id):
     paper = (
         PretestPaper.objects.select_related("subject")
         .prefetch_related("questions")
-        .filter(pk=paper_id, school=request.user.school, status=PretestPaper.Status.PUBLISHED)
+        .filter(
+            pk=paper_id,
+            school=request.user.school,
+            status=PretestPaper.Status.PUBLISHED,
+        )
         .first()
     )
     if paper is None:
@@ -6169,7 +8152,9 @@ def student_pretest_paper(request, paper_id):
 
     answers = request.data.get("answers")
     if not isinstance(answers, dict):
-        return fail("请提交前测答案。", errors={"answers": ["请提交前测答案。"]}, status=400)
+        return fail(
+            "请提交前测答案。", errors={"answers": ["请提交前测答案。"]}, status=400
+        )
     if PretestSubmission.objects.filter(student=request.user, paper=paper).exists():
         return fail("该前测已完成。", status=400)
 
@@ -6181,23 +8166,45 @@ def student_pretest_paper(request, paper_id):
         if question.is_required and (answer is None or answer == "" or answer == []):
             errors[key] = ["该题必答。"]
             continue
-        if question.answer and question.question_type in {PretestQuestion.QuestionType.SINGLE, PretestQuestion.QuestionType.MULTIPLE}:
-            expected = question.answer if isinstance(question.answer, list) else [question.answer]
+        if question.answer and question.question_type in {
+            PretestQuestion.QuestionType.SINGLE,
+            PretestQuestion.QuestionType.MULTIPLE,
+        }:
+            expected = (
+                question.answer
+                if isinstance(question.answer, list)
+                else [question.answer]
+            )
             actual = answer if isinstance(answer, list) else [answer]
             if sorted(map(str, actual)) == sorted(map(str, expected)):
                 score += float(question.score or 0)
     if errors:
         return fail("前测答案校验失败。", errors=errors, status=400)
 
-    submission = PretestSubmission.objects.create(student=request.user, subject=paper.subject, paper=paper, answers=answers, score=score)
+    submission = PretestSubmission.objects.create(
+        student=request.user,
+        subject=paper.subject,
+        paper=paper,
+        answers=answers,
+        score=score,
+    )
     try:
         profile = _student_profile(request)
         status = _student_required_pretest_status(request.user, paper.subject)
         if status["required"] and status["completed"]:
             profile.pretest_completed_at = timezone.now()
-            profile.onboarding_status = StudentProfile.OnboardingStatus.PRETEST_COMPLETED
+            profile.onboarding_status = (
+                StudentProfile.OnboardingStatus.PRETEST_COMPLETED
+            )
             profile.is_first_use = False
-            profile.save(update_fields=["pretest_completed_at", "onboarding_status", "is_first_use", "updated_at"])
+            profile.save(
+                update_fields=[
+                    "pretest_completed_at",
+                    "onboarding_status",
+                    "is_first_use",
+                    "updated_at",
+                ]
+            )
     except ServiceError:
         profile = None
     _write_student_event(
@@ -6207,9 +8214,20 @@ def student_pretest_paper(request, paper_id):
         object_type="pretest_paper",
         object_id=paper.id,
         score=score,
-        metadata={"subject": paper.subject_id, "kind": paper.kind, "submission": submission.id},
+        metadata={
+            "subject": paper.subject_id,
+            "kind": paper.kind,
+            "submission": submission.id,
+        },
     )
-    return ok({"id": submission.id, "score": submission.score, "submitted_at": submission.submitted_at}, "前测已提交。")
+    return ok(
+        {
+            "id": submission.id,
+            "score": submission.score,
+            "submitted_at": submission.submitted_at,
+        },
+        "前测已提交。",
+    )
 
 
 @api_view(["GET"])
@@ -6221,8 +8239,19 @@ def student_courses(request):
         return _service_fail(exc)
     rows = []
     for course in _student_course_queryset(profile):
-        course.latest_lesson = course.student_lessons[0] if getattr(course, "student_lessons", []) else None
-        rows.append(student_course_row(course, pretest_status=_student_required_pretest_status(request.user, course.subject)))
+        course.latest_lesson = (
+            course.student_lessons[0]
+            if getattr(course, "student_lessons", [])
+            else None
+        )
+        rows.append(
+            student_course_row(
+                course,
+                pretest_status=_student_required_pretest_status(
+                    request.user, course.subject
+                ),
+            )
+        )
     return ok(rows)
 
 
@@ -6234,9 +8263,15 @@ def student_course_detail(request, pk):
         course = _student_course(profile, pk)
     except ServiceError as exc:
         return _service_fail(exc)
-    lessons = Lesson.objects.filter(course=course, is_active=True).annotate(
-        step_count=Count("steps", filter=Q(steps__status=LessonStep.Status.READY), distinct=True)
-    ).order_by("sort_order", "id")
+    lessons = (
+        Lesson.objects.filter(course=course, is_active=True)
+        .annotate(
+            step_count=Count(
+                "steps", filter=Q(steps__status=LessonStep.Status.READY), distinct=True
+            )
+        )
+        .order_by("sort_order", "id")
+    )
     lesson_rows = list(lessons)
     classroom_by_lesson = {}
     if profile.class_group_id and lesson_rows:
@@ -6251,10 +8286,15 @@ def student_course_detail(request, pk):
         )
         for session in sessions:
             classroom_by_lesson.setdefault(session.lesson_id, session)
-    row = student_course_row(course, pretest_status=_student_required_pretest_status(request.user, course.subject))
+    row = student_course_row(
+        course,
+        pretest_status=_student_required_pretest_status(request.user, course.subject),
+    )
     rows = []
     for lesson in lesson_rows:
-        lesson_data = lesson_row(lesson) | {"step_count": getattr(lesson, "step_count", 0)}
+        lesson_data = lesson_row(lesson) | {
+            "step_count": getattr(lesson, "step_count", 0)
+        }
         session = classroom_by_lesson.get(lesson.id)
         lesson_data["classroom_session"] = (
             {
@@ -6282,10 +8322,21 @@ def student_course_lessons(request, course_id):
         course = _student_course(profile, course_id)
     except ServiceError as exc:
         return _service_fail(exc)
-    lessons = Lesson.objects.filter(course=course, is_active=True).annotate(
-        step_count=Count("steps", filter=Q(steps__status=LessonStep.Status.READY), distinct=True)
-    ).order_by("sort_order", "id")
-    return ok([lesson_row(lesson) | {"step_count": getattr(lesson, "step_count", 0)} for lesson in lessons])
+    lessons = (
+        Lesson.objects.filter(course=course, is_active=True)
+        .annotate(
+            step_count=Count(
+                "steps", filter=Q(steps__status=LessonStep.Status.READY), distinct=True
+            )
+        )
+        .order_by("sort_order", "id")
+    )
+    return ok(
+        [
+            lesson_row(lesson) | {"step_count": getattr(lesson, "step_count", 0)}
+            for lesson in lessons
+        ]
+    )
 
 
 @api_view(["GET"])
@@ -6297,10 +8348,17 @@ def student_lesson_workspace(request, lesson_id):
         _ensure_student_lesson_workspace_allowed(profile, lesson)
     except ServiceError as exc:
         return _service_fail(exc)
-    steps = LessonStep.objects.filter(lesson=lesson, status=LessonStep.Status.READY).order_by("sort_order", "id")
+    steps = LessonStep.objects.filter(
+        lesson=lesson, status=LessonStep.Status.READY
+    ).order_by("sort_order", "id")
     return ok(
         {
-            "course": student_course_row(lesson.course, pretest_status=_student_required_pretest_status(request.user, lesson.course.subject)),
+            "course": student_course_row(
+                lesson.course,
+                pretest_status=_student_required_pretest_status(
+                    request.user, lesson.course.subject
+                ),
+            ),
             "lesson": lesson_row(lesson),
             "steps": [student_lesson_step_row(step) for step in steps],
         }
@@ -6372,14 +8430,18 @@ def student_lesson_step_complete(request, step_id):
     return ok({}, "已记录完成环节。")
 
 
-def _student_step_question(profile: StudentProfile, step: LessonStep, question_id: str) -> dict:
+def _student_step_question(
+    profile: StudentProfile, step: LessonStep, question_id: str
+) -> dict:
     questions = normalize_lesson_question_items(
         step.question_items,
         include_answer=False,
         student_layer=profile.current_layer,
         apply_layering=lesson_step_has_layered_questions(step),
     )
-    question = next((item for item in questions if str(item.get("id")) == str(question_id)), None)
+    question = next(
+        (item for item in questions if str(item.get("id")) == str(question_id)), None
+    )
     if question is None:
         raise ServiceError("题目不存在或当前层级不可提交。", status=404)
     return question
@@ -6387,12 +8449,42 @@ def _student_step_question(profile: StudentProfile, step: LessonStep, question_i
 
 def _validate_student_work_file(question: dict, uploaded_file) -> tuple[str, int]:
     if uploaded_file is None:
-        raise ServiceError("请选择要上传的文件。", errors={"attachment": ["请选择要上传的文件。"]}, status=400)
-    config = question.get("file_config") if isinstance(question.get("file_config"), dict) else {}
-    allowed_extensions = config.get("allowed_extensions") if isinstance(config.get("allowed_extensions"), list) else []
-    allowed_extensions = [clean_resource_ext(item) for item in allowed_extensions if clean_resource_ext(item)]
+        raise ServiceError(
+            "请选择要上传的文件。",
+            errors={"attachment": ["请选择要上传的文件。"]},
+            status=400,
+        )
+    config = (
+        question.get("file_config")
+        if isinstance(question.get("file_config"), dict)
+        else {}
+    )
+    allowed_extensions = (
+        config.get("allowed_extensions")
+        if isinstance(config.get("allowed_extensions"), list)
+        else []
+    )
+    allowed_extensions = [
+        clean_resource_ext(item)
+        for item in allowed_extensions
+        if clean_resource_ext(item)
+    ]
     if not allowed_extensions:
-        allowed_extensions = ["doc", "docx", "ppt", "pptx", "xls", "xlsx", "pdf", "zip", "rar", "7z", "png", "jpg", "jpeg"]
+        allowed_extensions = [
+            "doc",
+            "docx",
+            "ppt",
+            "pptx",
+            "xls",
+            "xlsx",
+            "pdf",
+            "zip",
+            "rar",
+            "7z",
+            "png",
+            "jpg",
+            "jpeg",
+        ]
     try:
         max_size_mb = int(config.get("max_size_mb", 100) or 100)
     except (TypeError, ValueError):
@@ -6400,7 +8492,9 @@ def _validate_student_work_file(question: dict, uploaded_file) -> tuple[str, int
     max_size = min(max(max_size_mb, 1), 512) * 1024 * 1024
     file_size = int(getattr(uploaded_file, "size", 0) or 0)
     if file_size <= 0:
-        raise ServiceError("上传文件为空。", errors={"attachment": ["上传文件为空。"]}, status=400)
+        raise ServiceError(
+            "上传文件为空。", errors={"attachment": ["上传文件为空。"]}, status=400
+        )
     if file_size > max_size:
         raise ServiceError(
             f"文件不能超过 {max_size_mb}MB。",
@@ -6411,7 +8505,11 @@ def _validate_student_work_file(question: dict, uploaded_file) -> tuple[str, int
     if ext not in allowed_extensions:
         raise ServiceError(
             f"文件格式不支持，请上传：{', '.join(allowed_extensions)}。",
-            errors={"attachment": [f"文件格式不支持，请上传：{', '.join(allowed_extensions)}。"]},
+            errors={
+                "attachment": [
+                    f"文件格式不支持，请上传：{', '.join(allowed_extensions)}。"
+                ]
+            },
             status=400,
         )
     return ext, file_size
@@ -6434,55 +8532,46 @@ def student_lesson_step_attachment(request, step_id):
     except ServiceError as exc:
         return _service_fail(exc)
 
-    with transaction.atomic():
-        work = (
-            StudentWorkAttachment.objects.select_for_update()
-            .filter(student=request.user, lesson_step=step, question_id=question_id)
-            .first()
-        )
-        if work and work.attachment:
-            work.attachment.delete(save=False)
-        if work is None:
+    try:
+        with transaction.atomic():
+            ensure_classroom_step_opportunities(session=session)
+            previous_work = (
+                StudentWorkAttachment.objects.select_for_update()
+                .filter(
+                    student=request.user,
+                    lesson_step=step,
+                    question_id=question_id,
+                )
+                .order_by("-upload_version", "-id")
+                .first()
+            )
             work = StudentWorkAttachment(
                 school=request.user.school,
                 class_group=profile.class_group,
                 course=step.lesson.course,
                 lesson=step.lesson,
                 lesson_step=step,
+                classroom_session=session,
                 student=request.user,
                 question_id=question_id,
+                question_stem=str(question.get("stem") or "")[:1000],
+                upload_version=(
+                    previous_work.upload_version + 1 if previous_work else 1
+                ),
+                supersedes=previous_work,
+                attachment=uploaded_file,
+                original_name=Path(
+                    getattr(uploaded_file, "name", "") or "attachment"
+                ).name[:255],
+                file_ext=file_ext,
+                file_size=file_size,
             )
-        work.classroom_session = session
-        work.question_stem = str(question.get("stem") or "")[:1000]
-        work.attachment = uploaded_file
-        work.original_name = Path(getattr(uploaded_file, "name", "") or "attachment").name[:255]
-        work.file_ext = file_ext
-        work.file_size = file_size
-        work.score = None
-        work.feedback = ""
-        work.evaluated_by = None
-        work.evaluated_at = None
-        work.save()
+            work.save()
+            record_classroom_attachment_submission(work=work)
+    except ClassroomEventError as exc:
+        return fail(exc.message, status=400)
 
     payload = student_work_attachment_row(work)
-    _write_student_event(
-        request,
-        profile,
-        LearningEvent.EventType.TASK_SUBMIT,
-        course=step.lesson.course,
-        lesson=step.lesson,
-        object_type="student_work_attachment",
-        object_id=work.id,
-        metadata={
-            "action": "student_work_attachment_upload",
-            "classroom_session": session.id,
-            "lesson_step": step.id,
-            "question_id": question_id,
-            "filename": work.original_name,
-            "file_ext": file_ext,
-            "file_size": file_size,
-        },
-    )
     return ok(payload, "附件已上传。", status=201)
 
 
@@ -6503,31 +8592,98 @@ def student_lesson_step_answer(request, step_id):
         apply_layering=lesson_step_has_layered_questions(step),
     )
     progress = _lesson_step_answer_progress(questions, answer)
-    _write_student_event(
-        request,
-        profile,
-        LearningEvent.EventType.ANSWER_SUBMIT,
-        course=step.lesson.course,
-        lesson=step.lesson,
-        object_type="lesson_step",
-        object_id=step.id,
-        score=progress["auto_score"] if progress["auto_score_max"] > 0 else None,
-        metadata={
-            "action": "lesson_step_answer",
-            "classroom_session": session.id,
-            "step_type": step.step_type,
-            "answer": answer,
-            "answered_count": progress["answered_count"],
-            "question_count": progress["question_count"],
-            "required_count": progress["required_count"],
-            "auto_score": progress["auto_score"],
-            "auto_score_max": progress["auto_score_max"],
-            "auto_gradable_count": progress["auto_gradable_count"],
-            "correct_count": progress["correct_count"],
-        },
-    )
+    missing = [
+        row["stem"]
+        for row in progress["answers"]
+        if row["required"] and not row["is_answered"]
+    ]
+    if missing:
+        return fail(
+            f"请完成必答题：{missing[0]}",
+            errors={"answer": [f"请完成必答题：{missing[0]}"]},
+            status=400,
+        )
+    if not questions and not _answer_text_value(answer):
+        return fail(
+            "请先填写作答内容。",
+            errors={"answer": ["请先填写作答内容。"]},
+            status=400,
+        )
+
+    try:
+        with transaction.atomic():
+            ensure_classroom_step_opportunities(session=session)
+            latest_attempt = (
+                LessonStepAttempt.objects.select_for_update()
+                .filter(
+                    classroom_session=session,
+                    lesson_step=step,
+                    student=request.user,
+                )
+                .order_by("-attempt_no", "-id")
+                .first()
+            )
+            attempt_no = latest_attempt.attempt_no + 1 if latest_attempt else 1
+            if attempt_no > 100:
+                raise ServiceError("当前环节提交次数已达到上限。", status=400)
+            submitted_at = timezone.now()
+            attempt = LessonStepAttempt.objects.create(
+                school=request.user.school,
+                class_group=profile.class_group,
+                course=step.lesson.course,
+                lesson=step.lesson,
+                lesson_step=step,
+                classroom_session=session,
+                student=request.user,
+                attempt_no=attempt_no,
+                answer=answer,
+                free_text=_answer_text_value(answer),
+                answered_count=progress["answered_count"],
+                question_count=progress["question_count"],
+                auto_score=progress["auto_score"],
+                auto_score_max=progress["auto_score_max"],
+                submitted_at=submitted_at,
+            )
+            for row in progress["answers"]:
+                question_id = row["question_id"]
+                raw_question = classroom_question(step, question_id)
+                response = _question_answer_value(answer, question_id)
+                attachment = None
+                if row["question_type"] == "file" and row["is_answered"]:
+                    attachment_value = _answer_attachment_value(response)
+                    attachment = StudentWorkAttachment.objects.filter(
+                        pk=attachment_value.get("id") if attachment_value else None,
+                        student=request.user,
+                        classroom_session=session,
+                        lesson_step=step,
+                        question_id=question_id,
+                    ).first()
+                    if attachment is None:
+                        raise ServiceError(
+                            f"附件题“{row['stem'][:30]}”的上传记录无效，请重新上传。",
+                            status=400,
+                        )
+                LessonStepAttemptAnswer.objects.create(
+                    attempt=attempt,
+                    question_id=question_id,
+                    question_version=classroom_question_version(step, raw_question),
+                    question_type=row["question_type"],
+                    response=response,
+                    is_answered=row["is_answered"],
+                    auto_score=row["score"] if row["auto_gradable"] else None,
+                    score_max=row["max_score"],
+                    is_correct=row["is_correct"],
+                    attachment=attachment,
+                )
+            record_classroom_attempt_events(attempt=attempt)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    except ClassroomEventError as exc:
+        return fail(exc.message, status=400)
     return ok(
         {
+            "attempt_id": str(attempt.attempt_id),
+            "attempt_no": attempt.attempt_no,
             "answered_count": progress["answered_count"],
             "question_count": progress["question_count"],
             "auto_score": progress["auto_score"],
@@ -6544,7 +8700,13 @@ def student_current_classroom(request):
         profile = _student_profile(request)
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok(student_classroom_row(_student_current_classroom(profile), student_layer=profile.current_layer, student_user=request.user))
+    return ok(
+        student_classroom_row(
+            _student_current_classroom(profile),
+            student_layer=profile.current_layer,
+            student_user=request.user,
+        )
+    )
 
 
 @api_view(["GET"])
@@ -6555,7 +8717,15 @@ def student_classroom_detail(request, pk):
     except ServiceError as exc:
         return _service_fail(exc)
     session = (
-        ClassroomSession.objects.select_related("teacher", "course", "course__subject", "lesson", "class_group", "current_step", "current_step__lesson")
+        ClassroomSession.objects.select_related(
+            "teacher",
+            "course",
+            "course__subject",
+            "lesson",
+            "class_group",
+            "current_step",
+            "current_step__lesson",
+        )
         .filter(pk=pk, school=request.user.school, class_group=profile.class_group)
         .first()
     )
@@ -6563,14 +8733,164 @@ def student_classroom_detail(request, pk):
         return fail("课堂不存在或无权进入。", status=404)
     if session.status != ClassroomSession.Status.RUNNING:
         return fail("课堂尚未开始，暂不能进入。", status=403)
-    return ok(student_classroom_row(session, student_layer=profile.current_layer, student_user=request.user))
+    return ok(
+        student_classroom_row(
+            session, student_layer=profile.current_layer, student_user=request.user
+        )
+    )
+
+
+def _student_classroom_resource_context(request, session_id):
+    profile = _student_profile(request)
+    session = (
+        ClassroomSession.objects.select_related(
+            "teacher",
+            "course",
+            "course__subject",
+            "lesson",
+            "class_group",
+            "current_step",
+            "current_step__lesson",
+        )
+        .filter(
+            pk=session_id,
+            school=request.user.school,
+            class_group=profile.class_group,
+        )
+        .first()
+    )
+    if session is None:
+        raise ServiceError("课堂不存在或无权进入。", status=404)
+    if session.status != ClassroomSession.Status.RUNNING:
+        raise ServiceError("课堂尚未开始或已经结束。", status=403)
+    if not session.current_step_id:
+        raise ServiceError("教师尚未投放学习环节。", status=403)
+    if session.current_step_status in {
+        ClassroomSession.StepStatus.IDLE,
+        ClassroomSession.StepStatus.CLOSED,
+    }:
+        raise ServiceError("当前学习环节尚未开放或已经关闭。", status=403)
+    ensure_classroom_step_opportunities(session=session)
+    return profile, session, session.current_step
+
+
+def _finite_request_number(data, field, *, minimum, maximum, integer=False):
+    try:
+        value = int(data.get(field)) if integer else float(data.get(field))
+    except (TypeError, ValueError):
+        raise ServiceError(
+            "资源学习进度参数不正确。",
+            errors={field: ["请输入有效数值。"]},
+            status=400,
+        )
+    if not math.isfinite(float(value)) or value < minimum or value > maximum:
+        raise ServiceError(
+            "资源学习进度参数不正确。",
+            errors={field: [f"数值必须在 {minimum} 到 {maximum} 之间。"]},
+            status=400,
+        )
+    return value
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_classroom_resource_opened(request, pk, resource_id):
+    try:
+        _profile, session, step = _student_classroom_resource_context(request, pk)
+        record_classroom_resource_opened(
+            session=session,
+            step=step,
+            resource_id=resource_id,
+            student=request.user,
+            presentation=str(request.data.get("presentation") or "embedded"),
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    except ClassroomEventError as exc:
+        status = 404 if exc.code == "classroom_resource_missing" else 400
+        return fail(exc.message, status=status)
+    return ok({}, "资源打开行为已记录。", status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_classroom_video_progress(request, pk, resource_id):
+    try:
+        _profile, session, step = _student_classroom_resource_context(request, pk)
+        position_seconds = _finite_request_number(
+            request.data, "position_seconds", minimum=0, maximum=86_400
+        )
+        media_seconds = _finite_request_number(
+            request.data, "media_seconds", minimum=0.001, maximum=86_400
+        )
+        playback_rate = _finite_request_number(
+            request.data, "playback_rate", minimum=0.25, maximum=4
+        )
+        duration_ms = _finite_request_number(
+            request.data,
+            "duration_ms",
+            minimum=0,
+            maximum=600_000,
+            integer=True,
+        )
+        record_classroom_video_progress(
+            session=session,
+            step=step,
+            resource_id=resource_id,
+            student=request.user,
+            position_seconds=position_seconds,
+            media_seconds=media_seconds,
+            playback_rate=playback_rate,
+            duration_ms=duration_ms,
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    except ClassroomEventError as exc:
+        status = 404 if exc.code == "classroom_resource_missing" else 400
+        return fail(exc.message, status=status)
+    return ok({}, "视频进度已记录。", status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsStudent])
+def student_classroom_document_progress(request, pk, resource_id):
+    try:
+        _profile, session, step = _student_classroom_resource_context(request, pk)
+        page = _finite_request_number(
+            request.data, "page", minimum=1, maximum=100_000, integer=True
+        )
+        page_count = _finite_request_number(
+            request.data, "page_count", minimum=1, maximum=100_000, integer=True
+        )
+        visible_seconds = _finite_request_number(
+            request.data, "visible_seconds", minimum=0, maximum=3_600
+        )
+        record_classroom_document_progress(
+            session=session,
+            step=step,
+            resource_id=resource_id,
+            student=request.user,
+            page=page,
+            page_count=page_count,
+            visible_seconds=visible_seconds,
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
+    except ClassroomEventError as exc:
+        status = 404 if exc.code == "classroom_resource_missing" else 400
+        return fail(exc.message, status=status)
+    return ok({}, "文档进度已记录。", status=201)
 
 
 def _student_group_collaboration_context(request, session_id):
     profile = _student_profile(request)
     session = (
-        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
-        .filter(pk=session_id, school=request.user.school, class_group=profile.class_group)
+        ClassroomSession.objects.select_related(
+            "teacher", "course", "lesson", "class_group"
+        )
+        .filter(
+            pk=session_id, school=request.user.school, class_group=profile.class_group
+        )
         .first()
     )
     if session is None:
@@ -6589,7 +8909,9 @@ def _student_group_collaboration_context(request, session_id):
     if collaboration is None:
         return profile, session, None, None
     member = (
-        ClassroomGroupMember.objects.select_related("group", "group__collaboration", "student_profile", "student")
+        ClassroomGroupMember.objects.select_related(
+            "group", "group__collaboration", "student_profile", "student"
+        )
         .filter(collaboration=collaboration, student=request.user)
         .first()
     )
@@ -6600,52 +8922,51 @@ def _student_group_collaboration_context(request, session_id):
 @permission_classes([IsStudent])
 def student_classroom_group_collaboration(request, pk):
     try:
-        profile, session, collaboration, group = _student_group_collaboration_context(request, pk)
+        profile, session, collaboration, group = _student_group_collaboration_context(
+            request, pk
+        )
     except ServiceError as exc:
         return _service_fail(exc)
     if collaboration is None or group is None:
         return ok(None)
     group = (
-        _classroom_group_queryset(collaboration)
-        .filter(pk=group.pk)
-        .first()
-        or group
+        _classroom_group_queryset(collaboration).filter(pk=group.pk).first() or group
     )
-    return ok(classroom_group_collaboration_row(collaboration, include_groups=False, my_group=group))
+    return ok(student_classroom_group_collaboration_row(collaboration, my_group=group))
 
 
 @api_view(["POST"])
 @permission_classes([IsStudent])
 @parser_classes([MultiPartParser, FormParser])
 def student_classroom_group_file_upload(request, pk):
+    file = None
     try:
-        profile, session, collaboration, group = _student_group_collaboration_context(request, pk)
-        if collaboration is None or group is None:
-            raise ServiceError("教师尚未开启你的小组合作。", status=404)
-        if not collaboration.allow_student_upload:
-            raise ServiceError("教师当前未开放小组共享文件上传。", status=403)
-        file = _save_group_file(request, group, request.FILES.get("attachment"), str(request.data.get("description") or "").strip())
+        with transaction.atomic():
+            (
+                _profile,
+                _session,
+                collaboration,
+                group,
+            ) = _student_group_collaboration_context(request, pk)
+            if collaboration is None or group is None:
+                raise ServiceError("教师尚未开启你的小组合作。", status=404)
+            if not collaboration.allow_student_upload:
+                raise ServiceError("教师当前未开放小组共享文件上传。", status=403)
+            file = _save_group_file(
+                request,
+                group,
+                request.FILES.get("attachment"),
+                str(request.data.get("description") or "").strip(),
+            )
+            record_group_file_shared(file=file, student=request.user)
     except ServiceError as exc:
+        if file and file.attachment:
+            file.attachment.delete(save=False)
         return _service_fail(exc)
-
-    _write_student_event(
-        request,
-        profile,
-        LearningEvent.EventType.TASK_SUBMIT,
-        course=session.course,
-        lesson=session.lesson,
-        object_type="classroom_group_file",
-        object_id=file.id,
-        metadata={
-            "action": "group_file_upload",
-            "classroom_session": session.id,
-            "collaboration": collaboration.id,
-            "group": group.id,
-            "filename": file.original_name,
-            "file_ext": file.file_ext,
-            "file_size": file.file_size,
-        },
-    )
+    except GroupCollaborationEventError as exc:
+        if file and file.attachment:
+            file.attachment.delete(save=False)
+        return fail(exc.message, status=400)
     return ok(classroom_group_file_row(file), "小组文件已上传", status=201)
 
 
@@ -6657,7 +8978,9 @@ def student_classroom_activity_response(request, pk, activity_id):
     except ServiceError as exc:
         return _service_fail(exc)
     session = (
-        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
+        ClassroomSession.objects.select_related(
+            "teacher", "course", "lesson", "class_group"
+        )
         .filter(pk=pk, school=request.user.school, class_group=profile.class_group)
         .first()
     )
@@ -6665,7 +8988,9 @@ def student_classroom_activity_response(request, pk, activity_id):
         return fail("课堂不存在或无权进入。", status=404)
     if session.status != ClassroomSession.Status.RUNNING:
         return fail("课堂尚未开始，暂不能响应。", status=403)
-    activity = session.activities.filter(pk=activity_id, status=ClassroomActivity.Status.OPEN).first()
+    activity = session.activities.filter(
+        pk=activity_id, status=ClassroomActivity.Status.OPEN
+    ).first()
     if activity is None:
         return fail("课堂活动不存在或已关闭。", status=404)
 
@@ -6683,8 +9008,32 @@ def student_classroom_activity_response(request, pk, activity_id):
     if command == "sign_in":
         existing_query = existing_query.filter(metadata__source="student")
     existing = existing_query.first()
-    if existing is not None:
+    if existing is not None and command != "quick_answer":
         return ok(classroom_activity_row(activity), "已记录过本次响应。")
+
+    if command == "sign_in":
+        try:
+            record_attendance_status(
+                activity=activity,
+                student=request.user,
+                recorder=request.user,
+                attendance_status="signed",
+                recorded_by="student",
+            )
+        except AttendanceEventError as exc:
+            return fail(exc.message, status=400)
+        return ok(classroom_activity_row(activity), "课堂响应已记录。")
+
+    if command == "quick_answer":
+        try:
+            record_quick_answer_response(
+                activity=activity,
+                student=request.user,
+                content=content,
+            )
+        except ClassroomInteractionEventError as exc:
+            return fail(exc.message, status=400)
+        return ok(classroom_activity_row(activity), "课堂响应已记录。")
 
     _write_student_event(
         request,
@@ -6717,7 +9066,9 @@ def student_classroom_score_feedback_ack(request, pk, activity_id):
     except ServiceError as exc:
         return _service_fail(exc)
     session = (
-        ClassroomSession.objects.select_related("teacher", "course", "lesson", "class_group")
+        ClassroomSession.objects.select_related(
+            "teacher", "course", "lesson", "class_group"
+        )
         .filter(pk=pk, school=request.user.school, class_group=profile.class_group)
         .first()
     )
@@ -6729,28 +9080,33 @@ def student_classroom_score_feedback_ack(request, pk, activity_id):
     try:
         score_event_id = int(request.data.get("score_event_id"))
     except (TypeError, ValueError):
-        return fail("评分事件不正确。", errors={"score_event_id": ["请提供评分事件。"]}, status=400)
-    score_event = (
-        LearningEvent.objects.filter(
-            Q(metadata__action="quick_answer_score") | Q(metadata__action="random_pick_score"),
-            pk=score_event_id,
-            actor=request.user,
-            object_type="classroom_activity",
-            object_id=str(activity.id),
+        return fail(
+            "评分事件不正确。",
+            errors={"score_event_id": ["请提供评分事件。"]},
+            status=400,
         )
-        .first()
-    )
+    score_event = LearningEvent.objects.filter(
+        Q(metadata__action="quick_answer_score")
+        | Q(metadata__action="random_pick_score"),
+        pk=score_event_id,
+        actor=request.user,
+        object_type="classroom_activity",
+        object_id=str(activity.id),
+    ).first()
     if score_event is None:
         return fail("评分反馈不存在或不属于当前学生。", status=404)
     existing = LearningEvent.objects.filter(
-        Q(metadata__action="classroom_score_feedback_ack") | Q(metadata__action="quick_answer_score_feedback_ack"),
+        Q(metadata__action="classroom_score_feedback_ack")
+        | Q(metadata__action="quick_answer_score_feedback_ack"),
         actor=request.user,
         object_type="classroom_activity",
         object_id=str(activity.id),
         metadata__score_event_id=score_event.id,
     ).first()
     if existing is None:
-        score_metadata = score_event.metadata if isinstance(score_event.metadata, dict) else {}
+        score_metadata = (
+            score_event.metadata if isinstance(score_event.metadata, dict) else {}
+        )
         _write_student_event(
             request,
             profile,
@@ -6780,7 +9136,11 @@ def student_notices(request):
     except ServiceError as exc:
         return _service_fail(exc)
     notices = (
-        Notice.objects.filter(school=request.user.school, status=Notice.Status.PUBLISHED, target_classes=profile.class_group)
+        Notice.objects.filter(
+            school=request.user.school,
+            status=Notice.Status.PUBLISHED,
+            target_classes=profile.class_group,
+        )
         .select_related("teacher")
         .order_by("-is_pinned", "-published_at", "-created_at")
     )
@@ -6803,7 +9163,10 @@ def student_feedback(request):
         errors: dict[str, list[str]] = {}
         title = str(request.data.get("title", "")).strip()
         content = str(request.data.get("content", "")).strip()
-        category = str(request.data.get("category", Feedback.Category.STUDY)).strip() or Feedback.Category.STUDY
+        category = (
+            str(request.data.get("category", Feedback.Category.STUDY)).strip()
+            or Feedback.Category.STUDY
+        )
         try:
             teacher_id = int(request.data.get("teacher"))
         except (TypeError, ValueError):
@@ -6839,9 +9202,15 @@ def student_feedback(request):
         return ok(student_feedback_row(feedback), "留言已提交。", status=201)
 
     query = request.GET.get("q", "").strip()
-    feedback_items = Feedback.objects.filter(school=request.user.school, student=request.user).select_related("teacher").order_by("-created_at")
+    feedback_items = (
+        Feedback.objects.filter(school=request.user.school, student=request.user)
+        .select_related("teacher")
+        .order_by("-created_at")
+    )
     if query:
-        feedback_items = feedback_items.filter(Q(title__icontains=query) | Q(content__icontains=query))
+        feedback_items = feedback_items.filter(
+            Q(title__icontains=query) | Q(content__icontains=query)
+        )
     page = _paginate(request, feedback_items)
     page.object_list = [student_feedback_row(item) for item in page.object_list]
     return ok(page_data(page))
@@ -6850,7 +9219,11 @@ def student_feedback(request):
 @api_view(["GET"])
 @permission_classes([IsStudent])
 def student_feedback_detail(request, pk):
-    feedback = Feedback.objects.filter(pk=pk, school=request.user.school, student=request.user).select_related("teacher").first()
+    feedback = (
+        Feedback.objects.filter(pk=pk, school=request.user.school, student=request.user)
+        .select_related("teacher")
+        .first()
+    )
     if feedback is None:
         return fail("留言反馈不存在。", status=404)
     return ok(student_feedback_row(feedback))

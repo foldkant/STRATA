@@ -9,6 +9,11 @@ from rest_framework.decorators import api_view, permission_classes
 
 from courses.models import ClassroomGroup, ClassroomGroupCollaboration, ClassroomGroupMember, ClassroomSession
 from learning.models import LearningEvent
+from learning_analytics.services.dual_write import (
+    EventWriteError,
+    record_classroom_point_adjustment,
+    record_learning_event,
+)
 from realtime.events import publish_chat_event, session_group, teacher_group, user_group
 from realtime.models import ClassroomChatConfig, ClassroomChatMessage, ClassroomChatReadState, ClassroomChatThread
 from realtime.moderation import DEFAULT_DEDUCTION, SEVERITY_RANK, moderate_content
@@ -231,7 +236,7 @@ def _group_row(group: ClassroomGroup) -> dict:
     members = [chat_user_row(member.student) for member in group.members.all()]
     return {
         "id": group.id,
-        "name": group.name,
+        "name": f"第{group.group_no}组",
         "group_no": group.group_no,
         "members": members,
     }
@@ -640,6 +645,71 @@ def teacher_chat_moderate(request, pk, message_id):
             if action == ClassroomChatMessage.ReviewAction.ALLOW
             else ClassroomChatMessage.ModerationStatus.REMOVED
         )
+        event_metadata = {
+            "action": "classroom_chat_moderation",
+            "classroom_session": session.id,
+            "thread": message.thread_id,
+            "room_type": message.thread.room_type,
+            "moderation_action": action,
+            "severity": message.severity,
+            "reviewed_by": request.user.id,
+            "deduction_points": points,
+            "review_note": note,
+        }
+        try:
+            if points:
+                profile = (
+                    StudentProfile.objects.select_related("user", "class_group")
+                    .filter(user=message.sender)
+                    .first()
+                )
+                if profile is None:
+                    raise ChatError("学生档案不存在，无法扣分。", status=404)
+                record_classroom_point_adjustment(
+                    teacher=request.user,
+                    student_profile=profile,
+                    classroom_session=session,
+                    object_type="classroom_chat_message",
+                    object_id=message.id,
+                    reason_code="chat_moderation_deduction",
+                    requested_score=-points,
+                    legacy_metadata=event_metadata,
+                    insufficient_policy="reject",
+                    occurred_at=message.reviewed_at,
+                )
+            else:
+                intensity = (
+                    "high"
+                    if message.severity == ClassroomChatMessage.Severity.SEVERE
+                    else "medium"
+                    if message.severity == ClassroomChatMessage.Severity.MODERATE
+                    else "low"
+                )
+                record_learning_event(
+                    actor=request.user,
+                    target_student=message.sender,
+                    event_name="intervention.created",
+                    payload={
+                        "intervention_type": "chat_moderation",
+                        "reason_code": f"chat_moderation_{action}",
+                        "intensity": intensity,
+                    },
+                    legacy_event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
+                    legacy_actor=message.sender,
+                    class_group=session.class_group,
+                    subject=session.course.subject,
+                    course=session.course,
+                    lesson=session.lesson,
+                    classroom_session=session,
+                    object_type="classroom_chat_message",
+                    object_id=message.id,
+                    legacy_score=0,
+                    legacy_metadata=event_metadata,
+                    occurred_at=message.reviewed_at,
+                )
+        except EventWriteError as exc:
+            raise ChatError(exc.message) from exc
+
         message.save(
             update_fields=[
                 "review_action",
@@ -650,36 +720,6 @@ def teacher_chat_moderate(request, pk, message_id):
                 "moderation_status",
                 "updated_at",
             ]
-        )
-
-        if points:
-            profile = StudentProfile.objects.select_for_update().filter(user=message.sender).first()
-            if profile is None:
-                raise ChatError("学生档案不存在，无法扣分。", status=404)
-            profile.score = round(float(profile.score) - points, 1)
-            profile.save(update_fields=["score", "updated_at"])
-
-        LearningEvent.objects.create(
-            actor=message.sender,
-            class_group=session.class_group,
-            course=session.course,
-            lesson=session.lesson,
-            event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
-            object_type="classroom_chat_message",
-            object_id=str(message.id),
-            score=-points if points else 0,
-            metadata={
-                "action": "classroom_chat_moderation",
-                "classroom_session": session.id,
-                "thread": message.thread_id,
-                "room_type": message.thread.room_type,
-                "moderation_action": action,
-                "severity": message.severity,
-                "reviewed_by": request.user.id,
-                "deduction_points": points,
-                "review_note": note,
-            },
-            occurred_at=message.reviewed_at,
         )
         _push_changed(message, event_type="chat.message.reviewed")
         return ok(chat_message_row(message, viewer=request.user, include_moderation=True), "消息已处理。")

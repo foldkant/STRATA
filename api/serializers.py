@@ -7,6 +7,7 @@ from aiops.models import TeacherAIProvider
 from courses.models import (
     ClassroomActivity,
     ClassroomEvaluationConfig,
+    ClassroomEvaluationConfigVersion,
     ClassroomEvaluationSubmission,
     ClassroomGroup,
     ClassroomGroupCollaboration,
@@ -22,7 +23,14 @@ from courses.models import (
     Resource,
     Subject,
 )
-from learning.models import Feedback, LearningEvent, Notice, PretestPaper, PretestQuestion, StudentWorkAttachment
+from learning.models import (
+    Feedback,
+    LearningEvent,
+    Notice,
+    PretestPaper,
+    PretestQuestion,
+    StudentWorkAttachment,
+)
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 KNOWN_RESOURCE_EXTS = {
@@ -54,7 +62,21 @@ KNOWN_RESOURCE_EXTS = {
     "7z",
 }
 
-DEFAULT_LESSON_FILE_EXTENSIONS = ["doc", "docx", "ppt", "pptx", "xls", "xlsx", "pdf", "zip", "rar", "7z", "png", "jpg", "jpeg"]
+DEFAULT_LESSON_FILE_EXTENSIONS = [
+    "doc",
+    "docx",
+    "ppt",
+    "pptx",
+    "xls",
+    "xlsx",
+    "pdf",
+    "zip",
+    "rar",
+    "7z",
+    "png",
+    "jpg",
+    "jpeg",
+]
 
 
 def clean_resource_ext(*values) -> str:
@@ -224,10 +246,18 @@ def lesson_row(lesson: Lesson) -> dict:
 
 def normalize_resource_item(item) -> dict:
     if isinstance(item, dict):
-        attachment_name = str(item.get("attachment_name") or item.get("filename") or "").strip()
-        attachment_url = str(item.get("attachment_url") or item.get("url") or "").strip()
-        title = str(item.get("title") or item.get("name") or attachment_name or attachment_url).strip()
-        file_ext = clean_resource_ext(item.get("file_ext"), attachment_name, attachment_url, title)
+        attachment_name = str(
+            item.get("attachment_name") or item.get("filename") or ""
+        ).strip()
+        attachment_url = str(
+            item.get("attachment_url") or item.get("url") or ""
+        ).strip()
+        title = str(
+            item.get("title") or item.get("name") or attachment_name or attachment_url
+        ).strip()
+        file_ext = clean_resource_ext(
+            item.get("file_ext"), attachment_name, attachment_url, title
+        )
         row = {
             "id": item.get("id") or "",
             "title": title,
@@ -235,6 +265,8 @@ def normalize_resource_item(item) -> dict:
             "attachment_name": attachment_name,
             "file_ext": file_ext,
             "kind": str(item.get("kind") or "resource").strip(),
+            "external_url": str(item.get("external_url") or "").strip(),
+            "resource_type": str(item.get("resource_type") or "").strip(),
         }
         if row["kind"] == "learning_page":
             row["learning_page_id"] = item.get("learning_page_id") or ""
@@ -249,6 +281,8 @@ def normalize_resource_item(item) -> dict:
         "attachment_name": text,
         "file_ext": file_ext,
         "kind": "legacy",
+        "external_url": "",
+        "resource_type": "",
     }
 
 
@@ -267,10 +301,14 @@ def normalize_resource_items(items) -> list[dict]:
     return rows
 
 
-def learning_web_page_row(page: LearningWebPage, *, include_schema: bool = True) -> dict:
+def learning_web_page_row(
+    page: LearningWebPage, *, include_schema: bool = True
+) -> dict:
     schema = page.schema if isinstance(page.schema, dict) else {}
     blocks = schema.get("blocks") if isinstance(schema.get("blocks"), list) else []
-    forms = [item for item in blocks if isinstance(item, dict) and item.get("type") == "form"]
+    forms = [
+        item for item in blocks if isinstance(item, dict) and item.get("type") == "form"
+    ]
     row = {
         "id": page.id,
         "school": page.school_id,
@@ -301,7 +339,9 @@ def learning_web_page_version_row(version: LearningWebPageVersion) -> dict:
         "version_no": version.version_no,
         "prompt": version.prompt,
         "schema": version.schema if isinstance(version.schema, dict) else {},
-        "created_by": user_summary(version.created_by) if version.created_by_id else None,
+        "created_by": (
+            user_summary(version.created_by) if version.created_by_id else None
+        ),
         "created_at": version.created_at,
     }
 
@@ -408,23 +448,37 @@ def normalize_lesson_question_items(
         target_layer = str(item.get("target_layer") or "all")
         if target_layer not in LESSON_TARGET_LAYER_LABELS:
             target_layer = "all"
-        if apply_layering and not lesson_target_layer_matches(target_layer, student_layer):
+        if apply_layering and not lesson_target_layer_matches(
+            target_layer, student_layer
+        ):
             continue
         base_score = clean_layer_score_value(item.get("score", 0), 0)
-        raw_layer_scores = item.get("layer_scores") if isinstance(item.get("layer_scores"), dict) else {}
+        raw_layer_scores = (
+            item.get("layer_scores")
+            if isinstance(item.get("layer_scores"), dict)
+            else {}
+        )
         layer_scores = {
             layer: clean_layer_score_value(raw_layer_scores.get(layer), base_score)
             for layer in sorted(LESSON_LAYER_CODES)
         }
         score = base_score
-        if apply_layering and item.get("use_layer_scores") and student_layer in LESSON_LAYER_CODES:
+        if (
+            apply_layering
+            and item.get("use_layer_scores")
+            and student_layer in LESSON_LAYER_CODES
+        ):
             score = layer_scores.get(student_layer, base_score)
         row = {
             "id": item.get("id") or f"q_{index + 1}",
             "question_type": question_type,
-            "question_type_label": LESSON_QUESTION_TYPE_LABELS.get(question_type, question_type),
+            "question_type_label": LESSON_QUESTION_TYPE_LABELS.get(
+                question_type, question_type
+            ),
             "stem": item.get("stem") or "",
-            "options": item.get("options") if isinstance(item.get("options"), list) else [],
+            "options": (
+                item.get("options") if isinstance(item.get("options"), list) else []
+            ),
             "score": score,
             "is_required": bool(item.get("is_required", True)),
             "sort_order": item.get("sort_order", (index + 1) * 10),
@@ -433,10 +487,14 @@ def normalize_lesson_question_items(
             row["file_config"] = normalize_lesson_file_config(item.get("file_config"))
         if include_answer:
             row["target_layer"] = target_layer
-            row["target_layer_label"] = LESSON_TARGET_LAYER_LABELS.get(target_layer, "全体")
+            row["target_layer_label"] = LESSON_TARGET_LAYER_LABELS.get(
+                target_layer, "全体"
+            )
             row["use_layer_scores"] = bool(item.get("use_layer_scores", False))
             row["layer_scores"] = layer_scores
-            row["answer"] = item.get("answer") if isinstance(item.get("answer"), list) else []
+            row["answer"] = (
+                item.get("answer") if isinstance(item.get("answer"), list) else []
+            )
             row["analysis"] = item.get("analysis") or ""
         rows.append(row)
     return sorted(rows, key=lambda row: (row["sort_order"], row["id"]))
@@ -474,8 +532,12 @@ def lesson_step_row(step: LessonStep) -> dict:
         "status": step.status,
         "status_label": step.get_status_display(),
         "resource_items": normalize_resource_items(step.resource_items),
-        "activity_items": step.activity_items if isinstance(step.activity_items, list) else [],
-        "question_items": normalize_lesson_question_items(step.question_items, include_answer=True),
+        "activity_items": (
+            step.activity_items if isinstance(step.activity_items, list) else []
+        ),
+        "question_items": normalize_lesson_question_items(
+            step.question_items, include_answer=True
+        ),
         "ai_prompt": step.ai_prompt,
         "collect_student_log": step.collect_student_log,
         "collect_class_log": step.collect_class_log,
@@ -490,10 +552,9 @@ def student_profile_summary(profile: StudentProfile | None) -> dict | None:
     return {
         "id": profile.id,
         "student_no": profile.student_no,
-        "class_group": class_group_row(profile.class_group) if profile.class_group_id else None,
-        "current_layer": profile.current_layer,
-        "current_layer_label": profile.get_current_layer_display() if profile.current_layer else "",
-        "current_group_no": profile.current_group_no,
+        "class_group": (
+            class_group_row(profile.class_group) if profile.class_group_id else None
+        ),
         "score": profile.score,
         "is_first_use": profile.is_first_use,
         "onboarding_status": profile.onboarding_status,
@@ -501,6 +562,20 @@ def student_profile_summary(profile: StudentProfile | None) -> dict | None:
         "password_updated_at": profile.password_updated_at,
         "class_selected_at": profile.class_selected_at,
         "pretest_completed_at": profile.pretest_completed_at,
+    }
+
+
+def teacher_student_profile_summary(profile: StudentProfile | None) -> dict | None:
+    row = student_profile_summary(profile)
+    if row is None:
+        return None
+    return {
+        **row,
+        "current_layer": profile.current_layer,
+        "current_layer_label": (
+            profile.get_current_layer_display() if profile.current_layer else ""
+        ),
+        "current_group_no": profile.current_group_no,
     }
 
 
@@ -524,8 +599,13 @@ def student_course_row(course: Course, *, pretest_status: dict | None = None) ->
         "teaching_model_label": course.get_teaching_model_display(),
         "lesson_count": getattr(course, "lesson_count", 0),
         "step_count": getattr(course, "step_count", 0),
-        "latest_lesson": lesson_row(course.latest_lesson) if hasattr(course, "latest_lesson") and course.latest_lesson else None,
-        "pretest_status": pretest_status or {"required": False, "completed": True, "missing": []},
+        "latest_lesson": (
+            lesson_row(course.latest_lesson)
+            if hasattr(course, "latest_lesson") and course.latest_lesson
+            else None
+        ),
+        "pretest_status": pretest_status
+        or {"required": False, "completed": True, "missing": []},
         "created_at": course.created_at,
         "updated_at": course.updated_at,
     }
@@ -547,12 +627,12 @@ def student_lesson_step_row(
         "sort_order": step.sort_order,
         "is_required": step.is_required,
         "estimated_minutes": step.estimated_minutes,
-        "target_layer": step.target_layer,
-        "target_layer_label": step.get_target_layer_display(),
         "status": step.status,
         "status_label": step.get_status_display(),
         "resource_items": normalize_resource_items(step.resource_items),
-        "activity_items": step.activity_items if isinstance(step.activity_items, list) else [],
+        "activity_items": (
+            step.activity_items if isinstance(step.activity_items, list) else []
+        ),
         "question_items": normalize_lesson_question_items(
             step.question_items,
             include_answer=False,
@@ -573,7 +653,9 @@ def student_classroom_row(
 ) -> dict | None:
     if session is None:
         return None
-    apply_layering = lesson_step_has_layered_questions(session.current_step if session.current_step_id else None)
+    apply_layering = lesson_step_has_layered_questions(
+        session.current_step if session.current_step_id else None
+    )
     activities = getattr(session, "prefetched_activities", None)
     if activities is None:
         activity_filter = Q(status=ClassroomActivity.Status.OPEN)
@@ -581,7 +663,8 @@ def student_classroom_row(
             scored_activity_ids = []
             for object_id in (
                 LearningEvent.objects.filter(
-                    Q(metadata__action="quick_answer_score") | Q(metadata__action="random_pick_score"),
+                    Q(metadata__action="quick_answer_score")
+                    | Q(metadata__action="random_pick_score"),
                     actor=student_user,
                     object_type="classroom_activity",
                 )
@@ -594,32 +677,46 @@ def student_classroom_row(
                     continue
             if scored_activity_ids:
                 activity_filter |= Q(pk__in=scored_activity_ids)
-        activities = session.activities.filter(activity_filter).order_by("-opened_at", "-created_at")
+        activities = session.activities.filter(activity_filter).order_by(
+            "-opened_at", "-created_at"
+        )
     return {
         "id": session.id,
         "title": session.title,
         "status": session.status,
         "status_label": session.get_status_display(),
-        "is_layered": apply_layering,
-        "current_step": student_lesson_step_row(
-            session.current_step,
-            student_layer=student_layer,
-            apply_layering=apply_layering,
-        )
-        if getattr(session, "current_step", None) and session.current_step_id
-        else None,
+        "current_step": (
+            student_lesson_step_row(
+                session.current_step,
+                student_layer=student_layer,
+                apply_layering=apply_layering,
+            )
+            if getattr(session, "current_step", None) and session.current_step_id
+            else None
+        ),
         "current_step_status": session.current_step_status,
         "current_step_status_label": session.get_current_step_status_display(),
         "submission_locked": session.submission_locked,
         "current_step_started_at": session.current_step_started_at,
         "current_step_closed_at": session.current_step_closed_at,
         "teacher": student_teacher_row(session.teacher),
-        "course": student_course_row(session.course) if getattr(session, "course", None) else None,
-        "lesson": lesson_row(session.lesson) if getattr(session, "lesson", None) and session.lesson_id else None,
+        "course": (
+            student_course_row(session.course)
+            if getattr(session, "course", None)
+            else None
+        ),
+        "lesson": (
+            lesson_row(session.lesson)
+            if getattr(session, "lesson", None) and session.lesson_id
+            else None
+        ),
         "class_group": class_group_row(session.class_group),
         "started_at": session.started_at,
         "finished_at": session.finished_at,
-        "activities": [classroom_activity_row(activity, student_user=student_user) for activity in activities],
+        "activities": [
+            classroom_activity_row(activity, student_user=student_user)
+            for activity in activities
+        ],
         "created_at": session.created_at,
         "updated_at": session.updated_at,
     }
@@ -672,10 +769,25 @@ def teacher_ai_provider_row(provider: TeacherAIProvider) -> dict:
     }
 
 
-def resource_row(resource: Resource) -> dict:
+def resource_file_row(resource_file) -> dict:
+    file_url = f"/{resource_file.file.url.lstrip('/')}" if resource_file.file else ""
+    return {
+        "id": resource_file.id,
+        "name": resource_file.original_name,
+        "file_url": file_url,
+        "file_ext": resource_file.file_ext,
+        "file_size": resource_file.file_size,
+        "role": resource_file.role,
+        "role_label": resource_file.get_role_display(),
+        "sort_order": resource_file.sort_order,
+    }
+
+
+def resource_row(resource: Resource, *, viewer=None) -> dict:
     attachment_url = ""
     attachment_name = ""
     attachment_size = 0
+    cover_url = f"/{resource.cover.url.lstrip('/')}" if resource.cover else ""
     if resource.attachment:
         attachment_url = f"/{resource.attachment.url.lstrip('/')}"
         attachment_name = resource.attachment.name.rsplit("/", 1)[-1]
@@ -685,23 +797,66 @@ def resource_row(resource: Resource) -> dict:
             attachment_size = 0
     return {
         "id": resource.id,
+        "public_id": str(resource.public_id),
         "title": resource.title,
         "content": resource.content,
         "attachment_url": attachment_url,
         "attachment_name": attachment_name,
         "attachment_size": attachment_size,
         "file_ext": clean_resource_ext(attachment_name, attachment_url),
+        "cover_url": cover_url,
+        "resource_type": resource.resource_type,
+        "resource_type_label": resource.get_resource_type_display(),
+        "category": resource.category,
+        "category_label": resource.get_category_display(),
+        "visibility": resource.visibility,
+        "visibility_label": resource.get_visibility_display(),
+        "publish_status": resource.publish_status,
+        "publish_status_label": resource.get_publish_status_display(),
+        "subject": subject_row(resource.subject) if resource.subject_id else None,
+        "target_classes": [
+            class_group_row(item) for item in resource.target_classes.all()
+        ],
+        "grade_scope": resource.grade_scope,
+        "tags": resource.tags if isinstance(resource.tags, list) else [],
+        "external_url": resource.external_url,
+        "project_type": resource.project_type,
+        "project_type_label": (
+            resource.get_project_type_display() if resource.project_type else ""
+        ),
+        "project_members": (
+            resource.project_members
+            if isinstance(resource.project_members, list)
+            else []
+        ),
+        "project_course": resource.project_course,
+        "competition_name": resource.competition_name,
+        "competition_year": resource.competition_year,
+        "award_level": resource.award_level,
+        "extra_files": [resource_file_row(item) for item in resource.extra_files.all()],
+        "owner": user_summary(resource.owner),
+        "school": school_summary(resource.owner.school),
         "view_count": resource.view_count,
         "is_pinned": resource.is_pinned,
+        "is_owner": bool(viewer and viewer.id == resource.owner_id),
+        "review_note": resource.review_note,
+        "reviewed_at": resource.reviewed_at,
+        "published_at": resource.published_at,
         "created_at": resource.created_at,
         "updated_at": resource.updated_at,
     }
 
 
 def student_work_attachment_row(attachment: StudentWorkAttachment) -> dict:
-    attachment_url = f"/{attachment.attachment.url.lstrip('/')}" if attachment.attachment else ""
-    attachment_name = attachment.original_name or (attachment.attachment.name.rsplit("/", 1)[-1] if attachment.attachment else "")
-    file_ext = attachment.file_ext or clean_resource_ext(attachment_name, attachment_url)
+    attachment_url = (
+        f"/{attachment.attachment.url.lstrip('/')}" if attachment.attachment else ""
+    )
+    attachment_name = attachment.original_name or (
+        attachment.attachment.name.rsplit("/", 1)[-1] if attachment.attachment else ""
+    )
+    file_ext = attachment.file_ext or clean_resource_ext(
+        attachment_name, attachment_url
+    )
     return {
         "id": attachment.id,
         "student": attachment.student_id,
@@ -709,6 +864,7 @@ def student_work_attachment_row(attachment: StudentWorkAttachment) -> dict:
         "classroom_session": attachment.classroom_session_id,
         "question_id": attachment.question_id,
         "question_stem": attachment.question_stem,
+        "upload_version": attachment.upload_version,
         "title": attachment_name or "学生附件",
         "attachment_url": attachment_url,
         "attachment_name": attachment_name,
@@ -728,20 +884,25 @@ def classroom_group_file_row(file: ClassroomGroupFile) -> dict:
     uploader = file.uploader
     return {
         "id": file.id,
+        "public_id": str(file.public_id),
+        "version_no": file.version_no,
         "group": file.group_id,
-        "uploader": {
-            "id": uploader.id,
-            "username": uploader.username,
-            "display_name": uploader.display_name or uploader.username,
-            "role": uploader.role,
-        }
-        if uploader
-        else None,
+        "uploader": (
+            {
+                "id": uploader.id,
+                "username": uploader.username,
+                "display_name": uploader.display_name or uploader.username,
+                "role": uploader.role,
+            }
+            if uploader
+            else None
+        ),
         "title": file.original_name,
         "description": file.description,
         "attachment_url": attachment_url,
         "attachment_name": file.original_name,
-        "file_ext": file.file_ext or clean_resource_ext(file.original_name, attachment_url),
+        "file_ext": file.file_ext
+        or clean_resource_ext(file.original_name, attachment_url),
         "file_size": file.file_size,
         "created_at": file.created_at,
     }
@@ -758,7 +919,26 @@ def classroom_group_member_row(member: ClassroomGroupMember) -> dict:
         "display_name": student.display_name or student.username,
         "student_no": profile.student_no if profile else "",
         "current_layer": profile.current_layer if profile else "",
-        "current_layer_label": profile.get_current_layer_display() if profile and profile.current_layer else "",
+        "current_layer_label": (
+            profile.get_current_layer_display()
+            if profile and profile.current_layer
+            else ""
+        ),
+        "role": member.role,
+        "role_label": member.get_role_display(),
+        "joined_at": member.joined_at,
+    }
+
+
+def student_classroom_group_member_row(member: ClassroomGroupMember) -> dict:
+    profile = member.student_profile
+    student = member.student
+    return {
+        "id": member.id,
+        "student_id": student.id,
+        "username": student.username,
+        "display_name": student.display_name or student.username,
+        "student_no": profile.student_no if profile else "",
         "role": member.role,
         "role_label": member.get_role_display(),
         "joined_at": member.joined_at,
@@ -766,8 +946,15 @@ def classroom_group_member_row(member: ClassroomGroupMember) -> dict:
 
 
 def classroom_group_row(group: ClassroomGroup, *, include_files: bool = True) -> dict:
-    document_url = f"/{group.collaboration_document.url.lstrip('/')}" if group.collaboration_document else ""
-    document_name = group.document_original_name or f"{group.name}.{group.document_file_ext or group.collaboration.document_type}"
+    document_url = (
+        f"/{group.collaboration_document.url.lstrip('/')}"
+        if group.collaboration_document
+        else ""
+    )
+    document_name = (
+        group.document_original_name
+        or f"{group.name}.{group.document_file_ext or group.collaboration.document_type}"
+    )
     document_size = 0
     if group.collaboration_document:
         try:
@@ -776,7 +963,9 @@ def classroom_group_row(group: ClassroomGroup, *, include_files: bool = True) ->
             document_size = 0
     used_storage_bytes = getattr(group, "used_storage_bytes", None)
     if used_storage_bytes is None:
-        used_storage_bytes = group.files.aggregate(total=Sum("file_size")).get("total") or 0
+        used_storage_bytes = (
+            group.files.aggregate(total=Sum("file_size")).get("total") or 0
+        )
     files = getattr(group, "prefetched_files", None)
     if files is None and include_files:
         files = list(group.files.select_related("uploader").all())
@@ -800,7 +989,60 @@ def classroom_group_row(group: ClassroomGroup, *, include_files: bool = True) ->
         "used_storage_bytes": used_storage_bytes,
         "used_storage_mb": round(used_storage_bytes / 1024 / 1024, 2),
         "members": [classroom_group_member_row(member) for member in members],
-        "files": [classroom_group_file_row(file) for file in files] if include_files else [],
+        "files": (
+            [classroom_group_file_row(file) for file in files] if include_files else []
+        ),
+        "file_count": len(files) if include_files else getattr(group, "file_count", 0),
+        "created_at": group.created_at,
+        "updated_at": group.updated_at,
+    }
+
+
+def student_classroom_group_row(
+    group: ClassroomGroup, *, include_files: bool = True
+) -> dict:
+    document_url = (
+        f"/{group.collaboration_document.url.lstrip('/')}"
+        if group.collaboration_document
+        else ""
+    )
+    document_ext = group.document_file_ext or group.collaboration.document_type
+    document_size = 0
+    if group.collaboration_document:
+        try:
+            document_size = group.collaboration_document.size
+        except (OSError, ValueError):
+            document_size = 0
+    used_storage_bytes = getattr(group, "used_storage_bytes", None)
+    if used_storage_bytes is None:
+        used_storage_bytes = (
+            group.files.aggregate(total=Sum("file_size")).get("total") or 0
+        )
+    files = getattr(group, "prefetched_files", None)
+    if files is None and include_files:
+        files = list(group.files.select_related("uploader").all())
+    members = getattr(group, "prefetched_members", None)
+    if members is None:
+        members = list(group.members.select_related("student", "student_profile").all())
+    return {
+        "id": group.id,
+        "collaboration": group.collaboration_id,
+        "group_no": group.group_no,
+        "name": f"第{group.group_no}组",
+        "leader": group.leader_id,
+        "document": {
+            "attachment_url": document_url,
+            "attachment_name": f"第{group.group_no}组.{document_ext}",
+            "file_ext": document_ext,
+            "file_size": document_size,
+            "document_version": group.document_version,
+        },
+        "used_storage_bytes": used_storage_bytes,
+        "used_storage_mb": round(used_storage_bytes / 1024 / 1024, 2),
+        "members": [student_classroom_group_member_row(member) for member in members],
+        "files": (
+            [classroom_group_file_row(file) for file in files] if include_files else []
+        ),
         "file_count": len(files) if include_files else getattr(group, "file_count", 0),
         "created_at": group.created_at,
         "updated_at": group.updated_at,
@@ -819,8 +1061,18 @@ def classroom_group_collaboration_row(
         groups = list(
             collaboration.groups.annotate(used_storage_bytes=Sum("files__file_size"))
             .prefetch_related(
-                Prefetch("members", queryset=ClassroomGroupMember.objects.select_related("student", "student_profile"), to_attr="prefetched_members"),
-                Prefetch("files", queryset=ClassroomGroupFile.objects.select_related("uploader"), to_attr="prefetched_files"),
+                Prefetch(
+                    "members",
+                    queryset=ClassroomGroupMember.objects.select_related(
+                        "student", "student_profile"
+                    ),
+                    to_attr="prefetched_members",
+                ),
+                Prefetch(
+                    "files",
+                    queryset=ClassroomGroupFile.objects.select_related("uploader"),
+                    to_attr="prefetched_files",
+                ),
             )
             .order_by("group_no", "id")
         )
@@ -840,8 +1092,48 @@ def classroom_group_collaboration_row(
         "allow_onlyoffice_edit": collaboration.allow_onlyoffice_edit,
         "group_count": len(groups) if include_groups else collaboration.groups.count(),
         "my_group_id": my_group.id if my_group else None,
-        "my_group": classroom_group_row(my_group, include_files=include_files) if my_group else None,
-        "groups": [classroom_group_row(group, include_files=include_files) for group in groups] if include_groups else [],
+        "my_group": (
+            classroom_group_row(my_group, include_files=include_files)
+            if my_group
+            else None
+        ),
+        "groups": (
+            [
+                classroom_group_row(group, include_files=include_files)
+                for group in groups
+            ]
+            if include_groups
+            else []
+        ),
+        "opened_at": collaboration.opened_at,
+        "closed_at": collaboration.closed_at,
+        "created_at": collaboration.created_at,
+        "updated_at": collaboration.updated_at,
+    }
+
+
+def student_classroom_group_collaboration_row(
+    collaboration: ClassroomGroupCollaboration,
+    *,
+    my_group: ClassroomGroup,
+    include_files: bool = True,
+) -> dict:
+    return {
+        "id": collaboration.id,
+        "session": collaboration.session_id,
+        "is_enabled": collaboration.is_enabled,
+        "status": collaboration.status,
+        "status_label": collaboration.get_status_display(),
+        "group_size": collaboration.group_size,
+        "document_type": collaboration.document_type,
+        "document_type_label": collaboration.get_document_type_display(),
+        "storage_quota_mb": collaboration.storage_quota_mb,
+        "allow_student_upload": collaboration.allow_student_upload,
+        "allow_onlyoffice_edit": collaboration.allow_onlyoffice_edit,
+        "group_count": collaboration.groups.count(),
+        "my_group_id": my_group.id,
+        "my_group": student_classroom_group_row(my_group, include_files=include_files),
+        "groups": [],
         "opened_at": collaboration.opened_at,
         "closed_at": collaboration.closed_at,
         "created_at": collaboration.created_at,
@@ -869,7 +1161,9 @@ def classroom_evaluation_criteria_rows(items) -> list[dict]:
     return sorted(rows, key=lambda row: (row["sort_order"], row["id"]))
 
 
-def classroom_evaluation_config_row(config: ClassroomEvaluationConfig | None) -> dict:
+def classroom_evaluation_config_row(
+    config: ClassroomEvaluationConfig | ClassroomEvaluationConfigVersion | None,
+) -> dict:
     if config is None:
         return {
             "id": None,
@@ -884,6 +1178,8 @@ def classroom_evaluation_config_row(config: ClassroomEvaluationConfig | None) ->
             "opened_at": None,
             "created_at": None,
             "updated_at": None,
+            "version_no": None,
+            "config_hash": "",
         }
     self_criteria = classroom_evaluation_criteria_rows(config.self_criteria)
     peer_criteria = classroom_evaluation_criteria_rows(config.peer_criteria)
@@ -898,13 +1194,17 @@ def classroom_evaluation_config_row(config: ClassroomEvaluationConfig | None) ->
         "self_criteria": self_criteria,
         "peer_criteria": peer_criteria,
         "teacher_criteria": teacher_criteria,
-        "opened_at": config.opened_at,
+        "opened_at": getattr(config, "opened_at", None),
         "created_at": config.created_at,
-        "updated_at": config.updated_at,
+        "updated_at": getattr(config, "updated_at", config.created_at),
+        "version_no": getattr(config, "version_no", None),
+        "config_hash": getattr(config, "config_hash", ""),
     }
 
 
-def classroom_evaluation_submission_row(submission: ClassroomEvaluationSubmission | None) -> dict | None:
+def classroom_evaluation_submission_row(
+    submission: ClassroomEvaluationSubmission | None,
+) -> dict | None:
     if submission is None:
         return None
     ratings = submission.ratings if isinstance(submission.ratings, dict) else {}
@@ -918,7 +1218,16 @@ def classroom_evaluation_submission_row(submission: ClassroomEvaluationSubmissio
         "evaluator": account_row(submission.evaluator),
         "target": account_row(submission.target),
         "group": submission.group_id,
-        "ratings": {str(key): int(value) for key, value in ratings.items() if str(value).isdigit()},
+        "rubric_version": submission.rubric_version_id,
+        "rubric_version_no": submission.rubric_version.version_no,
+        "submission_id": str(submission.submission_id),
+        "submission_version": submission.submission_version,
+        "supersedes": submission.supersedes_id,
+        "ratings": {
+            str(key): int(value)
+            for key, value in ratings.items()
+            if str(value).isdigit()
+        },
         "comment": submission.comment,
         "created_at": submission.created_at,
         "updated_at": submission.updated_at,
@@ -943,7 +1252,9 @@ def pretest_paper_row(paper: PretestPaper, *, include_questions: bool = False) -
         "updated_at": paper.updated_at,
     }
     if include_questions:
-        row["questions"] = [pretest_question_row(question) for question in paper.questions.all()]
+        row["questions"] = [
+            pretest_question_row(question) for question in paper.questions.all()
+        ]
     return row
 
 
@@ -980,10 +1291,14 @@ def student_pretest_question_row(question: PretestQuestion) -> dict:
     }
 
 
-def student_pretest_paper_row(paper: PretestPaper, *, include_questions: bool = False) -> dict:
+def student_pretest_paper_row(
+    paper: PretestPaper, *, include_questions: bool = False
+) -> dict:
     row = pretest_paper_row(paper, include_questions=False)
     if include_questions:
-        row["questions"] = [student_pretest_question_row(question) for question in paper.questions.all()]
+        row["questions"] = [
+            student_pretest_question_row(question) for question in paper.questions.all()
+        ]
     return row
 
 
@@ -1006,7 +1321,9 @@ def student_row(profile: StudentProfile) -> dict:
         "student_no": profile.student_no,
         "class_group": class_group,
         "current_layer": profile.current_layer,
-        "current_layer_label": profile.get_current_layer_display() if profile.current_layer else "",
+        "current_layer_label": (
+            profile.get_current_layer_display() if profile.current_layer else ""
+        ),
         "current_group_no": profile.current_group_no,
         "score": profile.score,
         "is_first_use": profile.is_first_use,
@@ -1028,7 +1345,9 @@ def notice_row(notice: Notice) -> dict:
         "status": notice.status,
         "status_label": notice.get_status_display(),
         "is_pinned": notice.is_pinned,
-        "target_classes": [class_group_row(class_group) for class_group in notice.target_classes.all()],
+        "target_classes": [
+            class_group_row(class_group) for class_group in notice.target_classes.all()
+        ],
         "published_at": notice.published_at,
         "archived_at": notice.archived_at,
         "created_at": notice.created_at,
@@ -1055,7 +1374,9 @@ def feedback_row(feedback: Feedback) -> dict:
     }
 
 
-def classroom_activity_row(activity: ClassroomActivity, *, student_user: User | None = None) -> dict:
+def classroom_activity_row(
+    activity: ClassroomActivity, *, student_user: User | None = None
+) -> dict:
     metadata = activity.metadata if isinstance(activity.metadata, dict) else {}
     response_events = LearningEvent.objects.filter(
         object_type="classroom_activity",
@@ -1098,7 +1419,8 @@ def classroom_activity_row(activity: ClassroomActivity, *, student_user: User | 
     if student_user is not None:
         score_event = (
             LearningEvent.objects.filter(
-                Q(metadata__action="quick_answer_score") | Q(metadata__action="random_pick_score"),
+                Q(metadata__action="quick_answer_score")
+                | Q(metadata__action="random_pick_score"),
                 actor=student_user,
                 object_type="classroom_activity",
                 object_id=str(activity.id),
@@ -1116,7 +1438,11 @@ def classroom_activity_row(activity: ClassroomActivity, *, student_user: User | 
                 metadata__score_event_id=score_event.id,
             ).exists()
             if not has_acknowledged:
-                score_metadata = score_event.metadata if isinstance(score_event.metadata, dict) else {}
+                score_metadata = (
+                    score_event.metadata
+                    if isinstance(score_event.metadata, dict)
+                    else {}
+                )
                 metadata = {
                     **metadata,
                     "my_score_feedback": {
@@ -1125,7 +1451,9 @@ def classroom_activity_row(activity: ClassroomActivity, *, student_user: User | 
                         "score_action": score_metadata.get("score_action", ""),
                         "score_note": score_metadata.get("score_note", ""),
                         "command": score_metadata.get("command", ""),
-                        "activity_title": score_metadata.get("activity_title", activity.title),
+                        "activity_title": score_metadata.get(
+                            "activity_title", activity.title
+                        ),
                         "occurred_at": score_event.occurred_at,
                     },
                 }
@@ -1146,14 +1474,20 @@ def classroom_activity_row(activity: ClassroomActivity, *, student_user: User | 
     }
 
 
-def classroom_attendance_row(activity: ClassroomActivity, profile: StudentProfile, latest_event: LearningEvent | None) -> dict:
+def classroom_attendance_row(
+    activity: ClassroomActivity,
+    profile: StudentProfile,
+    latest_event: LearningEvent | None,
+) -> dict:
     status = "not_signed"
     status_label = "未签到"
     source = ""
     note = ""
     occurred_at = None
     if latest_event is not None:
-        metadata = latest_event.metadata if isinstance(latest_event.metadata, dict) else {}
+        metadata = (
+            latest_event.metadata if isinstance(latest_event.metadata, dict) else {}
+        )
         status = str(metadata.get("attendance_status") or "signed")
         labels = {
             "signed": "已签到",
@@ -1183,18 +1517,34 @@ def classroom_attendance_row(activity: ClassroomActivity, profile: StudentProfil
     }
 
 
-def classroom_session_row(session: ClassroomSession, *, include_activities: bool = False) -> dict:
-    current_step = session.current_step if getattr(session, "current_step", None) and session.current_step_id else None
+def classroom_session_row(
+    session: ClassroomSession, *, include_activities: bool = False
+) -> dict:
+    current_step = (
+        session.current_step
+        if getattr(session, "current_step", None) and session.current_step_id
+        else None
+    )
     row = {
         "id": session.id,
         "title": session.title,
         "status": session.status,
         "status_label": session.get_status_display(),
         "school": school_summary(session.school),
-        "course": course_row(session.course) if getattr(session, "course", None) else None,
-        "lesson": lesson_row(session.lesson) if getattr(session, "lesson", None) and session.lesson_id else None,
-        "class_group": class_group_row(session.class_group) if getattr(session, "class_group", None) else None,
-        "current_step": student_lesson_step_row(current_step) if current_step else None,
+        "course": (
+            course_row(session.course) if getattr(session, "course", None) else None
+        ),
+        "lesson": (
+            lesson_row(session.lesson)
+            if getattr(session, "lesson", None) and session.lesson_id
+            else None
+        ),
+        "class_group": (
+            class_group_row(session.class_group)
+            if getattr(session, "class_group", None)
+            else None
+        ),
+        "current_step": lesson_step_row(current_step) if current_step else None,
         "current_step_status": session.current_step_status,
         "current_step_status_label": session.get_current_step_status_display(),
         "submission_locked": session.submission_locked,
@@ -1214,5 +1564,7 @@ def classroom_session_row(session: ClassroomSession, *, include_activities: bool
         activities = getattr(session, "prefetched_activities", None)
         if activities is None:
             activities = session.activities.all()
-        row["activities"] = [classroom_activity_row(activity) for activity in activities]
+        row["activities"] = [
+            classroom_activity_row(activity) for activity in activities
+        ]
     return row

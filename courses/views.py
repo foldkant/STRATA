@@ -1,3 +1,1 @@
-from django.shortcuts import render
-
-# Create your views here.
+"""Course endpoints are exposed through the versioned API package."""

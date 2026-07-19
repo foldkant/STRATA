@@ -116,6 +116,36 @@ ONLYOFFICE_DOCUMENT_SERVER_URL=
 5. Celery worker
 6. Celery beat
 
+## 学习事件隔离密钥
+
+正式环境必须为无效事件的短期加密隔离配置独立 Fernet 密钥：
+
+```powershell
+.\.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+将结果写入学校服务器本地 `.env`，不得提交 Git 或进入跨校研究包：
+
+```env
+LEARNING_EVENT_QUARANTINE_KEY=<Fernet 密钥>
+LEARNING_EVENT_QUARANTINE_RETENTION_DAYS=7
+LEARNING_EVENT_WRITE_MODE=dual_required
+```
+
+PostgreSQL 环境缺失或配置错误时，`manage.py check` 会阻断启动。本地 SQLite 可临时从 `DJANGO_SECRET_KEY` 派生，但不能作为正式部署配置。
+
+数据库迁移后同步事件模式：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py sync_learning_event_schemas
+```
+
+清理超过保留期限的隔离事件：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py purge_expired_event_rejections
+```
+
 开发命令：
 
 ```powershell

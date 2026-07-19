@@ -7,6 +7,8 @@ import {
   getStudentClassroom,
   getStudentClassroomEvaluation,
   getStudentGroupCollaboration,
+  recordClassroomResourceOpened,
+  recordClassroomVideoProgress,
   respondClassroomActivity,
   submitStudentClassroomEvaluation,
   submitStudentStepAnswer,
@@ -25,6 +27,7 @@ import {
   type StudentWorkAttachment
 } from '@/api/student'
 import { useAuthStore } from '@/stores/auth'
+import FilePicker from '@/components/FilePicker.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
@@ -57,6 +60,7 @@ const groupCollaborationLoading = ref(false)
 const groupDocumentOpen = ref(false)
 const groupFileDescription = ref('')
 const groupFileUploading = ref(false)
+const groupSelectedFile = ref<File | null>(null)
 const evaluationContext = ref<StudentEvaluationContext | null>(null)
 const evaluationOpen = ref(false)
 const evaluationLoading = ref(false)
@@ -92,6 +96,34 @@ const selectedResource = computed<StudentResourceBinding | null>(() => {
   if (!currentResources.value.length) return null
   return currentResources.value[Math.min(selectedResourceIndex.value, currentResources.value.length - 1)] || null
 })
+
+function trackResourceOpened(payload: {
+  resourceId: number | string
+  presentation: 'embedded' | 'popout' | 'external' | 'download' | 'unknown'
+}) {
+  if (!classroom.value) return
+  void recordClassroomResourceOpened(
+    classroom.value.id,
+    payload.resourceId,
+    payload.presentation
+  ).catch(() => undefined)
+}
+
+function trackVideoProgress(payload: {
+  resourceId: number | string
+  positionSeconds: number
+  mediaSeconds: number
+  playbackRate: number
+  durationMs: number
+}) {
+  if (!classroom.value) return
+  void recordClassroomVideoProgress(classroom.value.id, payload.resourceId, {
+    position_seconds: payload.positionSeconds,
+    media_seconds: payload.mediaSeconds,
+    playback_rate: payload.playbackRate,
+    duration_ms: payload.durationMs
+  }).catch(() => undefined)
+}
 const answerDraft = computed({
   get() {
     const id = currentStep.value?.id
@@ -119,13 +151,11 @@ const stepNeedsTextAnswer = computed(() => {
 })
 const hasTaskSubmission = computed(() => currentQuestions.value.length > 0 || stepNeedsTextAnswer.value)
 const taskSummaryItems = computed(() => {
-  const items: Array<{ label: string; value: number | string }> = [
+  return [
     { label: '题目', value: currentQuestions.value.length },
     { label: '资源', value: currentResources.value.length },
     { label: '活动', value: openActivities.value.length }
   ]
-  if (classroom.value?.is_layered) items.push({ label: '分层', value: '已匹配' })
-  return items
 })
 const myGroup = computed(() => groupCollaboration.value?.my_group || null)
 const groupFiles = computed<StudentGroupFile[]>(() => myGroup.value?.files || [])
@@ -266,13 +296,13 @@ function groupMemberText() {
   return myGroup.value?.members.map((member) => member.display_name || member.username).join('、') || '暂无成员'
 }
 
-async function uploadGroupFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+async function uploadGroupFile(files: File[]) {
+  const file = files[0]
   if (!file || !classroom.value) return
+  groupSelectedFile.value = file
   if (!groupCollaboration.value?.allow_student_upload) {
     notice.value = '教师当前未开放小组共享文件上传。'
-    input.value = ''
+    groupSelectedFile.value = null
     return
   }
   groupFileUploading.value = true
@@ -286,7 +316,7 @@ async function uploadGroupFile(event: Event) {
     notice.value = error instanceof ApiError ? error.message : '小组文件上传失败。'
   } finally {
     groupFileUploading.value = false
-    input.value = ''
+    groupSelectedFile.value = null
   }
 }
 
@@ -406,13 +436,11 @@ async function submitEvaluation() {
   }
 }
 
-async function uploadQuestionFile(question: StudentLessonQuestion, event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+async function uploadQuestionFile(question: StudentLessonQuestion, files: File[]) {
+  const file = files[0]
   if (!file || !currentStep.value) return
   if (answerSubmitDisabled.value) {
     notice.value = '当前环节暂不允许上传。'
-    input.value = ''
     return
   }
   uploadingQuestionId.value = question.id
@@ -425,7 +453,6 @@ async function uploadQuestionFile(question: StudentLessonQuestion, event: Event)
     notice.value = error instanceof ApiError ? error.message : '附件上传失败。'
   } finally {
     uploadingQuestionId.value = ''
-    input.value = ''
   }
 }
 
@@ -794,7 +821,7 @@ onUnmounted(() => {
     <section v-else class="student-classroom-panel live-classroom-workspace">
       <article class="live-classroom-head">
         <div>
-          <span>{{ classroom.status_label }} · {{ classroom.current_step_status_label }}{{ classroom.is_layered ? ' · 当前环节已匹配分层题' : '' }}</span>
+          <span>{{ classroom.status_label }} · {{ classroom.current_step_status_label }}</span>
           <strong>{{ classroom.title }}</strong>
         </div>
         <p>
@@ -836,7 +863,14 @@ onUnmounted(() => {
           </div>
 
           <div class="student-preview-stage">
-            <ResourcePreview :resource="selectedResource" office-mode="view" content-only learning-page-interactive />
+            <ResourcePreview
+              :resource="selectedResource"
+              office-mode="view"
+              content-only
+              learning-page-interactive
+              @resource-opened="trackResourceOpened"
+              @video-progress="trackVideoProgress"
+            />
           </div>
         </article>
 
@@ -848,7 +882,7 @@ onUnmounted(() => {
                 <h2>{{ currentStep.title }}</h2>
               </div>
               <small>
-                {{ classroom.current_step_status_label }}{{ classroom.submission_locked ? ' · 提交已锁定' : '' }}{{ classroom.is_layered ? ' · 已按你的层级匹配' : '' }}
+                {{ classroom.current_step_status_label }}{{ classroom.submission_locked ? ' · 提交已锁定' : '' }}
               </small>
             </header>
             <p class="student-instruction">
@@ -990,10 +1024,16 @@ onUnmounted(() => {
               </div>
               <div v-if="groupCollaboration.allow_student_upload" class="student-group-upload">
                 <input v-model.trim="groupFileDescription" maxlength="120" placeholder="文件说明，可不填" />
-                <label>
-                  <span>{{ groupFileUploading ? '上传中...' : '上传共享文件' }}</span>
-                  <input type="file" :disabled="groupFileUploading" @change="uploadGroupFile" />
-                </label>
+                <FilePicker
+                  label="小组共享文件"
+                  hint="选择后立即上传，并计入小组共享空间。"
+                  choose-text="选择并上传"
+                  :file="groupSelectedFile"
+                  :disabled="groupFileUploading"
+                  :busy="groupFileUploading"
+                  compact
+                  @select="uploadGroupFile"
+                />
               </div>
               <div class="student-group-file-list">
                 <a v-for="file in groupFiles" :key="file.id" :href="file.attachment_url" download>
@@ -1066,20 +1106,20 @@ onUnmounted(() => {
                 </label>
 
                 <div v-else-if="question.question_type === 'file'" class="student-file-answer-box">
-                  <div>
-                    <span>上传附件</span>
-                    <small>{{ fileLimitText(question) }}</small>
-                  </div>
-                  <input
-                    type="file"
+                  <FilePicker
+                    label="提交附件"
+                    :hint="fileLimitText(question)"
                     :accept="fileAccept(question)"
                     :disabled="answerSubmitDisabled || uploadingQuestionId === question.id"
-                    @change="uploadQuestionFile(question, $event)"
+                    :busy="uploadingQuestionId === question.id"
+                    choose-text="选择并上传"
+                    replace-text="重新上传"
+                    status-label="已上传"
+                    :current-name="attachmentAnswer(question)?.attachment_name || ''"
+                    :current-detail="attachmentAnswer(question) ? formatFileSize(attachmentAnswer(question)?.attachment_size || 0) : ''"
+                    compact
+                    @select="uploadQuestionFile(question, $event)"
                   />
-                  <p v-if="uploadingQuestionId === question.id" class="student-answer-locked">正在上传...</p>
-                  <p v-else-if="attachmentAnswer(question)" class="student-answer-submitted">
-                    已上传：{{ attachmentAnswer(question)?.attachment_name }} · {{ formatFileSize(attachmentAnswer(question)?.attachment_size || 0) }}
-                  </p>
                 </div>
 
                 <label v-else class="student-answer-box">

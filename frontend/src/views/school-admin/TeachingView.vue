@@ -11,18 +11,13 @@ import {
   type TeachingOptions
 } from '@/api/management'
 import AppShell from '@/layouts/AppShell.vue'
+import ClassChipList from '@/components/ClassChipList.vue'
 import ManagementPage from '@/components/ManagementPage.vue'
+import MultiSelectActions from '@/components/MultiSelectActions.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
+import { schoolAdminNav } from './nav'
 
-const navItems = [
-  { label: '管理首页', path: '/school-admin' },
-  { label: '教师管理', path: '/school-admin/teachers' },
-  { label: '学生管理', path: '/school-admin/students' },
-  { label: '班级管理', path: '/school-admin/classes' },
-  { label: '任课关系', path: '/school-admin/teaching' },
-  { label: '学科与学科前测', path: '/school-admin/pretests' },
-  { label: '模型与训练', path: '/school-admin/models' }
-]
+const navItems = schoolAdminNav('/school-admin/teaching')
 
 const rows = ref<TeachingTeacherRow[]>([])
 const options = ref<TeachingOptions>({ classes: [], teachers: [] })
@@ -47,14 +42,6 @@ const activeClasses = computed(() =>
 )
 
 const selectedClassIdSet = computed(() => new Set(batchClassIds.value))
-
-const allClassesSelected = computed(
-  () => activeClasses.value.length > 0 && activeClasses.value.every((item) => selectedClassIdSet.value.has(item.id))
-)
-
-const partialClassesSelected = computed(
-  () => batchClassIds.value.length > 0 && !allClassesSelected.value
-)
 
 function setRows(data: PageResult<TeachingTeacherRow>) {
   rows.value = data.results
@@ -126,10 +113,6 @@ function toggleClass(id: number, checked: boolean) {
     return
   }
   batchClassIds.value = batchClassIds.value.filter((item) => item !== id)
-}
-
-function toggleAllClasses(checked: boolean) {
-  batchClassIds.value = checked ? activeClasses.value.map((item) => item.id) : []
 }
 
 function batchError(field: string) {
@@ -224,10 +207,7 @@ onMounted(async () => {
           <td>{{ row.teacher.display_name || '-' }}</td>
           <td>{{ row.teacher.username }}</td>
           <td>
-            <div v-if="row.classes.length" class="class-chip-list">
-              <span v-for="item in row.classes" :key="item.id" class="class-chip">{{ classLabel(item) }}</span>
-            </div>
-            <span v-else class="muted-text">未设置任教班级</span>
+            <ClassChipList :classes="row.classes" empty-label="未设置任教班级" />
           </td>
           <td>{{ row.class_count }}</td>
           <td class="row-actions">
@@ -250,16 +230,13 @@ onMounted(async () => {
 
           <div class="batch-modal-body">
             <div class="class-check-header">
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  :checked="allClassesSelected"
-                  :indeterminate.prop="partialClassesSelected"
-                  @change="toggleAllClasses(($event.target as HTMLInputElement).checked)"
-                />
-                <em>全选启用班级</em>
-              </label>
-              <span>已选 {{ batchClassIds.length }} 个班级</span>
+              <span>选择启用班级</span>
+              <MultiSelectActions
+                :selected-count="batchClassIds.length"
+                :total-count="activeClasses.length"
+                @select-all="batchClassIds = activeClasses.map((item) => item.id)"
+                @clear="batchClassIds = []"
+              />
             </div>
             <p v-if="batchError('class_groups')" class="field-error">{{ batchError('class_groups') }}</p>
             <p v-if="batchError('teacher')" class="field-error">{{ batchError('teacher') }}</p>

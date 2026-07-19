@@ -22,8 +22,21 @@ def env_list(name: str, default: str = "") -> list[str]:
     return [item.strip() for item in env(name, default).split(",") if item.strip()]
 
 
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(env(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-only-change-me")
 AI_SECRET_KEY = env("AI_SECRET_KEY", SECRET_KEY)
+LEARNING_EVENT_QUARANTINE_KEY = env("LEARNING_EVENT_QUARANTINE_KEY", "")
+LEARNING_EVENT_QUARANTINE_RETENTION_DAYS = min(
+    max(env_int("LEARNING_EVENT_QUARANTINE_RETENTION_DAYS", 7), 1),
+    90,
+)
+LEARNING_EVENT_WRITE_MODE = env("LEARNING_EVENT_WRITE_MODE", "dual_required").strip()
 DEBUG = env_bool("DJANGO_DEBUG", True)
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
 SECURE_CROSS_ORIGIN_OPENER_POLICY = env("DJANGO_CROSS_ORIGIN_OPENER_POLICY", "same-origin") or None
@@ -47,6 +60,7 @@ INSTALLED_APPS = [
     "school",
     "courses",
     "learning",
+    "learning_analytics",
     "realtime",
     "aiops",
     "api",

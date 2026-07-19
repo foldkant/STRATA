@@ -1,0 +1,17 @@
+TY  - JOUR
+AU  - Caton, Simon
+AU  - Haas, Christian
+TI  - Fairness in Machine Learning: A Survey
+JO  - ACM Computing Surveys
+T2  - ACM Computing Surveys
+JA  - ACM Comput. Surv.
+PY  - 2024
+VL  - 56
+IS  - 7
+SP  - 1
+EP  - 38
+DO  - 10.1145/3616865
+UR  - https://doi.org/10.1145/3616865
+N2  - When Machine Learning technologies are used in contexts that affect citizens, companies as well as researchers need to be confident that there will not be any unexpected social implications, such as bias towards gender, ethnicity, and/or people with disabilities. There is significant literature on approaches to mitigate bias and promote fairness, yet the area is complex and hard to penetrate for newcomers to the domain. This article seeks to provide an overview of the different schools of though
+DB  - CrossRef
+ER  - 

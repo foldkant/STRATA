@@ -1,0 +1,18 @@
+TY  - JOUR
+AU  - Abdelrahman, Ghodai
+AU  - Wang, Qing
+AU  - Nunes, Bernardo
+TI  - Knowledge Tracing: A Survey
+JO  - ACM Computing Surveys
+T2  - ACM Computing Surveys
+JA  - ACM Comput. Surv.
+PY  - 2023
+VL  - 55
+IS  - 11
+SP  - 1
+EP  - 37
+DO  - 10.1145/3569576
+UR  - https://doi.org/10.1145/3569576
+N2  - Humans’ ability to transfer knowledge through teaching is one of the essential aspects for human intelligence. A human teacher can track the knowledge of students to customize the teaching on students’ needs. With the rise of online education platforms, there is a similar need for machines to track the knowledge of students and tailor their learning experience. This is known as the Knowledge Tracing (KT) problem in the literature. Effectively solving the KT problem would unlock the potential of 
+DB  - CrossRef
+ER  - 

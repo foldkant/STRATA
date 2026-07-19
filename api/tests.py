@@ -1,12 +1,14 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import User
 from courses.models import (
+    ClassroomActivity,
     ClassroomGroup,
     ClassroomGroupCollaboration,
     ClassroomGroupMember,
@@ -15,9 +17,17 @@ from courses.models import (
     CourseClass,
     Lesson,
     LessonStep,
+    Resource,
     Subject,
 )
 from learning.models import LearningEvent, QuestionBankItem, TestAssessment, TestAssessmentQuestion, TestAttempt, TestAttemptAnswer
+from learning_analytics.models import (
+    AssessmentResultFact,
+    LearningEventV2,
+    LearningOpportunity,
+    LearningOpportunityTransitionFact,
+    ParticipationPointLedger,
+)
 from realtime.models import ClassroomChatConfig, ClassroomChatMessage
 from realtime.moderation import moderate_content
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
@@ -233,6 +243,13 @@ class AssessmentWorkflowTests(TestCase):
         self.assertEqual(response.data["data"]["total_score"], 5)
         self.assertEqual(self.client.post(f"/api/v1/teacher/assessments/{assessment_id}/publish/").status_code, 200)
         self.assertEqual(self.client.post(f"/api/v1/teacher/assessments/{assessment_id}/open/").status_code, 200)
+        self.assertEqual(
+            LearningOpportunity.objects.filter(
+                student=self.student,
+                content_type=LearningOpportunity.ContentType.QUESTION,
+            ).count(),
+            1,
+        )
 
         self.client.force_authenticate(self.other_student)
         self.assertEqual(self.client.get(f"/api/v1/student/assessments/{assessment_id}/").status_code, 404)
@@ -253,6 +270,15 @@ class AssessmentWorkflowTests(TestCase):
         attempt = TestAttempt.objects.get(assessment_id=assessment_id, student=self.student)
         self.assertEqual(attempt.status, TestAttempt.Status.GRADED)
         self.assertEqual(attempt.total_score, 5)
+        submitted_event = LearningEventV2.objects.get(event_name="item.submitted")
+        self.assertEqual(submitted_event.schema_version, "1.1")
+        self.assertEqual(submitted_event.attempt_id, attempt.analytics_attempt_id)
+        self.assertNotIn("answer", submitted_event.payload)
+        result_fact = AssessmentResultFact.objects.get(grading_state="final")
+        self.assertEqual(float(result_fact.score_raw), 5)
+        self.assertEqual(result_fact.grader_type, "automatic")
+        self.assertIsNone(result_fact.grader)
+        self.assertEqual(result_fact.source_event.legacy_event.actor, self.student)
 
         self.client.force_authenticate(self.teacher)
         dashboard_response = self.client.get("/api/v1/teacher/assessments/")
@@ -284,6 +310,22 @@ class AssessmentWorkflowTests(TestCase):
         attempt = TestAttempt.objects.get(assessment_id=assessment["id"], student=self.student)
         self.assertEqual(attempt.status, TestAttempt.Status.GRADED)
         self.assertIsNotNone(attempt.submitted_at)
+        opportunity = LearningOpportunity.objects.get(student=self.student)
+        self.assertTrue(
+            opportunity.transition_facts.filter(state="submitted").exists()
+        )
+        self.assertTrue(opportunity.transition_facts.filter(state="graded").exists())
+        self.assertFalse(opportunity.transition_facts.filter(state="withdrawn").exists())
+        self.assertEqual(
+            LearningEventV2.objects.filter(event_name="content.withdrawn").count(),
+            1,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/teacher/assessments/{assessment['id']}/open/"
+            ).status_code,
+            400,
+        )
 
     def test_randomized_question_and_option_orders_are_stable_per_attempt(self):
         questions = [
@@ -365,7 +407,6 @@ class AssessmentWorkflowTests(TestCase):
             teacher=self.teacher,
             subject=self.subject,
             title="主观题批阅测试",
-            status=TestAssessment.Status.CLOSED,
         )
         assessment.target_classes.add(self.class_group)
         question_rows = [
@@ -380,17 +421,27 @@ class AssessmentWorkflowTests(TestCase):
             )
             for index in range(1, 3)
         ]
-        attempt = TestAttempt.objects.create(
-            assessment=assessment,
-            student=self.student,
-            class_group=self.class_group,
-            status=TestAttempt.Status.SUBMITTED,
-        )
-        answer_rows = [
-            TestAttemptAnswer.objects.create(attempt=attempt, question=question, answer=[f"学生回答 {index}"])
-            for index, question in enumerate(question_rows, start=1)
-        ]
         self.client.force_authenticate(self.teacher)
+        self.client.post(f"/api/v1/teacher/assessments/{assessment.id}/publish/")
+        self.client.post(f"/api/v1/teacher/assessments/{assessment.id}/open/")
+        self.client.force_authenticate(self.student)
+        self.client.post(f"/api/v1/student/assessments/{assessment.id}/start/")
+        for index, question in enumerate(question_rows, start=1):
+            self.client.patch(
+                f"/api/v1/student/assessments/{assessment.id}/answer/",
+                {"question_id": question.id, "answer": [f"学生回答 {index}"]},
+                format="json",
+            )
+        self.client.post(f"/api/v1/student/assessments/{assessment.id}/submit/")
+        attempt = TestAttempt.objects.get(assessment=assessment, student=self.student)
+        answer_rows = list(
+            attempt.answer_rows.select_related("question").order_by("question__sort_order")
+        )
+        self.client.force_authenticate(self.teacher)
+        pending_facts = AssessmentResultFact.objects.filter(grading_state="pending")
+        self.assertEqual(pending_facts.count(), 2)
+        self.assertTrue(all(item.score_raw is None for item in pending_facts))
+        self.assertTrue(all(item.grader is None for item in pending_facts))
 
         response = self.client.patch(
             f"/api/v1/teacher/test-attempts/{attempt.id}/grade/",
@@ -415,6 +466,38 @@ class AssessmentWorkflowTests(TestCase):
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, TestAttempt.Status.GRADED)
         self.assertEqual(attempt.subjective_score, 9)
+        self.assertEqual(
+            AssessmentResultFact.objects.filter(grading_state="final").count(),
+            2,
+        )
+        self.assertEqual(
+            LearningOpportunityTransitionFact.objects.filter(state="graded").count(),
+            2,
+        )
+
+        revised = self.client.patch(
+            f"/api/v1/teacher/test-attempts/{attempt.id}/grade/",
+            {
+                "answers": [
+                    {
+                        "answer_id": answer_rows[0].id,
+                        "score": 3,
+                        "feedback": "复核后调整",
+                    },
+                    {
+                        "answer_id": answer_rows[1].id,
+                        "score": 5,
+                        "feedback": "回答完整",
+                    },
+                ]
+            },
+            format="json",
+        )
+        self.assertEqual(revised.status_code, 200)
+        revision_fact = AssessmentResultFact.objects.get(grading_state="revised")
+        self.assertEqual(float(revision_fact.score_raw), 3)
+        self.assertEqual(revision_fact.supersedes.grading_state, "final")
+        self.assertEqual(revision_fact.grader, self.teacher)
 
     def test_question_requires_disable_before_delete(self):
         question = QuestionBankItem.objects.create(
@@ -785,6 +868,12 @@ class ClassroomChatWorkflowTests(TestCase):
         event = LearningEvent.objects.get(object_type="classroom_chat_message", object_id=str(message_id), event_type="teacher_intervention")
         self.assertEqual(event.actor, self.student)
         self.assertEqual(event.score, -5)
+        analytics_event = LearningEventV2.objects.get(legacy_event=event)
+        self.assertEqual(analytics_event.actor, self.teacher)
+        self.assertEqual(analytics_event.target_student, self.student)
+        ledger = ParticipationPointLedger.objects.get(source_event=analytics_event)
+        self.assertEqual(float(ledger.delta), -5)
+        self.assertEqual(float(ledger.balance_after), 5)
 
         student_messages = self.messages(self.student, "whole_class")
         self.assertEqual(student_messages.data["data"]["messages"], [])
@@ -817,6 +906,38 @@ class ClassroomChatWorkflowTests(TestCase):
         self.profile.refresh_from_db()
         self.assertEqual(self.profile.score, 5)
 
+    def test_insufficient_points_does_not_commit_chat_review(self):
+        self.profile.score = 2
+        self.profile.save(update_fields=["score", "updated_at"])
+        self.enable(whole_class_enabled=True)
+        response = self.send(self.student, "whole_class", "我要打死你")
+        message_id = response.data["data"]["id"]
+
+        self.set_user(self.teacher)
+        response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/chat/messages/{message_id}/moderate/",
+            {"action": "deduct", "points": 5, "note": "积分不足时不应提交审核"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.score, 2)
+        message = ClassroomChatMessage.objects.get(pk=message_id)
+        self.assertEqual(message.review_action, ClassroomChatMessage.ReviewAction.NONE)
+        self.assertEqual(
+            message.moderation_status,
+            ClassroomChatMessage.ModerationStatus.PENDING,
+        )
+        self.assertFalse(
+            LearningEvent.objects.filter(
+                object_type="classroom_chat_message",
+                object_id=str(message_id),
+                event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
+            ).exists()
+        )
+        self.assertFalse(ParticipationPointLedger.objects.exists())
+
     def test_group_membership_and_class_finish_are_enforced(self):
         collaboration = ClassroomGroupCollaboration.objects.create(
             session=self.session,
@@ -841,3 +962,273 @@ class ClassroomChatWorkflowTests(TestCase):
         self.assertFalse(config.group_chat_enabled)
         response = self.send(self.student, "group", "课堂结束后发送", group.id)
         self.assertEqual(response.status_code, 403)
+
+
+class ClassroomPointDualWriteTests(TestCase):
+    def setUp(self):
+        self.school = School.objects.create(name="课堂积分测试学校", code="POINT-SCHOOL")
+        self.subject = Subject.objects.create(
+            school=self.school,
+            name="信息科技",
+            code="IT",
+        )
+        self.class_group = ClassGroup.objects.create(
+            school=self.school,
+            name="高一1班",
+            grade="高一",
+        )
+        self.teacher = User.objects.create_user(
+            username="point_teacher",
+            password="Teacher123!",
+            role=User.Role.TEACHER,
+            school=self.school,
+        )
+        self.student = User.objects.create_user(
+            username="point_student",
+            password="123456",
+            role=User.Role.STUDENT,
+            school=self.school,
+        )
+        self.profile = StudentProfile.objects.create(
+            user=self.student,
+            class_group=self.class_group,
+            score=0,
+            is_first_use=False,
+        )
+        TeachingAssignment.objects.create(
+            school=self.school,
+            class_group=self.class_group,
+            teacher=self.teacher,
+        )
+        self.course = Course.objects.create(
+            subject=self.subject,
+            title="课堂积分课程",
+            teacher=self.teacher,
+            is_active=True,
+        )
+        CourseClass.objects.create(
+            course=self.course,
+            class_group=self.class_group,
+            created_by=self.teacher,
+        )
+        self.lesson = Lesson.objects.create(
+            course=self.course,
+            title="课堂积分课时",
+            is_active=True,
+        )
+        self.session = ClassroomSession.objects.create(
+            school=self.school,
+            teacher=self.teacher,
+            course=self.course,
+            lesson=self.lesson,
+            class_group=self.class_group,
+            title="课堂积分",
+            status=ClassroomSession.Status.RUNNING,
+            started_at=timezone.now(),
+        )
+        self.activity = ClassroomActivity.objects.create(
+            session=self.session,
+            activity_type=ClassroomActivity.ActivityType.QUICK_ANSWER,
+            title="抢答",
+            status=ClassroomActivity.Status.OPEN,
+            metadata={"command": "quick_answer", "score_defaults": {"plus": 2, "minus": -1}},
+            opened_at=timezone.now(),
+        )
+        LearningEvent.objects.create(
+            actor=self.student,
+            class_group=self.class_group,
+            course=self.course,
+            lesson=self.lesson,
+            event_type=LearningEvent.EventType.PAGE_VIEW,
+            object_type="classroom_activity",
+            object_id=str(self.activity.id),
+            metadata={
+                "action": "classroom_activity_response",
+                "command": "quick_answer",
+                "response_type": "quick_answer",
+            },
+            occurred_at=timezone.now(),
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.teacher)
+
+    def score(self, action: str, score: float):
+        return self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/quick-answer/{self.activity.id}/score/",
+            {"action": action, "student_id": self.student.id, "score": score},
+            format="json",
+        )
+
+    def test_score_replacement_dual_writes_and_keeps_nonnegative_balance(self):
+        awarded = self.score("plus", 2)
+        deducted = self.score("minus", 1)
+
+        self.assertEqual(awarded.status_code, 200)
+        self.assertEqual(deducted.status_code, 200)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.score, 0)
+        score_events = LearningEvent.objects.filter(
+            object_type="classroom_activity",
+            object_id=str(self.activity.id),
+            metadata__action="quick_answer_score",
+        ).order_by("occurred_at", "id")
+        self.assertEqual(list(score_events.values_list("score", flat=True)), [2, -1])
+        self.assertTrue(all(event.analytics_event_v2 for event in score_events))
+        self.assertEqual(
+            list(
+                ParticipationPointLedger.objects.order_by("recorded_at", "id").values_list(
+                    "delta", flat=True
+                )
+            ),
+            [2, -2],
+        )
+
+
+class ResourceCenterWorkflowTests(TestCase):
+    def setUp(self):
+        self.school = School.objects.create(name="资源测试学校", code="RESOURCE-SCHOOL")
+        self.other_school = School.objects.create(name="外校", code="OTHER-SCHOOL")
+        self.subject = Subject.objects.create(school=self.school, name="信息科技", code="IT")
+        self.class_group = ClassGroup.objects.create(school=self.school, name="高一1班", grade="高一")
+        self.other_class = ClassGroup.objects.create(school=self.other_school, name="高一2班", grade="高一")
+        self.teacher = User.objects.create_user(
+            username="resource_teacher",
+            password="Teacher123!",
+            role=User.Role.TEACHER,
+            school=self.school,
+            display_name="资源教师",
+        )
+        self.school_admin = User.objects.create_user(
+            username="resource_admin",
+            password="Admin123!",
+            role=User.Role.SCHOOL_ADMIN,
+            school=self.school,
+            display_name="学校管理员",
+        )
+        self.student = User.objects.create_user(
+            username="resource_student",
+            password="123456",
+            role=User.Role.STUDENT,
+            school=self.school,
+            display_name="本校学生",
+        )
+        self.other_student = User.objects.create_user(
+            username="other_student",
+            password="123456",
+            role=User.Role.STUDENT,
+            school=self.other_school,
+            display_name="外校学生",
+        )
+        StudentProfile.objects.create(user=self.student, class_group=self.class_group, is_first_use=False)
+        StudentProfile.objects.create(user=self.other_student, class_group=self.other_class, is_first_use=False)
+        TeachingAssignment.objects.create(school=self.school, class_group=self.class_group, teacher=self.teacher)
+        self.client = APIClient()
+
+    def test_class_resource_and_student_project_are_visible_to_target_student(self):
+        self.client.force_authenticate(self.teacher)
+        response = self.client.post(
+            "/api/v1/teacher/resources/",
+            {
+                "title": "教师个人备课资料",
+                "content": "仅教师本人使用。",
+                "resource_type": "article",
+                "visibility": "private",
+                "subject": str(self.subject.id),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["data"]["publish_status"], "published")
+
+        response = self.client.post(
+            "/api/v1/teacher/resources/",
+            {
+                "title": "数据采集课外阅读",
+                "content": "面向高一学生的课外拓展内容。",
+                "resource_type": "article",
+                "category": "extracurricular",
+                "visibility": "classes",
+                "subject": str(self.subject.id),
+                "class_ids": f"[{self.class_group.id}]",
+                "tags": '["数据采集", "拓展"]',
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["data"]["publish_status"], "published")
+
+        project_file = SimpleUploadedFile("project.txt", b"project result", content_type="text/plain")
+        process_file = SimpleUploadedFile("timeline.txt", b"optional process", content_type="text/plain")
+        response = self.client.post(
+            "/api/v1/teacher/resources/",
+            {
+                "title": "校园数据可视化项目",
+                "content": "学生小组完成的数据可视化项目。",
+                "resource_type": "student_project",
+                "visibility": "school",
+                "subject": str(self.subject.id),
+                "project_type": "group",
+                "project_members": '["张三", "李四"]',
+                "attachment": project_file,
+                "extra_files": process_file,
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201)
+        project = Resource.objects.get(pk=response.data["data"]["id"])
+        self.assertEqual(project.extra_files.count(), 1)
+        self.assertEqual(project.extra_files.first().role, "process")
+
+        self.client.force_authenticate(self.student)
+        response = self.client.get("/api/v1/student/resources/")
+        self.assertEqual(response.status_code, 200)
+        titles = {item["title"] for item in response.data["data"]["results"]}
+        self.assertIn("数据采集课外阅读", titles)
+        self.assertIn("校园数据可视化项目", titles)
+
+    def test_external_resource_requires_school_admin_approval(self):
+        self.client.force_authenticate(self.teacher)
+        response = self.client.post(
+            "/api/v1/teacher/resources/",
+            {
+                "title": "跨校共享案例",
+                "content": "可供成员校使用的案例。",
+                "resource_type": "article",
+                "category": "reference",
+                "visibility": "external",
+                "subject": str(self.subject.id),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 201)
+        resource_id = response.data["data"]["id"]
+        self.assertEqual(response.data["data"]["publish_status"], "pending")
+
+        self.client.force_authenticate(self.other_student)
+        response = self.client.get("/api/v1/student/resources/?scope=external")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["count"], 0)
+
+        self.client.force_authenticate(self.school_admin)
+        response = self.client.patch(
+            f"/api/v1/school-admin/resource-reviews/{resource_id}/",
+            {"action": "approve", "note": "内容完整"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["publish_status"], "approved")
+
+        self.client.force_authenticate(self.other_student)
+        response = self.client.get("/api/v1/student/resources/?scope=external")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["count"], 1)
+        response = self.client.post(f"/api/v1/student/resources/{resource_id}/", {}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            LearningEvent.objects.filter(
+                actor=self.other_student,
+                event_type=LearningEvent.EventType.RESOURCE_VIEW,
+                object_type="resource_center",
+                object_id=str(resource_id),
+            ).exists()
+        )

@@ -49,6 +49,8 @@ draft -> published -> open -> closed
 - `open`：学生可以开始或继续作答。
 - `closed`：停止进入，系统自动收交仍在答题中的答卷。
 
+已有学生答卷的 `closed` 测试不得原地重新开启。需要再次施测时复制试卷形成新的测试轮次，避免复用答卷、机会分母和评分版本。
+
 计划开始和结束时间用于限制开放窗口；教师仍需执行开启操作。作答截止时间取“学生开始时间 + 测试时长、计划结束时间、教师结束时间”三者中的最早值。
 
 ## 5. 试卷快照
@@ -67,15 +69,16 @@ draft -> published -> open -> closed
 
 ## 7. 行为数据
 
-测试交卷写入 `LearningEvent`：
+测试链路已经接入 V1/V2 事务双写：
 
-- `event_type=answer_submit`
-- `object_type=test_assessment`
-- `object_id=测试ID`
-- `score=当前总分`
-- `metadata` 保存答卷状态与试卷总分
+- 开启测试时，按目标班级和题目快照生成学生级 `LearningOpportunity`。
+- `TestAttempt.analytics_attempt_id` 为逐题提交和评分提供稳定 UUID。
+- 每题交卷写 `item.submitted@1.1`，答案正文仍保留在 `TestAttemptAnswer`，不复制到分析事件。
+- 旧页面没有可信的单题计时，因此 `response_time_ms` 明确缺失，不填 0、不使用整场测试时长代替。
+- 客观题写 `item.graded(final, automatic)`；主观题先写 `pending`，教师评分及复评追加 `final/revised`。
+- 教师结束测试时先自动提交在途答卷，再撤回未完成机会；已提交或已评分机会保持历史状态。
 
-后续特征聚合可增加正确率、作答时长、未答率、知识点掌握度、难度表现和教师评分等特征。
+在机会覆盖、评分成熟率和题目版本质量通过闸门前，不直接生成知识点掌握结论。
 
 ## 8. 前端页面
 

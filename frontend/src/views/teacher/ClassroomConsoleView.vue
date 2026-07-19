@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import type { EChartsCoreOption } from 'echarts/core'
 import { RouterLink, useRoute } from 'vue-router'
 import { ApiError } from '@/api/client'
@@ -61,11 +61,12 @@ import {
   type StudentWorkAttachmentRow
 } from '@/api/teacher'
 import NoticeLine from '@/components/NoticeLine.vue'
-import EChartPanel from '@/components/EChartPanel.vue'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
-import LearningPageStatsModal from '@/components/teacher/LearningPageStatsModal.vue'
 import ClassroomChatDock from '@/components/ClassroomChatDock.vue'
+
+const EChartPanel = defineAsyncComponent(() => import('@/components/EChartPanel.vue'))
+const LearningPageStatsModal = defineAsyncComponent(() => import('@/components/teacher/LearningPageStatsModal.vue'))
 
 const route = useRoute()
 const sessionId = computed(() => Number(route.params.sessionId || 0))
@@ -2301,17 +2302,17 @@ onUnmounted(() => {
             <label class="timer-stepper">
               <span>分钟</span>
               <div>
-                <button type="button" :disabled="saving" @click="adjustTimerPart('minutes', -1)">−</button>
+                <button type="button" aria-label="减少一分钟" :disabled="saving" @click="adjustTimerPart('minutes', -1)">−</button>
                 <input v-model.number="timerMinutes" type="number" min="0" max="120" step="1" @blur="normalizeTimerInputs" />
-                <button type="button" :disabled="saving" @click="adjustTimerPart('minutes', 1)">+</button>
+                <button type="button" aria-label="增加一分钟" :disabled="saving" @click="adjustTimerPart('minutes', 1)">+</button>
               </div>
             </label>
             <label class="timer-stepper">
               <span>秒钟</span>
               <div>
-                <button type="button" :disabled="saving" @click="adjustTimerPart('seconds', -1)">−</button>
+                <button type="button" aria-label="减少一秒" :disabled="saving" @click="adjustTimerPart('seconds', -1)">−</button>
                 <input v-model.number="timerSeconds" type="number" min="0" max="59" step="1" @blur="normalizeTimerInputs" />
-                <button type="button" :disabled="saving" @click="adjustTimerPart('seconds', 1)">+</button>
+                <button type="button" aria-label="增加一秒" :disabled="saving" @click="adjustTimerPart('seconds', 1)">+</button>
               </div>
             </label>
             <div class="timer-setup-preview">

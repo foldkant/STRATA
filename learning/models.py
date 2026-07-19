@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 
@@ -24,10 +26,20 @@ class LearningEvent(models.Model):
         QUESTION_ANSWER = "question_answer", "回答"
         TEACHER_INTERVENTION = "teacher_intervention", "教师干预"
 
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="learning_events")
-    class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT, null=True, blank=True)
-    course = models.ForeignKey("courses.Course", on_delete=models.SET_NULL, null=True, blank=True)
-    lesson = models.ForeignKey("courses.Lesson", on_delete=models.SET_NULL, null=True, blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="learning_events",
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup", on_delete=models.PROTECT, null=True, blank=True
+    )
+    course = models.ForeignKey(
+        "courses.Course", on_delete=models.SET_NULL, null=True, blank=True
+    )
+    lesson = models.ForeignKey(
+        "courses.Lesson", on_delete=models.SET_NULL, null=True, blank=True
+    )
     event_type = models.CharField(max_length=64, choices=EventType.choices)
     object_type = models.CharField(max_length=64, blank=True)
     object_id = models.CharField(max_length=64, blank=True)
@@ -50,7 +62,11 @@ class LearningEvent(models.Model):
 
 
 class StudentFeatureSnapshot(models.Model):
-    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="feature_snapshots")
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="feature_snapshots",
+    )
     class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT)
     window_start = models.DateTimeField()
     window_end = models.DateTimeField()
@@ -75,14 +91,22 @@ class StratificationDecision(models.Model):
         ACCEPTED = "accepted", "已采纳"
         REJECTED = "rejected", "已拒绝"
 
-    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="layer_decisions")
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="layer_decisions",
+    )
     class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT)
     previous_layer = models.CharField(max_length=1)
     suggested_layer = models.CharField(max_length=1)
     confidence = models.FloatField(default=0)
     reasons = models.JSONField(default=list, blank=True)
-    model_version = models.ForeignKey("aiops.ModelVersion", on_delete=models.SET_NULL, null=True, blank=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    model_version = models.ForeignKey(
+        "aiops.ModelVersion", on_delete=models.SET_NULL, null=True, blank=True
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
     reviewed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -109,13 +133,19 @@ class PretestPaper(models.Model):
         PUBLISHED = "published", "已发布"
         ARCHIVED = "archived", "归档"
 
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="pretest_papers")
-    subject = models.ForeignKey("courses.Subject", on_delete=models.PROTECT, related_name="pretest_papers")
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="pretest_papers"
+    )
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="pretest_papers"
+    )
     title = models.CharField(max_length=128)
     kind = models.CharField(max_length=16, choices=Kind.choices)
     version = models.PositiveIntegerField(default=1)
     introduction = models.TextField(blank=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -150,9 +180,13 @@ class PretestQuestion(models.Model):
         SCALE = "scale", "量表"
         TEXT = "text", "简答"
 
-    paper = models.ForeignKey(PretestPaper, on_delete=models.CASCADE, related_name="questions")
+    paper = models.ForeignKey(
+        PretestPaper, on_delete=models.CASCADE, related_name="questions"
+    )
     stem = models.TextField()
-    question_type = models.CharField(max_length=16, choices=QuestionType.choices, default=QuestionType.SINGLE)
+    question_type = models.CharField(
+        max_length=16, choices=QuestionType.choices, default=QuestionType.SINGLE
+    )
     options = models.JSONField(default=list, blank=True)
     answer = models.JSONField(default=list, blank=True)
     score = models.FloatField(default=0)
@@ -173,16 +207,26 @@ class PretestQuestion(models.Model):
 
 
 class PretestSubmission(models.Model):
-    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="pretest_submissions")
-    subject = models.ForeignKey("courses.Subject", on_delete=models.PROTECT, related_name="pretest_submissions")
-    paper = models.ForeignKey(PretestPaper, on_delete=models.PROTECT, related_name="submissions")
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="pretest_submissions",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="pretest_submissions"
+    )
+    paper = models.ForeignKey(
+        PretestPaper, on_delete=models.PROTECT, related_name="submissions"
+    )
     answers = models.JSONField(default=dict)
     score = models.FloatField(default=0)
     submitted_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["student", "paper"], name="uniq_pretest_submission_per_paper"),
+            models.UniqueConstraint(
+                fields=["student", "paper"], name="uniq_pretest_submission_per_paper"
+            ),
         ]
         indexes = [
             models.Index(fields=["subject", "submitted_at"]),
@@ -207,8 +251,12 @@ class QuestionBankItem(models.Model):
         ACTIVE = "active", "启用"
         DISABLED = "disabled", "停用"
 
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="question_bank_items")
-    subject = models.ForeignKey("courses.Subject", on_delete=models.PROTECT, related_name="question_bank_items")
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="question_bank_items"
+    )
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="question_bank_items"
+    )
     creator = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -220,10 +268,14 @@ class QuestionBankItem(models.Model):
     options = models.JSONField(default=list, blank=True)
     answer = models.JSONField(default=list, blank=True)
     analysis = models.TextField(blank=True)
-    difficulty = models.CharField(max_length=16, choices=Difficulty.choices, default=Difficulty.NORMAL)
+    difficulty = models.CharField(
+        max_length=16, choices=Difficulty.choices, default=Difficulty.NORMAL
+    )
     knowledge_point = models.CharField(max_length=128, blank=True)
     default_score = models.FloatField(default=2)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ACTIVE
+    )
     usage_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -247,20 +299,34 @@ class TestAssessment(models.Model):
         OPEN = "open", "进行中"
         CLOSED = "closed", "已结束"
 
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="test_assessments")
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="test_assessments"
+    )
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
         related_name="test_assessments",
         limit_choices_to={"role": "teacher"},
     )
-    subject = models.ForeignKey("courses.Subject", on_delete=models.PROTECT, related_name="test_assessments")
-    course = models.ForeignKey("courses.Course", on_delete=models.SET_NULL, null=True, blank=True, related_name="test_assessments")
-    target_classes = models.ManyToManyField("school.ClassGroup", related_name="test_assessments")
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="test_assessments"
+    )
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="test_assessments",
+    )
+    target_classes = models.ManyToManyField(
+        "school.ClassGroup", related_name="test_assessments"
+    )
     title = models.CharField(max_length=128)
     instruction = models.TextField(blank=True)
     duration_minutes = models.PositiveIntegerField(default=45)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
     start_at = models.DateTimeField(null=True, blank=True)
     end_at = models.DateTimeField(null=True, blank=True)
     opened_at = models.DateTimeField(null=True, blank=True)
@@ -284,7 +350,9 @@ class TestAssessment(models.Model):
 
 
 class TestAssessmentQuestion(models.Model):
-    assessment = models.ForeignKey(TestAssessment, on_delete=models.CASCADE, related_name="questions")
+    assessment = models.ForeignKey(
+        TestAssessment, on_delete=models.CASCADE, related_name="questions"
+    )
     source_question = models.ForeignKey(
         QuestionBankItem,
         on_delete=models.SET_NULL,
@@ -292,7 +360,9 @@ class TestAssessmentQuestion(models.Model):
         blank=True,
         related_name="assessment_questions",
     )
-    question_type = models.CharField(max_length=16, choices=QuestionBankItem.QuestionType.choices)
+    question_type = models.CharField(
+        max_length=16, choices=QuestionBankItem.QuestionType.choices
+    )
     stem = models.TextField()
     options = models.JSONField(default=list, blank=True)
     answer = models.JSONField(default=list, blank=True)
@@ -315,10 +385,21 @@ class TestAttempt(models.Model):
         SUBMITTED = "submitted", "已提交"
         GRADED = "graded", "已评分"
 
-    assessment = models.ForeignKey(TestAssessment, on_delete=models.PROTECT, related_name="attempts")
-    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="test_attempts")
-    class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT, related_name="test_attempts")
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.IN_PROGRESS)
+    assessment = models.ForeignKey(
+        TestAssessment, on_delete=models.PROTECT, related_name="attempts"
+    )
+    analytics_attempt_id = models.UUIDField(
+        default=uuid.uuid4, unique=True, editable=False
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="test_attempts"
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup", on_delete=models.PROTECT, related_name="test_attempts"
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.IN_PROGRESS
+    )
     objective_score = models.FloatField(default=0)
     subjective_score = models.FloatField(default=0)
     total_score = models.FloatField(default=0)
@@ -331,7 +412,9 @@ class TestAttempt(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["assessment", "student"], name="uniq_test_attempt_per_student"),
+            models.UniqueConstraint(
+                fields=["assessment", "student"], name="uniq_test_attempt_per_student"
+            ),
         ]
         indexes = [
             models.Index(fields=["assessment", "class_group", "status"]),
@@ -344,8 +427,12 @@ class TestAttempt(models.Model):
 
 
 class TestAttemptAnswer(models.Model):
-    attempt = models.ForeignKey(TestAttempt, on_delete=models.CASCADE, related_name="answer_rows")
-    question = models.ForeignKey(TestAssessmentQuestion, on_delete=models.PROTECT, related_name="attempt_answers")
+    attempt = models.ForeignKey(
+        TestAttempt, on_delete=models.CASCADE, related_name="answer_rows"
+    )
+    question = models.ForeignKey(
+        TestAssessmentQuestion, on_delete=models.PROTECT, related_name="attempt_answers"
+    )
     answer = models.JSONField(default=list, blank=True)
     auto_score = models.FloatField(default=0)
     manual_score = models.FloatField(null=True, blank=True)
@@ -355,7 +442,10 @@ class TestAttemptAnswer(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["attempt", "question"], name="uniq_test_answer_per_attempt_question"),
+            models.UniqueConstraint(
+                fields=["attempt", "question"],
+                name="uniq_test_answer_per_attempt_question",
+            ),
         ]
         indexes = [models.Index(fields=["attempt", "question"])]
         ordering = ["question__sort_order", "question_id"]
@@ -371,12 +461,22 @@ class Notice(models.Model):
         PUBLISHED = "published", "已发布"
         ARCHIVED = "archived", "归档"
 
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="notices")
-    teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="teacher_notices")
-    target_classes = models.ManyToManyField("school.ClassGroup", related_name="notices", blank=True)
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="notices"
+    )
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="teacher_notices",
+    )
+    target_classes = models.ManyToManyField(
+        "school.ClassGroup", related_name="notices", blank=True
+    )
     title = models.CharField(max_length=128)
     content = models.TextField()
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.DRAFT
+    )
     is_pinned = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
     archived_at = models.DateTimeField(null=True, blank=True)
@@ -407,14 +507,30 @@ class Feedback(models.Model):
         REPLIED = "replied", "已回复"
         CLOSED = "closed", "已关闭"
 
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="feedback_items")
-    class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT, related_name="feedback_items")
-    teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="received_feedback_items")
-    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="submitted_feedback_items")
-    category = models.CharField(max_length=16, choices=Category.choices, default=Category.STUDY)
+    school = models.ForeignKey(
+        "school.School", on_delete=models.CASCADE, related_name="feedback_items"
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup", on_delete=models.PROTECT, related_name="feedback_items"
+    )
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="received_feedback_items",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="submitted_feedback_items",
+    )
+    category = models.CharField(
+        max_length=16, choices=Category.choices, default=Category.STUDY
+    )
     title = models.CharField(max_length=128)
     content = models.TextField()
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
     reply_content = models.TextField(blank=True)
     replied_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
@@ -434,11 +550,32 @@ class Feedback(models.Model):
 
 
 class StudentWorkAttachment(models.Model):
-    school = models.ForeignKey("school.School", on_delete=models.CASCADE, related_name="student_work_attachments")
-    class_group = models.ForeignKey("school.ClassGroup", on_delete=models.PROTECT, related_name="student_work_attachments")
-    course = models.ForeignKey("courses.Course", on_delete=models.PROTECT, related_name="student_work_attachments")
-    lesson = models.ForeignKey("courses.Lesson", on_delete=models.PROTECT, related_name="student_work_attachments")
-    lesson_step = models.ForeignKey("courses.LessonStep", on_delete=models.PROTECT, related_name="student_work_attachments")
+    submission_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.CASCADE,
+        related_name="student_work_attachments",
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="student_work_attachments",
+    )
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.PROTECT,
+        related_name="student_work_attachments",
+    )
+    lesson = models.ForeignKey(
+        "courses.Lesson",
+        on_delete=models.PROTECT,
+        related_name="student_work_attachments",
+    )
+    lesson_step = models.ForeignKey(
+        "courses.LessonStep",
+        on_delete=models.PROTECT,
+        related_name="student_work_attachments",
+    )
     classroom_session = models.ForeignKey(
         "courses.ClassroomSession",
         on_delete=models.SET_NULL,
@@ -446,9 +583,21 @@ class StudentWorkAttachment(models.Model):
         blank=True,
         related_name="student_work_attachments",
     )
-    student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="student_work_attachments")
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="student_work_attachments",
+    )
     question_id = models.CharField(max_length=64)
     question_stem = models.TextField(blank=True)
+    upload_version = models.PositiveIntegerField(default=1)
+    supersedes = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="revisions",
+    )
     attachment = models.FileField(upload_to=student_work_upload_path)
     original_name = models.CharField(max_length=255)
     file_ext = models.CharField(max_length=16, blank=True)
@@ -468,7 +617,10 @@ class StudentWorkAttachment(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["student", "lesson_step", "question_id"], name="uniq_student_work_per_step_question"),
+            models.UniqueConstraint(
+                fields=["student", "lesson_step", "question_id", "upload_version"],
+                name="uniq_student_work_version",
+            ),
         ]
         indexes = [
             models.Index(fields=["class_group", "lesson_step", "question_id"]),
@@ -478,6 +630,126 @@ class StudentWorkAttachment(models.Model):
         ordering = ["-updated_at"]
 
     def __str__(self) -> str:
-        return f"{self.student_id}:{self.lesson_step_id}:{self.question_id}"
+        return f"{self.student_id}:{self.lesson_step_id}:{self.question_id}@{self.upload_version}"
+
+
+class LessonStepAttempt(models.Model):
+    attempt_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="lesson_step_attempts",
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="lesson_step_attempts",
+    )
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.PROTECT,
+        related_name="lesson_step_attempts",
+    )
+    lesson = models.ForeignKey(
+        "courses.Lesson",
+        on_delete=models.PROTECT,
+        related_name="lesson_step_attempts",
+    )
+    lesson_step = models.ForeignKey(
+        "courses.LessonStep",
+        on_delete=models.PROTECT,
+        related_name="attempts",
+    )
+    classroom_session = models.ForeignKey(
+        "courses.ClassroomSession",
+        on_delete=models.PROTECT,
+        related_name="lesson_step_attempts",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="lesson_step_attempts",
+    )
+    attempt_no = models.PositiveIntegerField()
+    answer = models.JSONField(default=dict, blank=True)
+    free_text = models.TextField(blank=True)
+    answered_count = models.PositiveIntegerField(default=0)
+    question_count = models.PositiveIntegerField(default=0)
+    auto_score = models.FloatField(default=0)
+    auto_score_max = models.FloatField(default=0)
+    submitted_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "classroom_session",
+                    "lesson_step",
+                    "student",
+                    "attempt_no",
+                ],
+                name="uniq_lesson_step_attempt_version",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["classroom_session", "lesson_step", "student", "submitted_at"]
+            ),
+            models.Index(fields=["student", "submitted_at"]),
+        ]
+        ordering = ["-submitted_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.student_id}:{self.lesson_step_id}#{self.attempt_no}"
+
+
+class LessonStepAttemptAnswer(models.Model):
+    class QuestionType(models.TextChoices):
+        SINGLE = "single", "单选"
+        MULTIPLE = "multiple", "多选"
+        JUDGE = "judge", "判断"
+        BLANK = "blank", "填空"
+        TEXT = "text", "简答"
+        FILE = "file", "附件提交"
+
+    attempt = models.ForeignKey(
+        LessonStepAttempt,
+        on_delete=models.PROTECT,
+        related_name="answer_rows",
+    )
+    question_id = models.CharField(max_length=64)
+    question_version = models.CharField(max_length=64)
+    question_type = models.CharField(max_length=16, choices=QuestionType.choices)
+    response = models.JSONField(default=dict, blank=True)
+    is_answered = models.BooleanField(default=False)
+    auto_score = models.FloatField(null=True, blank=True)
+    score_max = models.FloatField()
+    is_correct = models.BooleanField(null=True, blank=True)
+    attachment = models.ForeignKey(
+        StudentWorkAttachment,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="attempt_answers",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["attempt", "question_id"],
+                name="uniq_lesson_step_attempt_question",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["attempt", "question_id"]),
+            models.Index(fields=["question_version"]),
+        ]
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"{self.attempt_id}:{self.question_id}"
+
 
 # Create your models here.

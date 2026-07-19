@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   submit: [payload: { formId: string; answers: Record<string, unknown> }]
+  blockViewed: [payload: { blockId: string; blockType: LearningPageBlock['type']; visibleMs: number; visibilityRatio: number }]
 }>()
 
 const frame = ref<HTMLIFrameElement | null>(null)
@@ -144,36 +145,45 @@ ${String(block.html || '')}
   return `<section class="page-block interactive-block"><header><div>${block.title ? `<h2>${escapeHtml(block.title)}</h2>` : ''}${description}</div><button type="button" data-interactive-reload>重新运行</button></header><iframe class="interactive-frame" title="${escapeHtml(block.title || '交互动画')}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" style="height:${height}px" src="${escapeHtml(source)}"></iframe></section>`
 }
 
+function trackedBlockHtml(html: string, block: LearningPageBlock, index: number) {
+  const blockId = escapeHtml(block.id || `block_${index + 1}`)
+  const blockType = escapeHtml(block.type)
+  return html.replace(
+    '<section ',
+    `<section data-learning-block-id="${blockId}" data-learning-block-type="${blockType}" `
+  )
+}
+
 function blockHtml(block: LearningPageBlock, index: number) {
   const title = block.title ? `<h2>${escapeHtml(block.title)}</h2>` : ''
   if (block.type === 'content') {
-    return `<section class="page-block content-block">${title}<p>${textHtml(block.body)}</p></section>`
+    return trackedBlockHtml(`<section class="page-block content-block">${title}<p>${textHtml(block.body)}</p></section>`, block, index)
   }
   if (block.type === 'callout') {
-    return `<section class="page-block callout-block tone-${escapeHtml(block.tone || 'info')}">${title}<p>${textHtml(block.body)}</p></section>`
+    return trackedBlockHtml(`<section class="page-block callout-block tone-${escapeHtml(block.tone || 'info')}">${title}<p>${textHtml(block.body)}</p></section>`, block, index)
   }
   if (block.type === 'list') {
     const items = (block.items || []).filter((item): item is string => typeof item === 'string').map((item) => `<li>${textHtml(item)}</li>`).join('')
-    return `<section class="page-block list-block">${title}<ul>${items}</ul></section>`
+    return trackedBlockHtml(`<section class="page-block list-block">${title}<ul>${items}</ul></section>`, block, index)
   }
   if (block.type === 'steps' || block.type === 'cards') {
     const items = (block.items || []).filter((item): item is { title: string; body: string } => typeof item === 'object').map((item, itemIndex) => `
       <article><em>${block.type === 'steps' ? itemIndex + 1 : ''}</em><div><h3>${escapeHtml(item.title)}</h3><p>${textHtml(item.body)}</p></div></article>`).join('')
-    return `<section class="page-block ${block.type}-block">${title}<div class="${block.type}-grid">${items}</div></section>`
+    return trackedBlockHtml(`<section class="page-block ${block.type}-block">${title}<div class="${block.type}-grid">${items}</div></section>`, block, index)
   }
   if (block.type === 'table') {
     const headers = (block.headers || []).map((item) => `<th>${escapeHtml(item)}</th>`).join('')
     const rows = (block.rows || []).map((row) => `<tr>${row.map((item) => `<td>${textHtml(item)}</td>`).join('')}</tr>`).join('')
-    return `<section class="page-block table-block">${title}<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></section>`
+    return trackedBlockHtml(`<section class="page-block table-block">${title}<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table></div></section>`, block, index)
   }
   if (block.type === 'code') {
-    return `<section class="page-block code-block">${title}<span>${escapeHtml(block.language || 'text')}</span><pre><code>${escapeHtml(block.code || '')}</code></pre></section>`
+    return trackedBlockHtml(`<section class="page-block code-block">${title}<span>${escapeHtml(block.language || 'text')}</span><pre><code>${escapeHtml(block.code || '')}</code></pre></section>`, block, index)
   }
   if (block.type === 'visualization') {
-    return visualizationHtml(block)
+    return trackedBlockHtml(visualizationHtml(block), block, index)
   }
   if (block.type === 'interactive') {
-    return interactiveHtml(block)
+    return trackedBlockHtml(interactiveHtml(block), block, index)
   }
   if (block.type === 'form') {
     const formId = escapeHtml(block.form_id || `form_${index + 1}`)
@@ -182,7 +192,7 @@ function blockHtml(block: LearningPageBlock, index: number) {
     const submit = props.interactive
       ? `<button type="button" data-learning-submit="${formId}">${escapeHtml(block.submit_label || '提交')}</button>`
       : '<button type="button" disabled>教师预览</button>'
-    return `<section class="page-block form-block">${title}${description}<form data-learning-form="${formId}" novalidate>${fields}<footer>${submit}<span data-form-status="${formId}"></span></footer></form></section>`
+    return trackedBlockHtml(`<section class="page-block form-block">${title}${description}<form data-learning-form="${formId}" novalidate>${fields}<footer>${submit}<span data-form-status="${formId}"></span></footer></form></section>`, block, index)
   }
   return ''
 }
@@ -218,6 +228,37 @@ const srcdoc = computed(() => {
       window.__strataLearningPageBridgeReady = true;
       const source = 'strata-learning-page';
       const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const activeBlocks = new Map();
+      const reportBlock = block => {
+        const state = activeBlocks.get(block);
+        if (!state) return;
+        activeBlocks.delete(block);
+        const visibleMs = Math.min(Math.max(Math.round(performance.now() - state.startedAt), 0), 3600000);
+        if (visibleMs < 250) return;
+        parent.postMessage({
+          source,
+          type: 'block-viewed',
+          pageId: ${Number(props.page.id)},
+          blockId: block.dataset.learningBlockId,
+          blockType: block.dataset.learningBlockType,
+          visibleMs,
+          visibilityRatio: state.maxRatio
+        }, '*');
+      };
+      const blockObserver = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          const block = entry.target;
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            const state = activeBlocks.get(block);
+            if (state) state.maxRatio = Math.max(state.maxRatio, entry.intersectionRatio);
+            else activeBlocks.set(block, { startedAt: performance.now(), maxRatio: entry.intersectionRatio });
+          } else {
+            reportBlock(block);
+          }
+        });
+      }, { threshold: [0, 0.5, 0.75, 1] });
+      document.querySelectorAll('[data-learning-block-id]').forEach(block => blockObserver.observe(block));
+      addEventListener('pagehide', () => activeBlocks.forEach((_, block) => reportBlock(block)));
       document.querySelectorAll('[data-visualization]').forEach(visualization => {
         let loopTimer = 0;
         const duration = Math.min(Math.max(Number(visualization.dataset.duration || 5000), 1500), 15000);
@@ -302,8 +343,19 @@ const srcdoc = computed(() => {
 function onMessage(event: MessageEvent) {
   if (!frame.value || event.source !== frame.value.contentWindow) return
   const data = event.data as Record<string, unknown>
-  if (data?.source !== 'strata-learning-page' || data.type !== 'submit') return
-  if (Number(data.pageId) !== props.page.id || typeof data.formId !== 'string' || !data.answers || typeof data.answers !== 'object') return
+  if (data?.source !== 'strata-learning-page' || Number(data.pageId) !== props.page.id) return
+  if (data.type === 'block-viewed') {
+    const block = props.page.schema.blocks.find((item) => item.id === data.blockId && item.type === data.blockType)
+    if (!block || typeof data.visibleMs !== 'number' || typeof data.visibilityRatio !== 'number') return
+    emit('blockViewed', {
+      blockId: block.id,
+      blockType: block.type,
+      visibleMs: Math.min(Math.max(Math.round(data.visibleMs), 250), 3_600_000),
+      visibilityRatio: Math.min(Math.max(data.visibilityRatio, 0), 1)
+    })
+    return
+  }
+  if (data.type !== 'submit' || typeof data.formId !== 'string' || !data.answers || typeof data.answers !== 'object') return
   emit('submit', { formId: data.formId, answers: data.answers as Record<string, unknown> })
 }
 

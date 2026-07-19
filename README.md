@@ -11,13 +11,13 @@ STRATA 是面向中学课堂的过程性评价与分层教学平台。系统采�
 已实现的主要模块：
 
 - 超级管理员：数据总览、学校管理、学校管理员管理。
-- 学校管理员：教师管理、学生管理、班级管理、任课关系、学科前测。
-- 教师：工作台、任教学生、课程与课时设计、课堂教学、课堂活动、公告、反馈、资源、AI 接入、共享题库和测试管理。
-- 学生：首页、课程学习、实时课堂、课堂作答、测试、公告、反馈和个人学习档案。
+- 学校管理员：教师管理、学生管理、班级管理、任课关系、学科前测和跨校资源审核。
+- 教师：工作台、任教学生、课程与课时设计、课堂教学、公告、反馈、教学资源中心、AI 接入、共享题库和测试管理。
+- 学生：首页、课程学习、教学资源中心、实时课堂、课堂作答、测试、公告、反馈和个人学习档案。
 - 课堂能力：签到、随机点名、抢答、倒计时、课堂广播、小组合作、星级评价、附件提交与批阅、AI 学习网页、实名文字聊天。
 - 课堂聊天：全班、师生私聊、小组三类范围，本地不良言论判断，教师放行、警告、撤回和确认扣分。
 - 文档能力：ONLYOFFICE 在线预览与协作，未安装时保留本地预览和下载降级路线。
-- 数据能力：统一 `LearningEvent` 行为事件、学习档案、过程评价数据和 AI 特征基础表。
+- 数据能力：现有 `LearningEvent` 行为流水，以及 12 个严格事件模式、不可变 `LearningEventV2`、批量幂等接收、学生级 `LearningOpportunity`、评分成熟版本和课堂积分流水；课堂积分/聊天与测试链路已开始事务双写，其他入口、特征与模型仍按路线图逐步接入。
 
 跨学校数据采集、统一分析、夜间班级模型训练和正式模型发布流程仍在后续开发范围内。
 
@@ -59,6 +59,7 @@ accounts/           用户与四类角色
 school/             学校、班级、学生档案、任课关系
 courses/            学科、课程、课时、课堂、小组、评价、AI 学习网页
 learning/           行为事件、前测、测试、作品、公告、反馈
+learning_analytics/ 研究级事件、质量、隐性分层治理与后续特征服务
 realtime/           课堂聊天模型、过滤规则、WebSocket 消费者
 aiops/              教师 AI 配置、模型版本和训练任务底座
 api/                DRF 接口、业务服务、序列化和测试
@@ -89,6 +90,7 @@ storage/            本地数据库、媒体、模型和运行数据，不提交
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py migrate
+.\.venv\Scripts\python.exe manage.py sync_learning_event_schemas
 ```
 
 本机开发默认使用 `storage/dev.sqlite3`。正式学校部署应切换 PostgreSQL：
@@ -166,6 +168,9 @@ CHANNEL_LAYER_BACKEND=memory
 ```env
 DJANGO_DEBUG=false
 DJANGO_SECRET_KEY=<随机长密钥>
+LEARNING_EVENT_QUARANTINE_KEY=<Fernet 密钥>
+LEARNING_EVENT_QUARANTINE_RETENTION_DAYS=7
+LEARNING_EVENT_WRITE_MODE=dual_required
 DATABASE_ENGINE=postgresql
 DATABASE_NAME=xlzxedu
 DATABASE_HOST=127.0.0.1
@@ -193,6 +198,12 @@ Celery beat：
 ```
 
 Celery 用于夜间特征聚合、班级模型训练、数据导出和后续学校数据同步任务。
+
+升级或夜间质量检查可执行 V1/V2 事件对账：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py reconcile_learning_event_writes --check
+```
 
 ## ONLYOFFICE
 
@@ -249,6 +260,10 @@ git diff --check
 - [课时与课堂重构](docs/teacher_lesson_classroom_redesign.md)
 - [测试与共享题库](docs/assessment_module_design.md)
 - [课堂实名聊天](docs/classroom_chat_design.md)
+- [教学资源中心](docs/resource_center_design.md)
+- [AI 隐性动态分层设计报告](docs/student_behavior_ai_stratification_design.md)
+- [AI 隐性动态分层开发路线图](docs/student_behavior_ai_stratification_development_roadmap.md)
+- [学生评价、积分与奖章设计](docs/student_evaluation_incentive_design.md)
 
 ## 安全原则
 

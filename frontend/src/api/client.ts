@@ -98,12 +98,13 @@ export async function apiRequest<T>(url: string, options: RequestInit = {}): Pro
   return (payload as ApiEnvelope<T>).data
 }
 
-export async function uploadRequest<T>(url: string, formData: FormData): Promise<T> {
+export async function uploadRequest<T>(url: string, formData: FormData, method = 'POST'): Promise<T> {
   const headers = new Headers()
-  await applyCsrfHeader(headers, 'POST')
+  const normalizedMethod = method.toUpperCase()
+  await applyCsrfHeader(headers, normalizedMethod)
 
   let response = await fetch(url, {
-    method: 'POST',
+    method: normalizedMethod,
     headers,
     credentials: 'include',
     body: formData
@@ -114,7 +115,7 @@ export async function uploadRequest<T>(url: string, formData: FormData): Promise
     if (csrf) {
       headers.set('X-CSRFToken', csrf)
       response = await fetch(url, {
-        method: 'POST',
+        method: normalizedMethod,
         headers,
         credentials: 'include',
         body: formData

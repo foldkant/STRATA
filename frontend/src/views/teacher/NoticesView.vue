@@ -14,8 +14,10 @@ import {
 } from '@/api/teacher'
 import type { ClassGroupRow, PageResult } from '@/api/management'
 import AppShell from '@/layouts/AppShell.vue'
+import ClassChipList from '@/components/ClassChipList.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import ManagementPage from '@/components/ManagementPage.vue'
+import MultiSelectActions from '@/components/MultiSelectActions.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import { teacherNav } from './nav'
 
@@ -258,11 +260,7 @@ onMounted(async () => {
         <tr v-for="item in tableRows" :key="item.id">
           <td>{{ item.title }}</td>
           <td>
-            <div class="class-chip-list notice-class-list">
-              <span v-for="classGroup in item.target_classes" :key="classGroup.id" class="class-chip">
-                {{ classGroup.grade ? `${classGroup.grade} ` : '' }}{{ classGroup.name }}
-              </span>
-            </div>
+            <ClassChipList class="notice-class-list" :classes="item.target_classes" empty-label="未选择班级" />
           </td>
           <td><span class="status-pill" :class="`status-${item.status}`">{{ item.status_label }}</span></td>
           <td>{{ item.is_pinned ? '是' : '否' }}</td>
@@ -316,7 +314,12 @@ onMounted(async () => {
             <div class="span-2 question-config-panel">
               <div class="class-check-header">
                 <span>接收班级 <b>*</b></span>
-                <small>已选 {{ form.target_classes.length }} 个</small>
+                <MultiSelectActions
+                  :selected-count="form.target_classes.length"
+                  :total-count="classes.length"
+                  @select-all="form.target_classes = classes.map((item) => item.id)"
+                  @clear="form.target_classes = []"
+                />
               </div>
               <div class="class-checkbox-grid">
                 <label v-for="item in classes" :key="item.id" class="class-check-item">

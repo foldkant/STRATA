@@ -1,0 +1,1893 @@
+TY  - JOUR
+AU  - Polit, Denise F.
+AU  - Beck, Cheryl Tatano
+TI  - The content validity index: Are you sure you know what's being reported? critique and recommendations
+JO  - Research in Nursing &amp; Health
+T2  - Research in Nursing &amp; Health
+JA  - Res. Nurs. Health
+PY  - 2006
+VL  - 29
+IS  - 5
+SP  - 489
+EP  - 497
+DO  - 10.1002/nur.20147
+UR  - https://doi.org/10.1002/nur.20147
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Romero, Cristobal
+AU  - Ventura, Sebastian
+TI  - Educational data mining and learning analytics: An updated survey
+JO  - WIREs Data Mining and Knowledge Discovery
+T2  - WIREs Data Mining and Knowledge Discovery
+JA  - WIREs Data Min &amp; Knowl
+PY  - 2020
+VL  - 10
+IS  - 3
+DO  - 10.1002/widm.1355
+UR  - https://doi.org/10.1002/widm.1355
+N2  - AbstractThis survey is an updated and improved version of the previous one published in 2013 in this journal with the title “data mining in education”. It reviews in a comprehensible and very general way how Educational Data Mining and Learning Analytics have been applied over educational data. In the last decade, this research area has evolved enormously and a wide range of related terms are now used in the bibliography such as Academic Analytics, Institutional Analytics, Teaching Analytics, Da
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Corbett, Albert T.
+AU  - Anderson, John R.
+TI  - Knowledge tracing: Modeling the acquisition of procedural knowledge
+JO  - User Modelling and User-Adapted Interaction
+T2  - User Modelling and User-Adapted Interaction
+JA  - User Model User-Adap Inter
+PY  - 1995
+VL  - 4
+IS  - 4
+SP  - 253
+EP  - 278
+DO  - 10.1007/bf01099821
+UR  - https://doi.org/10.1007/bf01099821
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Mosqueira-Rey, Eduardo
+AU  - Hernández-Pereira, Elena
+AU  - Alonso-Ríos, David
+AU  - Bobes-Bascarán, José
+AU  - Fernández-Leal, Ángel
+TI  - Human-in-the-loop machine learning: a state of the art
+JO  - Artificial Intelligence Review
+T2  - Artificial Intelligence Review
+JA  - Artif Intell Rev
+PY  - 2022
+VL  - 56
+IS  - 4
+SP  - 3005
+EP  - 3054
+DO  - 10.1007/s10462-022-10246-w
+UR  - https://doi.org/10.1007/s10462-022-10246-w
+N2  - AbstractResearchers are defining new types of interactions between humans and machine learning algorithms generically called human-in-the-loop machine learning. Depending on who is in control of the learning process, we can identify: active learning, in which the system remains in control; interactive machine learning, in which there is a closer interaction between users and learning systems; and machine teaching, where human domain experts have control over the learning process. Aside from cont
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Heikkinen, Sami
+AU  - Saqr, Mohammed
+AU  - Malmberg, Jonna
+AU  - Tedre, Matti
+TI  - Supporting self-regulated learning with learning analytics interventions – a systematic literature review
+JO  - Education and Information Technologies
+T2  - Education and Information Technologies
+JA  - Educ Inf Technol
+PY  - 2022
+VL  - 28
+IS  - 3
+SP  - 3059
+EP  - 3088
+DO  - 10.1007/s10639-022-11281-4
+UR  - https://doi.org/10.1007/s10639-022-11281-4
+N2  - AbstractDuring the past years scholars have shown an increasing interest in supporting students' self-regulated learning (SRL). Learning analytics (LA) can be applied in various ways to identify a learner’s current state of self-regulation and support SRL processes. It is important to examine how LA has been used to identify the need for support in different phases of SRL cycle, which channels are used to mediate the intervention and how efficient and impactful the intervention is. This will hel
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Nguyen, Andy
+AU  - Ngo, Ha Ngan
+AU  - Hong, Yvonne
+AU  - Dang, Belle
+AU  - Nguyen, Bich-Phuong Thi
+TI  - Ethical principles for artificial intelligence in education
+JO  - Education and Information Technologies
+T2  - Education and Information Technologies
+JA  - Educ Inf Technol
+PY  - 2022
+VL  - 28
+IS  - 4
+SP  - 4221
+EP  - 4241
+DO  - 10.1007/s10639-022-11316-w
+UR  - https://doi.org/10.1007/s10639-022-11316-w
+N2  - AbstractThe advancement of artificial intelligence in education (AIED) has the potential to transform the educational landscape and influence the role of all involved stakeholders. In recent years, the applications of AIED have been gradually adopted to progress our understanding of students’ learning and enhance learning performance and experience. However, the adoption of AIED has led to increasing ethical risks and concerns regarding several aspects such as personal data and learner autonomy.
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Sghir, Nabila
+AU  - Adadi, Amina
+AU  - Lahmer, Mohammed
+TI  - Recent advances in Predictive Learning Analytics: A decade systematic review (2012–2022)
+JO  - Education and Information Technologies
+T2  - Education and Information Technologies
+JA  - Educ Inf Technol
+PY  - 2022
+VL  - 28
+IS  - 7
+SP  - 8299
+EP  - 8333
+DO  - 10.1007/s10639-022-11536-0
+UR  - https://doi.org/10.1007/s10639-022-11536-0
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Paulsen, Lucas
+AU  - Lindsay, Euan
+TI  - Learning analytics dashboards are increasingly becoming about learning and not just analytics - A systematic review
+JO  - Education and Information Technologies
+T2  - Education and Information Technologies
+JA  - Educ Inf Technol
+PY  - 2024
+VL  - 29
+IS  - 11
+SP  - 14279
+EP  - 14308
+DO  - 10.1007/s10639-023-12401-4
+UR  - https://doi.org/10.1007/s10639-023-12401-4
+N2  - AbstractThis systematic review explores the emerging themes in the design and implementation of student-facing learning analytics dashboards in higher education. Learning Analytics has long been criticised for focusing too much on the analytics, and not enough on the learning. The review is then guided by an interest in whether these dashboards are still primarily analytics-driven or if they have become pedagogically informed over time. By mapping the identified themes of technological maturity,
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Kim, Nam Ju
+AU  - Belland, Brian R.
+AU  - Walker, Andrew E.
+TI  - Effectiveness of Computer-Based Scaffolding in the Context of Problem-Based Learning for Stem Education: Bayesian Meta-analysis
+JO  - Educational Psychology Review
+T2  - Educational Psychology Review
+JA  - Educ Psychol Rev
+PY  - 2017
+VL  - 30
+IS  - 2
+SP  - 397
+EP  - 429
+DO  - 10.1007/s10648-017-9419-1
+UR  - https://doi.org/10.1007/s10648-017-9419-1
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Double, Kit S.
+AU  - McGrane, Joshua A.
+AU  - Hopfenbeck, Therese N.
+TI  - The Impact of Peer Assessment on Academic Performance: A Meta-analysis of Control Group Studies
+JO  - Educational Psychology Review
+T2  - Educational Psychology Review
+JA  - Educ Psychol Rev
+PY  - 2019
+VL  - 32
+IS  - 2
+SP  - 481
+EP  - 509
+DO  - 10.1007/s10648-019-09510-3
+UR  - https://doi.org/10.1007/s10648-019-09510-3
+N2  - AbstractPeer assessment has been the subject of considerable research interest over the last three decades, with numerous educational researchers advocating for the integration of peer assessment into schools and instructional practice. Research synthesis in this area has, however, largely relied on narrative reviews to evaluate the efficacy of peer assessment. Here, we present a meta-analysis (54 studies, k = 141) of experimental and quasi-experimental studies that evaluated the effect of peer 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Panadero, Ernesto
+AU  - Jonsson, Anders
+AU  - Pinedo, Leire
+AU  - Fernández-Castilla, Belén
+TI  - Effects of Rubrics on Academic Performance, Self-Regulated Learning, and self-Efficacy: a Meta-analytic Review
+JO  - Educational Psychology Review
+T2  - Educational Psychology Review
+JA  - Educ Psychol Rev
+PY  - 2023
+VL  - 35
+IS  - 4
+DO  - 10.1007/s10648-023-09823-4
+UR  - https://doi.org/10.1007/s10648-023-09823-4
+N2  - AbstractRubrics are widely used as instructional and learning instrument. Though they have been claimed to have positive effects on students’ learning, these effects have not been meta-analyzed. Our aim was to synthesize the effects of rubrics on academic performance, self-regulated learning, and self-efficacy. The moderator effect of the following variables was also investigated: year of publication, gender, mean age, educational level, type of educational level (compulsory vs. higher education
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - de Mooij, Susanne
+AU  - Lämsä, Joni
+AU  - Lim, Lyn
+AU  - Aksela, Olli
+AU  - Athavale, Shruti
+AU  - Bistolfi, Inti
+AU  - Jin, Flora
+AU  - Li, Tongguang
+AU  - Azevedo, Roger
+AU  - Bannert, Maria
+AU  - Gašević, Dragan
+AU  - Järvelä, Sanna
+AU  - Molenaar, Inge
+TI  - A Systematic Review of Self-Regulated Learning through Integration of Multimodal Data and Artificial Intelligence
+JO  - Educational Psychology Review
+T2  - Educational Psychology Review
+JA  - Educ Psychol Rev
+PY  - 2025
+VL  - 37
+IS  - 2
+DO  - 10.1007/s10648-025-10028-0
+UR  - https://doi.org/10.1007/s10648-025-10028-0
+N2  - Abstract While behavioral, contextual, and physiological data streams have long been used to investigate self-regulated learning (SRL), a systematic understanding of the current state how different data streams and modalities contribute to measuring regulation processes across diverse learning contexts remains limited. This systematic literature review provides a foundational step toward this understanding by addressing two objectives: (1) identifying which data streams and modalities researcher
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Fan, Yizhou
+AU  - van der Graaf, Joep
+AU  - Lim, Lyn
+AU  - Raković, Mladen
+AU  - Singh, Shaveen
+AU  - Kilgour, Jonathan
+AU  - Moore, Johanna
+AU  - Molenaar, Inge
+AU  - Bannert, Maria
+AU  - Gašević, Dragan
+TI  - Towards investigating the validity of measurement of self-regulated learning based on trace data
+JO  - Metacognition and Learning
+T2  - Metacognition and Learning
+JA  - Metacognition Learning
+PY  - 2022
+VL  - 17
+IS  - 3
+SP  - 949
+EP  - 987
+DO  - 10.1007/s11409-022-09291-1
+UR  - https://doi.org/10.1007/s11409-022-09291-1
+N2  - AbstractContemporary research that looks at self-regulated learning (SRL) as processes of learning events derived from trace data has attracted increasing interest over the past decade. However, limited research has been conducted that looks into the validity of trace-based measurement protocols. In order to fill this gap in the literature, we propose a novel validation approach that combines theory-driven and data-driven perspectives to increase the validity of interpretations of SRL processes 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Fan, Yizhou
+AU  - Lim, Lyn
+AU  - van der Graaf, Joep
+AU  - Kilgour, Jonathan
+AU  - Raković, Mladen
+AU  - Moore, Johanna
+AU  - Molenaar, Inge
+AU  - Bannert, Maria
+AU  - Gašević, Dragan
+TI  - Improving the measurement of self-regulated learning using multi-channel data
+JO  - Metacognition and Learning
+T2  - Metacognition and Learning
+JA  - Metacognition Learning
+PY  - 2022
+VL  - 17
+IS  - 3
+SP  - 1025
+EP  - 1055
+DO  - 10.1007/s11409-022-09304-z
+UR  - https://doi.org/10.1007/s11409-022-09304-z
+N2  - AbstractIn recent years, unobtrusive measures of self-regulated learning (SRL) processes based on log data recorded by digital learning environments have attracted increasing attention. However, researchers have also recognised that simple navigational log data or time spent on pages are often not fine-grained enough to study complex SRL processes. Recent advances in data-capturing technologies enabled researchers to go beyond simple navigational logs to measure SRL processes with multi-channel 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Ifenthaler, Dirk
+AU  - Yau, Jane Yin-Kim
+TI  - Utilising learning analytics to support study success in higher education: a systematic review
+JO  - Educational Technology Research and Development
+T2  - Educational Technology Research and Development
+JA  - Education Tech Research Dev
+PY  - 2020
+VL  - 68
+IS  - 4
+SP  - 1961
+EP  - 1990
+DO  - 10.1007/s11423-020-09788-z
+UR  - https://doi.org/10.1007/s11423-020-09788-z
+N2  - AbstractStudy success includes the successful completion of a first degree in higher education to the largest extent, and the successful completion of individual learning tasks to the smallest extent. Factors affecting study success range from individual dispositions (e.g., motivation, prior academic performance) to characteristics of the educational environment (e.g., attendance, active learning, social embeddedness). Recent developments in learning analytics, which are a socio-technical data m
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Cerezo, Rebeca
+AU  - Bogarín, Alejandro
+AU  - Esteban, María
+AU  - Romero, Cristóbal
+TI  - Process mining for self-regulated learning assessment in e-learning
+JO  - Journal of Computing in Higher Education
+T2  - Journal of Computing in Higher Education
+JA  - J Comput High Educ
+PY  - 2019
+VL  - 32
+IS  - 1
+SP  - 74
+EP  - 88
+DO  - 10.1007/s12528-019-09225-y
+UR  - https://doi.org/10.1007/s12528-019-09225-y
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Holmes, Wayne
+AU  - Porayska-Pomsta, Kaska
+AU  - Holstein, Ken
+AU  - Sutherland, Emma
+AU  - Baker, Toby
+AU  - Shum, Simon Buckingham
+AU  - Santos, Olga C.
+AU  - Rodrigo, Mercedes T.
+AU  - Cukurova, Mutlu
+AU  - Bittencourt, Ig Ibert
+AU  - Koedinger, Kenneth R.
+TI  - Ethics of AI in Education: Towards a Community-Wide Framework
+JO  - International Journal of Artificial Intelligence in Education
+T2  - International Journal of Artificial Intelligence in Education
+JA  - International Journal of Artificial Intelligence in Education
+PY  - 2022
+VL  - 32
+IS  - 3
+SP  - 504
+EP  - 526
+DO  - 10.1007/s40593-021-00239-1
+UR  - https://doi.org/10.1007/s40593-021-00239-1
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Akgun, Selin
+AU  - Greenhow, Christine
+TI  - Artificial intelligence in education: Addressing ethical challenges in K-12 settings
+JO  - AI and Ethics
+T2  - AI and Ethics
+JA  - AI Ethics
+PY  - 2021
+VL  - 2
+IS  - 3
+SP  - 431
+EP  - 440
+DO  - 10.1007/s43681-021-00096-7
+UR  - https://doi.org/10.1007/s43681-021-00096-7
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Simbeck, Katharina
+TI  - They shall be fair, transparent, and robust: auditing learning analytics systems
+JO  - AI and Ethics
+T2  - AI and Ethics
+JA  - AI Ethics
+PY  - 2023
+VL  - 4
+IS  - 2
+SP  - 555
+EP  - 571
+DO  - 10.1007/s43681-023-00292-7
+UR  - https://doi.org/10.1007/s43681-023-00292-7
+N2  - AbstractIn the near future, systems, that use Artificial Intelligence (AI) methods, such as machine learning, are required to be certified or audited for fairness if used in ethically sensitive fields such as education. One example of those upcoming regulatory initiatives is the European Artificial Intelligence Act. Interconnected with fairness are the notions of system transparency (i.e. how understandable is the system) and system robustness (i.e. will similar inputs lead to similar results). 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Cavalcanti, Anderson Pinheiro
+AU  - Barbosa, Arthur
+AU  - Carvalho, Ruan
+AU  - Freitas, Fred
+AU  - Tsai, Yi-Shan
+AU  - Gašević, Dragan
+AU  - Mello, Rafael Ferreira
+TI  - Automatic feedback in online learning environments: A systematic literature review
+JO  - Computers and Education: Artificial Intelligence
+T2  - Computers and Education: Artificial Intelligence
+JA  - Computers and Education: Artificial Intelligence
+PY  - 2021
+VL  - 2
+SP  - 100027
+DO  - 10.1016/j.caeai.2021.100027
+UR  - https://doi.org/10.1016/j.caeai.2021.100027
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Saint, John
+AU  - Fan, Yizhou
+AU  - Gašević, Dragan
+AU  - Pardo, Abelardo
+TI  - Temporally-focused analytics of self-regulated learning: A systematic review of literature
+JO  - Computers and Education: Artificial Intelligence
+T2  - Computers and Education: Artificial Intelligence
+JA  - Computers and Education: Artificial Intelligence
+PY  - 2022
+VL  - 3
+SP  - 100060
+DO  - 10.1016/j.caeai.2022.100060
+UR  - https://doi.org/10.1016/j.caeai.2022.100060
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Ouhaichi, Hamza
+AU  - Spikol, Daniel
+AU  - Vogel, Bahtijar
+TI  - Research trends in multimodal learning analytics: A systematic mapping study
+JO  - Computers and Education: Artificial Intelligence
+T2  - Computers and Education: Artificial Intelligence
+JA  - Computers and Education: Artificial Intelligence
+PY  - 2023
+VL  - 4
+SP  - 100136
+DO  - 10.1016/j.caeai.2023.100136
+UR  - https://doi.org/10.1016/j.caeai.2023.100136
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Alfredo, Riordan
+AU  - Echeverria, Vanessa
+AU  - Jin, Yueqiao
+AU  - Yan, Lixiang
+AU  - Swiecki, Zachari
+AU  - Gašević, Dragan
+AU  - Martinez-Maldonado, Roberto
+TI  - Human-centred learning analytics and AI in education: A systematic literature review
+JO  - Computers and Education: Artificial Intelligence
+T2  - Computers and Education: Artificial Intelligence
+JA  - Computers and Education: Artificial Intelligence
+PY  - 2024
+VL  - 6
+SP  - 100215
+DO  - 10.1016/j.caeai.2024.100215
+UR  - https://doi.org/10.1016/j.caeai.2024.100215
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Sedrakyan, Gayane
+AU  - Malmberg, Jonna
+AU  - Verbert, Katrien
+AU  - Järvelä, Sanna
+AU  - Kirschner, Paul A.
+TI  - Linking learning behavior analytics and learning science concepts: Designing a learning analytics dashboard for feedback to support learning regulation
+JO  - Computers in Human Behavior
+T2  - Computers in Human Behavior
+JA  - Computers in Human Behavior
+PY  - 2020
+VL  - 107
+SP  - 105512
+DO  - 10.1016/j.chb.2018.05.004
+UR  - https://doi.org/10.1016/j.chb.2018.05.004
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Molenaar, Inge
+AU  - Mooij, Susanne de
+AU  - Azevedo, Roger
+AU  - Bannert, Maria
+AU  - Järvelä, Sanna
+AU  - Gašević, Dragan
+TI  - Measuring self-regulated learning and the role of AI: Five years of research using multimodal multichannel data
+JO  - Computers in Human Behavior
+T2  - Computers in Human Behavior
+JA  - Computers in Human Behavior
+PY  - 2023
+VL  - 139
+SP  - 107540
+DO  - 10.1016/j.chb.2022.107540
+UR  - https://doi.org/10.1016/j.chb.2022.107540
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Lim, Lyn
+AU  - Bannert, Maria
+AU  - van der Graaf, Joep
+AU  - Singh, Shaveen
+AU  - Fan, Yizhou
+AU  - Surendrannair, Surya
+AU  - Rakovic, Mladen
+AU  - Molenaar, Inge
+AU  - Moore, Johanna
+AU  - Gašević, Dragan
+TI  - Effects of real-time analytics-based personalized scaffolds on students’ self-regulated learning
+JO  - Computers in Human Behavior
+T2  - Computers in Human Behavior
+JA  - Computers in Human Behavior
+PY  - 2023
+VL  - 139
+SP  - 107547
+DO  - 10.1016/j.chb.2022.107547
+UR  - https://doi.org/10.1016/j.chb.2022.107547
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Henrie, Curtis R.
+AU  - Halverson, Lisa R.
+AU  - Graham, Charles R.
+TI  - Measuring student engagement in technology-mediated learning: A review
+JO  - Computers &amp; Education
+T2  - Computers &amp; Education
+JA  - Computers &amp; Education
+PY  - 2015
+VL  - 90
+SP  - 36
+EP  - 53
+DO  - 10.1016/j.compedu.2015.09.005
+UR  - https://doi.org/10.1016/j.compedu.2015.09.005
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Silvola, Anni
+AU  - Näykki, Piia
+AU  - Kaveri, Anceli
+AU  - Muukkonen, Hanni
+TI  - Expectations for supporting student engagement with learning analytics: An academic path perspective
+JO  - Computers &amp; Education
+T2  - Computers &amp; Education
+JA  - Computers &amp; Education
+PY  - 2021
+VL  - 168
+SP  - 104192
+DO  - 10.1016/j.compedu.2021.104192
+UR  - https://doi.org/10.1016/j.compedu.2021.104192
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Jovanović, Jelena
+AU  - Saqr, Mohammed
+AU  - Joksimović, Srećko
+AU  - Gašević, Dragan
+TI  - Students matter the most in learning analytics: The effects of internal and instructional conditions in predicting academic success
+JO  - Computers &amp; Education
+T2  - Computers &amp; Education
+JA  - Computers &amp; Education
+PY  - 2021
+VL  - 172
+SP  - 104251
+DO  - 10.1016/j.compedu.2021.104251
+UR  - https://doi.org/10.1016/j.compedu.2021.104251
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Darvishi, Ali
+AU  - Khosravi, Hassan
+AU  - Sadiq, Shazia
+AU  - Gašević, Dragan
+AU  - Siemens, George
+TI  - Impact of AI assistance on student agency
+JO  - Computers &amp; Education
+T2  - Computers &amp; Education
+JA  - Computers &amp; Education
+PY  - 2024
+VL  - 210
+SP  - 104967
+DO  - 10.1016/j.compedu.2023.104967
+UR  - https://doi.org/10.1016/j.compedu.2023.104967
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Putnick, Diane L.
+AU  - Bornstein, Marc H.
+TI  - Measurement invariance conventions and reporting: The state of the art and future directions for psychological research
+JO  - Developmental Review
+T2  - Developmental Review
+JA  - Developmental Review
+PY  - 2016
+VL  - 41
+SP  - 71
+EP  - 90
+DO  - 10.1016/j.dr.2016.06.004
+UR  - https://doi.org/10.1016/j.dr.2016.06.004
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Jonsson, Anders
+AU  - Svingby, Gunilla
+TI  - The use of scoring rubrics: Reliability, validity and educational consequences
+JO  - Educational Research Review
+T2  - Educational Research Review
+JA  - Educational Research Review
+PY  - 2007
+VL  - 2
+IS  - 2
+SP  - 130
+EP  - 144
+DO  - 10.1016/j.edurev.2007.05.002
+UR  - https://doi.org/10.1016/j.edurev.2007.05.002
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Panadero, Ernesto
+AU  - Jonsson, Anders
+TI  - The use of scoring rubrics for formative assessment purposes revisited: A review
+JO  - Educational Research Review
+T2  - Educational Research Review
+JA  - Educational Research Review
+PY  - 2013
+VL  - 9
+SP  - 129
+EP  - 144
+DO  - 10.1016/j.edurev.2013.01.002
+UR  - https://doi.org/10.1016/j.edurev.2013.01.002
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Siddiq, Fazilat
+AU  - Hatlevik, Ove Edvard
+AU  - Olsen, Rolf Vegar
+AU  - Throndsen, Inger
+AU  - Scherer, Ronny
+TI  - Taking a future perspective by learning from the past – A systematic review of assessment instruments that aim to measure primary and secondary school students' ICT literacy
+JO  - Educational Research Review
+T2  - Educational Research Review
+JA  - Educational Research Review
+PY  - 2016
+VL  - 19
+SP  - 58
+EP  - 84
+DO  - 10.1016/j.edurev.2016.05.002
+UR  - https://doi.org/10.1016/j.edurev.2016.05.002
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Deunk, Marjolein I.
+AU  - Smale-Jacobse, Annemieke E.
+AU  - de Boer, Hester
+AU  - Doolaard, Simone
+AU  - Bosker, Roel J.
+TI  - Effective differentiation Practices:A systematic review and meta-analysis of studies on the cognitive effects of differentiation practices in primary education
+JO  - Educational Research Review
+T2  - Educational Research Review
+JA  - Educational Research Review
+PY  - 2018
+VL  - 24
+SP  - 31
+EP  - 54
+DO  - 10.1016/j.edurev.2018.02.002
+UR  - https://doi.org/10.1016/j.edurev.2018.02.002
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Gašević, Dragan
+AU  - Dawson, Shane
+AU  - Rogers, Tim
+AU  - Gasevic, Danijela
+TI  - Learning analytics should not promote one size fits all: The effects of instructional conditions in predicting academic success
+JO  - The Internet and Higher Education
+T2  - The Internet and Higher Education
+JA  - The Internet and Higher Education
+PY  - 2016
+VL  - 28
+SP  - 68
+EP  - 84
+DO  - 10.1016/j.iheduc.2015.10.002
+UR  - https://doi.org/10.1016/j.iheduc.2015.10.002
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Barredo Arrieta, Alejandro
+AU  - Díaz-Rodríguez, Natalia
+AU  - Del Ser, Javier
+AU  - Bennetot, Adrien
+AU  - Tabik, Siham
+AU  - Barbado, Alberto
+AU  - Garcia, Salvador
+AU  - Gil-Lopez, Sergio
+AU  - Molina, Daniel
+AU  - Benjamins, Richard
+AU  - Chatila, Raja
+AU  - Herrera, Francisco
+TI  - Explainable Artificial Intelligence (XAI): Concepts, taxonomies, opportunities and challenges toward responsible AI
+JO  - Information Fusion
+T2  - Information Fusion
+JA  - Information Fusion
+PY  - 2020
+VL  - 58
+SP  - 82
+EP  - 115
+DO  - 10.1016/j.inffus.2019.12.012
+UR  - https://doi.org/10.1016/j.inffus.2019.12.012
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Koo, Terry K.
+AU  - Li, Mae Y.
+TI  - A Guideline of Selecting and Reporting Intraclass Correlation Coefficients for Reliability Research
+JO  - Journal of Chiropractic Medicine
+T2  - Journal of Chiropractic Medicine
+JA  - Journal of Chiropractic Medicine
+PY  - 2016
+VL  - 15
+IS  - 2
+SP  - 155
+EP  - 163
+DO  - 10.1016/j.jcm.2016.02.012
+UR  - https://doi.org/10.1016/j.jcm.2016.02.012
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - McNeish, Daniel
+TI  - Thanks coefficient alpha, we’ll take it from here.
+JO  - Psychological Methods
+T2  - Psychological Methods
+JA  - Psychological Methods
+PY  - 2018
+VL  - 23
+IS  - 3
+SP  - 412
+EP  - 433
+DO  - 10.1037/met0000144
+UR  - https://doi.org/10.1037/met0000144
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Létourneau, Angélique
+AU  - Deslandes Martineau, Marion
+AU  - Charland, Patrick
+AU  - Karran, John Alexander
+AU  - Boasen, Jared
+AU  - Léger, Pierre Majorique
+TI  - A systematic review of AI-driven intelligent tutoring systems (ITS) in K-12 education
+JO  - npj Science of Learning
+T2  - npj Science of Learning
+JA  - npj Sci. Learn.
+PY  - 2025
+VL  - 10
+IS  - 1
+DO  - 10.1038/s41539-025-00320-7
+UR  - https://doi.org/10.1038/s41539-025-00320-7
+N2  - Abstract The use of artificial intelligence in education (AIEd) has grown exponentially in the last decade, particularly intelligent tutoring systems (ITSs). Despite the increased use of ITSs and their promise to improve learning, their real educational value remains unclear. This systematic review aims to identify the effects of ITSs on K-12 students’ learning and performance and which experimental designs are currently used to evaluate them. The 28 studies analyzed in this systematic review in
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Lundberg, Scott M.
+AU  - Erion, Gabriel
+AU  - Chen, Hugh
+AU  - DeGrave, Alex
+AU  - Prutkin, Jordan M.
+AU  - Nair, Bala
+AU  - Katz, Ronit
+AU  - Himmelfarb, Jonathan
+AU  - Bansal, Nisha
+AU  - Lee, Su-In
+TI  - From local explanations to global understanding with explainable AI for trees
+JO  - Nature Machine Intelligence
+T2  - Nature Machine Intelligence
+JA  - Nat Mach Intell
+PY  - 2020
+VL  - 2
+IS  - 1
+SP  - 56
+EP  - 67
+DO  - 10.1038/s42256-019-0138-9
+UR  - https://doi.org/10.1038/s42256-019-0138-9
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Chi, Michelene T. H.
+AU  - Wylie, Ruth
+TI  - The ICAP Framework: Linking Cognitive Engagement to Active Learning Outcomes
+JO  - Educational Psychologist
+T2  - Educational Psychologist
+JA  - Educational Psychologist
+PY  - 2014
+VL  - 49
+IS  - 4
+SP  - 219
+EP  - 243
+DO  - 10.1080/00461520.2014.965823
+UR  - https://doi.org/10.1080/00461520.2014.965823
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Black, Paul
+AU  - Wiliam, Dylan
+TI  - Assessment and Classroom Learning
+JO  - Assessment in Education: Principles, Policy &amp; Practice
+T2  - Assessment in Education: Principles, Policy &amp; Practice
+JA  - Assessment in Education: Principles, Policy &amp; Practice
+PY  - 1998
+VL  - 5
+IS  - 1
+SP  - 7
+EP  - 74
+DO  - 10.1080/0969595980050102
+UR  - https://doi.org/10.1080/0969595980050102
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Wong, Jacqueline
+AU  - Baars, Martine
+AU  - Davis, Dan
+AU  - Van Der Zee, Tim
+AU  - Houben, Geert-Jan
+AU  - Paas, Fred
+TI  - Supporting Self-Regulated Learning in Online Learning Environments and MOOCs: A Systematic Review
+JO  - International Journal of Human–Computer Interaction
+T2  - International Journal of Human–Computer Interaction
+JA  - International Journal of Human–Computer Interaction
+PY  - 2018
+VL  - 35
+IS  - 4-5
+SP  - 356
+EP  - 373
+DO  - 10.1080/10447318.2018.1543084
+UR  - https://doi.org/10.1080/10447318.2018.1543084
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Liang, Changhao
+AU  - Majumdar, Rwitajit
+AU  - Nakamizo, Yuta
+AU  - Flanagan, Brendan
+AU  - Ogata, Hiroaki
+TI  - Algorithmic group formation and group work evaluation in a learning analytics-enhanced environment: implementation study in a Japanese junior high school
+JO  - Interactive Learning Environments
+T2  - Interactive Learning Environments
+JA  - Interactive Learning Environments
+PY  - 2022
+VL  - 32
+IS  - 4
+SP  - 1476
+EP  - 1499
+DO  - 10.1080/10494820.2022.2121730
+UR  - https://doi.org/10.1080/10494820.2022.2121730
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Darvishi, Ali
+AU  - Khosravi, Hassan
+AU  - Sadiq, Shazia
+AU  - Gašević, Dragan
+TI  - Incorporating AI and learning analytics to build trustworthy peer assessment systems
+JO  - British Journal of Educational Technology
+T2  - British Journal of Educational Technology
+JA  - Brit J Educational Tech
+PY  - 2022
+VL  - 53
+IS  - 4
+SP  - 844
+EP  - 875
+DO  - 10.1111/bjet.13233
+UR  - https://doi.org/10.1111/bjet.13233
+N2  - Abstract Peer assessment has been recognised as a sustainable and scalable assessment method that promotes higher‐order learning and provides students with fast and detailed feedback on their work. Despite these benefits, some common concerns and criticisms are associated with the use of peer assessments (eg, scarcity of high‐quality feedback from peer student‐assessors and lack of accuracy in assigning a grade to the assessee) that raise questions about their trustworthiness. Consequently, many
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Giannakos, Michail
+AU  - Cukurova, Mutlu
+TI  - The role of learning theory in multimodal learning analytics
+JO  - British Journal of Educational Technology
+T2  - British Journal of Educational Technology
+JA  - Brit J Educational Tech
+PY  - 2023
+VL  - 54
+IS  - 5
+SP  - 1246
+EP  - 1267
+DO  - 10.1111/bjet.13320
+UR  - https://doi.org/10.1111/bjet.13320
+N2  - Abstract This study presents the outcomes of a semi‐systematic literature review on the role of learning theory in multimodal learning analytics (MMLA) research. Based on previous systematic literature reviews in MMLA and an additional new search, 35 MMLA works were identified that use theory. The results show that MMLA studies do not always discuss their findings within an established theoretical framework. Most of the theory‐driven MMLA studies are positioned in the cognitive and affective dom
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Sharma, Kshitij
+AU  - Nguyen, Andy
+AU  - Hong, Yvonne
+TI  - Self‐regulation and shared regulation in collaborative learning in adaptive digital learning environments: A systematic review of empirical studies
+JO  - British Journal of Educational Technology
+T2  - British Journal of Educational Technology
+JA  - Brit J Educational Tech
+PY  - 2024
+VL  - 55
+IS  - 4
+SP  - 1398
+EP  - 1436
+DO  - 10.1111/bjet.13459
+UR  - https://doi.org/10.1111/bjet.13459
+N2  - Abstract Adaptive learning technologies are closely related to learners' self‐regulatory processes in individual and collaborative learning. This study presents the outcomes of a systematic literature review of empirical evidence on adaptive learning environments to foster self‐regulation and shared regulation of learning in collaborative settings. We provide an overview of what and how adaptive technologies have been used to understand and promote self‐regulated learning in collaborative contex
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Cukurova, Mutlu
+TI  - The interplay of learning, analytics and artificial intelligence in education: A vision for hybrid intelligence
+JO  - British Journal of Educational Technology
+T2  - British Journal of Educational Technology
+JA  - Brit J Educational Tech
+PY  - 2024
+VL  - 56
+IS  - 2
+SP  - 469
+EP  - 488
+DO  - 10.1111/bjet.13514
+UR  - https://doi.org/10.1111/bjet.13514
+N2  - AbstractThis paper presents a multidimensional view of AI's role in education, emphasising the intricate interplay among AI, analytics and human learning processes. Here, I challenge the prevalent narrow conceptualisation of AI as tools in Education, exemplified in generative AI tools, and argue for the importance of alternative conceptualisations of AI for achieving human–AI hybrid intelligence. I highlight the differences between human intelligence and artificial information processing, the im
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Molenaar, Inge
+TI  - Towards hybrid human‐AI learning technologies
+JO  - European Journal of Education
+T2  - European Journal of Education
+JA  - Euro J of Education
+PY  - 2022
+VL  - 57
+IS  - 4
+SP  - 632
+EP  - 645
+DO  - 10.1111/ejed.12527
+UR  - https://doi.org/10.1111/ejed.12527
+N2  - AbstractEducation is a unique area for application of artificial intelligence (AI). In this article, the augmentation perspective and the concept of hybrid intelligence are introduced to frame our thinking about AI in education. The involvement of quadruple helix stakeholders (i.e., researchers, education professionals, entrepreneurs, and policymakers) is necessary to understand the opportunities and challenges of different educational use cases from an integrated point of view. To facilitate a 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Jiang, Weijie
+AU  - Pardos, Zachary A.
+TI  - Towards Equity and Algorithmic Fairness in Student Grade Prediction
+JO  - Proceedings of the 2021 AAAI/ACM Conference on AI, Ethics, and Society
+T2  - Proceedings of the 2021 AAAI/ACM Conference on AI, Ethics, and Society
+PY  - 2021
+SP  - 608
+EP  - 617
+DO  - 10.1145/3461702.3462623
+UR  - https://doi.org/10.1145/3461702.3462623
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Abdelrahman, Ghodai
+AU  - Wang, Qing
+AU  - Nunes, Bernardo
+TI  - Knowledge Tracing: A Survey
+JO  - ACM Computing Surveys
+T2  - ACM Computing Surveys
+JA  - ACM Comput. Surv.
+PY  - 2023
+VL  - 55
+IS  - 11
+SP  - 1
+EP  - 37
+DO  - 10.1145/3569576
+UR  - https://doi.org/10.1145/3569576
+N2  - Humans’ ability to transfer knowledge through teaching is one of the essential aspects for human intelligence. A human teacher can track the knowledge of students to customize the teaching on students’ needs. With the rise of online education platforms, there is a similar need for machines to track the knowledge of students and tailor their learning experience. This is known as the Knowledge Tracing (KT) problem in the literature. Effectively solving the KT problem would unlock the potential of 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Lin, Chien-Chang
+AU  - Huang, Anna Y. Q.
+AU  - Lu, Owen H. T.
+TI  - Artificial intelligence in intelligent tutoring systems toward sustainable education: a systematic review
+JO  - Smart Learning Environments
+T2  - Smart Learning Environments
+JA  - Smart Learn. Environ.
+PY  - 2023
+VL  - 10
+IS  - 1
+DO  - 10.1186/s40561-023-00260-y
+UR  - https://doi.org/10.1186/s40561-023-00260-y
+N2  - AbstractSustainable education is a crucial aspect of creating a sustainable future, yet it faces several key challenges, including inadequate infrastructure, limited resources, and a lack of awareness and engagement. Artificial intelligence (AI) has the potential to address these challenges and enhance sustainable education by improving access to quality education, creating personalized learning experiences, and supporting data-driven decision-making. One outcome of using AI and Information Tech
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Araka, Eric
+AU  - Maina, Elizaphan
+AU  - Gitonga, Rhoda
+AU  - Oboko, Robert
+TI  - Research trends in measurement and intervention tools for self-regulated learning for e-learning environments—systematic review (2008–2018)
+JO  - Research and Practice in Technology Enhanced Learning
+T2  - Research and Practice in Technology Enhanced Learning
+JA  - RPTEL
+PY  - 2020
+VL  - 15
+IS  - 1
+DO  - 10.1186/s41039-020-00129-5
+UR  - https://doi.org/10.1186/s41039-020-00129-5
+N2  - AbstractFor the last one decade, research in self-regulated learning (SRL) and educational psychology has proliferated. Researchers and educators have focused on how to support leaners grow their SRL skills on both face-to-face and e-learning environments. In addition, recent studies and meta-analysis have greatly contributed to the domain knowledge on the use of SRL strategies and how they contribute and boost academic performance for learners. However, there is little systematic review on the 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Bond, Melissa
+AU  - Buntins, Katja
+AU  - Bedenlier, Svenja
+AU  - Zawacki-Richter, Olaf
+AU  - Kerres, Michael
+TI  - Mapping research in student engagement and educational technology in higher education: a systematic evidence map
+JO  - International Journal of Educational Technology in Higher Education
+T2  - International Journal of Educational Technology in Higher Education
+JA  - Int J Educ Technol High Educ
+PY  - 2020
+VL  - 17
+IS  - 1
+DO  - 10.1186/s41239-019-0176-8
+UR  - https://doi.org/10.1186/s41239-019-0176-8
+N2  - AbstractDigital technology has become a central aspect of higher education, inherently affecting all aspects of the student experience. It has also been linked to an increase in behavioural, affective and cognitive student engagement, the facilitation of which is a central concern of educators. In order to delineate the complex nexus of technology and student engagement, this article systematically maps research from 243 studies published between 2007 and 2016. Research within the corpus was pre
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Alyahyan, Eyman
+AU  - Düştegör, Dilek
+TI  - Predicting academic success in higher education: literature review and best practices
+JO  - International Journal of Educational Technology in Higher Education
+T2  - International Journal of Educational Technology in Higher Education
+JA  - Int J Educ Technol High Educ
+PY  - 2020
+VL  - 17
+IS  - 1
+DO  - 10.1186/s41239-020-0177-7
+UR  - https://doi.org/10.1186/s41239-020-0177-7
+N2  - AbstractStudent success plays a vital role in educational institutions, as it is often used as a metric for the institution’s performance. Early detection of students at risk, along with preventive measures, can drastically improve their success. Lately, machine learning techniques have been extensively used for prediction purpose. While there is a plethora of success stories in the literature, these techniques are mainly accessible to “computer science”, or more precisely, “artificial intellige
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Susnjak, Teo
+AU  - Ramaswami, Gomathy Suganya
+AU  - Mathrani, Anuradha
+TI  - Learning analytics dashboard: a tool for providing actionable insights to learners
+JO  - International Journal of Educational Technology in Higher Education
+T2  - International Journal of Educational Technology in Higher Education
+JA  - Int J Educ Technol High Educ
+PY  - 2022
+VL  - 19
+IS  - 1
+DO  - 10.1186/s41239-021-00313-7
+UR  - https://doi.org/10.1186/s41239-021-00313-7
+N2  - AbstractThis study investigates current approaches to learning analytics (LA) dashboarding while highlighting challenges faced by education providers in their operationalization. We analyze recent dashboards for their ability to provide actionable insights which promote informed responses by learners in making adjustments to their learning habits. Our study finds that most LA dashboards merely employ surface-level descriptive analytics, while only few go beyond and use predictive analytics. In r
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Ouyang, Fan
+AU  - Wu, Mian
+AU  - Zheng, Luyi
+AU  - Zhang, Liyin
+AU  - Jiao, Pengcheng
+TI  - Integration of artificial intelligence performance prediction and learning analytics to improve student learning in online engineering course
+JO  - International Journal of Educational Technology in Higher Education
+T2  - International Journal of Educational Technology in Higher Education
+JA  - Int J Educ Technol High Educ
+PY  - 2023
+VL  - 20
+IS  - 1
+DO  - 10.1186/s41239-022-00372-4
+UR  - https://doi.org/10.1186/s41239-022-00372-4
+N2  - AbstractAs a cutting-edge field of artificial intelligence in education (AIEd) that depends on advanced computing technologies, AI performance prediction model is widely used to identify at-risk students that tend to fail, establish student-centered learning pathways, and optimize instructional design and development. A majority of the existing AI prediction models focus on the development and optimization of the accuracy of AI algorithms rather than applying AI models to provide student with in
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Jin, Sung-Hee
+AU  - Im, Kowoon
+AU  - Yoo, Mina
+AU  - Roll, Ido
+AU  - Seo, Kyoungwon
+TI  - Supporting students’ self-regulated learning in online learning using artificial intelligence applications
+JO  - International Journal of Educational Technology in Higher Education
+T2  - International Journal of Educational Technology in Higher Education
+JA  - Int J Educ Technol High Educ
+PY  - 2023
+VL  - 20
+IS  - 1
+DO  - 10.1186/s41239-023-00406-5
+UR  - https://doi.org/10.1186/s41239-023-00406-5
+N2  - AbstractSelf-regulated learning (SRL) is crucial for helping students attain high academic performance and achieve their learning objectives in the online learning context. However, learners often face challenges in properly applying SRL in online learning environments. Recent developments in artificial intelligence (AI) applications have shown promise in supporting learners’ self-regulation in online learning by measuring and augmenting SRL, but research in this area is still in its early stage
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Topping, Keith J.
+AU  - Gehringer, Ed
+AU  - Khosravi, Hassan
+AU  - Gudipati, Srilekha
+AU  - Jadhav, Kaushik
+AU  - Susarla, Surya
+TI  - Enhancing peer assessment with artificial intelligence
+JO  - International Journal of Educational Technology in Higher Education
+T2  - International Journal of Educational Technology in Higher Education
+JA  - Int J Educ Technol High Educ
+PY  - 2025
+VL  - 22
+IS  - 1
+DO  - 10.1186/s41239-024-00501-1
+UR  - https://doi.org/10.1186/s41239-024-00501-1
+N2  - Abstract This paper surveys research and practice on enhancing peer assessment with artificial intelligence. Its objectives are to give the structure of the theoretical framework underpinning the study, synopsize a scoping review of the literature that illustrates this structure, and provide a case study which further illustrates this structure. The theoretical framework has six areas: (i) Assigning Peer Assessors, (ii) Enhancing Individual Reviews, (iii) Deriving Peer Grades/Feedback, (iv) Anal
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Vallès-Català, Toni
+AU  - Palau, Ramon
+TI  - Minimum entropy collaborative groupings: A tool for an automatic heterogeneous learning group formation
+JO  - PLOS ONE
+T2  - PLOS ONE
+JA  - PLoS ONE
+PY  - 2023
+VL  - 18
+IS  - 3
+SP  - e0280604
+DO  - 10.1371/journal.pone.0280604
+UR  - https://doi.org/10.1371/journal.pone.0280604
+N2  - For some decades now, theories on learning methodologies have advocated collaborative learning due to its good results in terms of effectiveness and learning types and its promotion of educational and social values. This means that teachers need to be able to apply different criteria when forming heterogeneous groups of students and to use automated techniques to assist them. In this study, we have created an approach based on complex network theory to design an algorithm called Minimum Entropy 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Buckingham Shum, Simon
+AU  - Ferguson, Rebecca
+AU  - Martinez-Maldonado, Roberto
+TI  - Human-Centred Learning Analytics
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - Learning Analytics
+PY  - 2019
+VL  - 6
+IS  - 2
+DO  - 10.18608/jla.2019.62.1
+UR  - https://doi.org/10.18608/jla.2019.62.1
+N2  - The design of effective learning analytics extends beyond sound technical and pedagogical principles. If these analytics are to be adopted and used successfully to support learning and teaching, their design process needs to take into account a range of human factors, including why and how they will be used. In this editorial, we introduce principles of human-centred design developed in other, related fields that can be adopted and adapted to support the development of Human-Centred Learning Ana
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Worsley, Marcelo
+AU  - Martinez-Maldonado, Roberto
+AU  - D'Angelo, Cynthia
+TI  - A New Era in Multimodal Learning Analytics: Twelve Core Commitments to Ground and Grow MMLA
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - JLA
+PY  - 2021
+VL  - 8
+IS  - 3
+SP  - 10
+EP  - 27
+DO  - 10.18608/jla.2021.7361
+UR  - https://doi.org/10.18608/jla.2021.7361
+N2  - Multimodal learning analytics (MMLA) has increasingly been a topic of discussion within the learning analytics community. The Society of Learning Analytics Research is home to the CrossMMLA Special Interest Group and regularly hosts workshops on MMLA during the Learning Analytics Summer Institute (LASI). In this paper, we articulate a set of 12 commitments that we believe are critical for creating effective MMLA innovations. Moreover, as MMLA grows in use, it is important to articulate a set of 
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Dixson, Marcia D
+TI  - Measuring Student Engagement in the Online Course: The Online Student Engagement Scale (OSE)
+JO  - Online Learning
+T2  - Online Learning
+JA  - OLJ
+PY  - 2015
+VL  - 19
+IS  - 4
+DO  - 10.24059/olj.v19i4.561
+UR  - https://doi.org/10.24059/olj.v19i4.561
+N2  - Abstract Student engagement is critical to student learning, especially in the online environment, where students can often feel isolated and disconnected. Therefore, teachers and researchers need to be able to measure student engagement. This study provides validation of the Online Student Engagement scale (OSE) by correlating student self-reports of engagement (via the OSE) with tracking data of student behaviors from an online course management system. It hypothesized that reported student en
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Shute, Valerie J.
+TI  - Focus on Formative Feedback
+JO  - Review of Educational Research
+T2  - Review of Educational Research
+JA  - Review of Educational Research
+PY  - 2008
+VL  - 78
+IS  - 1
+SP  - 153
+EP  - 189
+DO  - 10.3102/0034654307313795
+UR  - https://doi.org/10.3102/0034654307313795
+N2  - This article reviews the corpus of research on feedback, with a focus on formative feedback—defined as information communicated to the learner that is intended to modify his or her thinking or behavior to improve learning. According to researchers, formative feedback should be nonevaluative, supportive, timely, and specific. Formative feedback is usually presented as information to a learner in response to some action on the learner’s part. It comes in a variety of types (e.g., verification of r
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Fredricks, Jennifer A
+AU  - Blumenfeld, Phyllis C
+AU  - Paris, Alison H
+TI  - School Engagement: Potential of the Concept, State of the Evidence
+JO  - Review of Educational Research
+T2  - Review of Educational Research
+JA  - Review of Educational Research
+PY  - 2004
+VL  - 74
+IS  - 1
+SP  - 59
+EP  - 109
+DO  - 10.3102/00346543074001059
+UR  - https://doi.org/10.3102/00346543074001059
+N2  - The concept of school engagement has attracted increasing attention as representing a possible antidote to declining academic motivation and achievement. Engagement is presumed to be malleable, responsive to contextual features, and amenable to environmental change. Researchers describe behavioral, emotional, and cognitive engagement and recommend studying engagement as a multifaceted construct. This article reviews definitions, measures, precursors, and outcomes of engagement; discusses limitat
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Kulik, James A.
+AU  - Fletcher, J. D.
+TI  - Effectiveness of Intelligent Tutoring Systems
+JO  - Review of Educational Research
+T2  - Review of Educational Research
+JA  - Review of Educational Research
+PY  - 2016
+VL  - 86
+IS  - 1
+SP  - 42
+EP  - 78
+DO  - 10.3102/0034654315581420
+UR  - https://doi.org/10.3102/0034654315581420
+N2  - This review describes a meta-analysis of findings from 50 controlled evaluations of intelligent computer tutoring systems. The median effect of intelligent tutoring in the 50 evaluations was to raise test scores 0.66 standard deviations over conventional levels, or from the 50th to the 75th percentile. However, the amount of improvement found in an evaluation depended to a great extent on whether improvement was measured on locally developed or standardized tests, suggesting that alignment of te
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Cloude, Elizabeth Brooke
+AU  - Azevedo, Roger
+AU  - Winne, Philip H.
+AU  - Biswas, Gautam
+AU  - Jang, Eunice E.
+TI  - System design for using multimodal trace data in modeling self-regulated learning
+JO  - Frontiers in Education
+T2  - Frontiers in Education
+JA  - Front. Educ.
+PY  - 2022
+VL  - 7
+DO  - 10.3389/feduc.2022.928632
+UR  - https://doi.org/10.3389/feduc.2022.928632
+N2  - Self-regulated learning (SRL) integrates monitoring and controlling of cognitive, affective, metacognitive, and motivational processes during learning in pursuit of goals. Researchers have begun using multimodal data (e.g., concurrent verbalizations, eye movements, on-line behavioral traces, facial expressions, screen recordings of learner-system interactions, and physiological sensors) to investigate triggers and temporal dynamics of SRL and how such data relate to learning and performance. Ana
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Hopfenbeck, Therese N.
+AU  - Zhang, Zhonghua
+AU  - Sun, Sundance Zhihong
+AU  - Robertson, Pam
+AU  - McGrane, Joshua A.
+TI  - Challenges and opportunities for classroom-based formative assessment and AI: a perspective article
+JO  - Frontiers in Education
+T2  - Frontiers in Education
+JA  - Front. Educ.
+PY  - 2023
+VL  - 8
+DO  - 10.3389/feduc.2023.1270700
+UR  - https://doi.org/10.3389/feduc.2023.1270700
+N2  - The integration of artificial intelligence (AI) into educational contexts may give rise to both positive and negative ramifications for teachers’ uses of formative assessment within their classrooms. Drawing on our diverse experiences as academics, researchers, psychometricians, teachers, and teacher educators specializing in formative assessment, we examine the pedagogical practices in which teachers provide feedback, facilitate peer- and self-assessments, and support students’ learning, and di
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Panadero, Ernesto
+TI  - A Review of Self-regulated Learning: Six Models and Four Directions for Research
+JO  - Frontiers in Psychology
+T2  - Frontiers in Psychology
+JA  - Front. Psychol.
+PY  - 2017
+VL  - 8
+DO  - 10.3389/fpsyg.2017.00422
+UR  - https://doi.org/10.3389/fpsyg.2017.00422
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Smale-Jacobse, Annemieke E.
+AU  - Meijer, Anna
+AU  - Helms-Lorenz, Michelle
+AU  - Maulana, Ridwan
+TI  - Differentiated Instruction in Secondary Education: A Systematic Review of Research Evidence
+JO  - Frontiers in Psychology
+T2  - Frontiers in Psychology
+JA  - Front. Psychol.
+PY  - 2019
+VL  - 10
+DO  - 10.3389/fpsyg.2019.02366
+UR  - https://doi.org/10.3389/fpsyg.2019.02366
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Wisniewski, Benedikt
+AU  - Zierer, Klaus
+AU  - Hattie, John
+TI  - The Power of Feedback Revisited: A Meta-Analysis of Educational Feedback Research
+JO  - Frontiers in Psychology
+T2  - Frontiers in Psychology
+JA  - Front. Psychol.
+PY  - 2020
+VL  - 10
+DO  - 10.3389/fpsyg.2019.03087
+UR  - https://doi.org/10.3389/fpsyg.2019.03087
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Azevedo, Roger
+AU  - Bouchet, François
+AU  - Duffy, Melissa
+AU  - Harley, Jason
+AU  - Taub, Michelle
+AU  - Trevors, Gregory
+AU  - Cloude, Elizabeth
+AU  - Dever, Daryn
+AU  - Wiedbusch, Megan
+AU  - Wortha, Franz
+AU  - Cerezo, Rebeca
+TI  - Lessons Learned and Future Directions of MetaTutor: Leveraging Multichannel Data to Scaffold Self-Regulated Learning With an Intelligent Tutoring System
+JO  - Frontiers in Psychology
+T2  - Frontiers in Psychology
+JA  - Front. Psychol.
+PY  - 2022
+VL  - 13
+DO  - 10.3389/fpsyg.2022.813632
+UR  - https://doi.org/10.3389/fpsyg.2022.813632
+N2  - Self-regulated learning (SRL) is critical for learning across tasks, domains, and contexts. Despite its importance, research shows that not all learners are equally skilled at accurately and dynamically monitoring and regulating their self-regulatory processes. Therefore, learning technologies, such as intelligent tutoring systems (ITSs), have been designed to measure and foster SRL. This paper presents an overview of over 10 years of research on SRL with MetaTutor, a hypermedia-based ITS design
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Albreiki, Balqis
+AU  - Zaki, Nazar
+AU  - Alashwal, Hany
+TI  - A Systematic Literature Review of Student’ Performance Prediction Using Machine Learning Techniques
+JO  - Education Sciences
+T2  - Education Sciences
+JA  - Education Sciences
+PY  - 2021
+VL  - 11
+IS  - 9
+SP  - 552
+DO  - 10.3390/educsci11090552
+UR  - https://doi.org/10.3390/educsci11090552
+N2  - Educational Data Mining plays a critical role in advancing the learning environment by contributing state-of-the-art methods, techniques, and applications. The recent development provides valuable tools for understanding the student learning environment by exploring and utilizing educational data using machine learning and data mining techniques. Modern academic institutions operate in a highly competitive and complex environment. Analyzing performance, providing high-quality education, strategi
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Kizilcec, René F.
+AU  - Lee, Hansol
+TI  - Algorithmic fairness in education
+JO  - The Ethics of Artificial Intelligence in Education
+T2  - The Ethics of Artificial Intelligence in Education
+PY  - 2022
+SP  - 174
+EP  - 202
+DO  - 10.4324/9780429329067-10
+UR  - https://doi.org/10.4324/9780429329067-10
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Seufert, Tina
+TI  - Transforming Self-regulated Learning - Multimodal Insights and Future Directions
+JO  - Educational Psychology Review
+PY  - 2026
+VL  - 38
+IS  - 1
+DO  - 10.1007/s10648-026-10119-6
+UR  - https://doi.org/10.1007/s10648-026-10119-6
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Wong, Jacqueline
+AU  - Khalil, Mohammad
+AU  - Suschevskiy, Vsevolod
+AU  - Baars, Martine
+AU  - de Koning, Bjorn
+AU  - Paas, Fred
+TI  - Student engagement profiles in a mobile app: Links to self-regulated learning and performance
+JO  - Educational Technology Research and Development
+PY  - 2026
+VL  - 74
+IS  - 2
+SP  - 617
+EP  - 637
+DO  - 10.1007/s11423-026-10586-2
+UR  - https://doi.org/10.1007/s11423-026-10586-2
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Fütterer, Tim
+AU  - Bardach, Lisa
+AU  - Kuhn, Jochen
+AU  - Keller, Stefan Daniel
+AU  - Gerjets, Peter
+TI  - Enhancing School Students’ Self-Regulated Learning through Generative AI Support: A Randomized Controlled Trial
+JO  - Educational Psychology Review
+PY  - 2026
+VL  - 38
+IS  - 1
+DO  - 10.1007/s10648-026-10133-8
+UR  - https://doi.org/10.1007/s10648-026-10133-8
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Brunner, Sabrina Nadja
+AU  - Karlen, Yves
+TI  - Teacher judgments of student self-regulated learning - Examining the effect of student and teacher characteristics
+JO  - Metacognition and Learning
+PY  - 2026
+VL  - 21
+IS  - 1
+DO  - 10.1007/s11409-026-09469-x
+UR  - https://doi.org/10.1007/s11409-026-09469-x
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Yilmaz, Mutluhan
+AU  - Gauthier, Andrea
+AU  - Cukurova, Mutlu
+TI  - Supporting online learners’ regulation skills with the help of learning analytics and generative artificial intelligence
+JO  - Educational Technology Research and Development
+PY  - 2026
+VL  - 74
+IS  - 3
+SP  - 1223
+EP  - 1252
+DO  - 10.1007/s11423-026-10595-1
+UR  - https://doi.org/10.1007/s11423-026-10595-1
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Lämsä, Joni
+AU  - de Mooij, Susanne
+AU  - Baars, Martine
+AU  - Molenaar, Inge
+AU  - Järvelä, Sanna
+TI  - Self-Regulated Learning, Multimodal Data, and Analysis Grid: Where Are We Now and Where Are We Going?
+JO  - Educational Psychology Review
+PY  - 2026
+VL  - 38
+IS  - 1
+DO  - 10.1007/s10648-025-10113-4
+UR  - https://doi.org/10.1007/s10648-025-10113-4
+DB  - CrossRef
+ER  - 
+TY  - JOUR
+AU  - Paavilainen, Teija
+AU  - López-Pernas, Sonsoles
+AU  - Väisänen, Sanna
+AU  - Kontkanen, Sini
+AU  - Hirsto, Laura
+TI  - Implementing learning design with learning analytics to scaffold the regulation of collaboration in primary education
+JO  - Smart Learning Environments
+PY  - 2026
+VL  - 13
+IS  - 1
+DO  - 10.1186/s40561-026-00453-1
+UR  - https://doi.org/10.1186/s40561-026-00453-1
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Michos, Konstantinos
+AU  - Schmitz, Maria-Luisa
+AU  - Petko, Dominik
+TI  - Teachers’ data literacy for learning analytics: a central predictor for digital data use in upper secondary schools
+JO  - Education and Information Technologies
+T2  - Education and Information Technologies
+JA  - Educ Inf Technol
+PY  - 2023
+VL  - 28
+IS  - 11
+SP  - 14453
+EP  - 14471
+DO  - 10.1007/s10639-023-11772-y
+UR  - https://doi.org/10.1007/s10639-023-11772-y
+N2  - AbstractSince schools increasingly use digital platforms that provide educational data in digital formats, teacher data use, and data literacy have become a focus of educational research. One main challenge is whether teachers use digital data for pedagogical purposes, such as informing their teaching. We conducted a survey study with N = 1059 teachers in upper secondary schools in Switzerland to investigate teacher digital data use and related factors such as the available technologies in schoo
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Sonnleitner, Benedikt
+AU  - Madou, Tom
+AU  - Deceuninck, Matthias
+AU  - Theodosiou, Filotas
+AU  - Sagaert, Yves R.
+TI  - Evaluation of early student performance prediction given concept drift
+JO  - Computers and Education: Artificial Intelligence
+T2  - Computers and Education: Artificial Intelligence
+JA  - Computers and Education: Artificial Intelligence
+PY  - 2025
+VL  - 8
+SP  - 100369
+DO  - 10.1016/j.caeai.2025.100369
+UR  - https://doi.org/10.1016/j.caeai.2025.100369
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Tiukhova, Elena
+AU  - Vemuri, Pavani
+AU  - Flores, Nidia López
+AU  - Islind, Anna Sigridur
+AU  - Óskarsdóttir, María
+AU  - Poelmans, Stephan
+AU  - Baesens, Bart
+AU  - Snoeck, Monique
+TI  - Explainable Learning Analytics: Assessing the stability of student success prediction models by means of explainable AI
+JO  - Decision Support Systems
+T2  - Decision Support Systems
+JA  - Decision Support Systems
+PY  - 2024
+VL  - 182
+SP  - 114229
+DO  - 10.1016/j.dss.2024.114229
+UR  - https://doi.org/10.1016/j.dss.2024.114229
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Blume, Friederike
+AU  - Schmiedek, Florian
+TI  - It counts in every single lesson: Between- and within-person associations of teaching quality and student self-regulation
+JO  - Learning and Instruction
+T2  - Learning and Instruction
+JA  - Learning and Instruction
+PY  - 2024
+VL  - 92
+SP  - 101908
+DO  - 10.1016/j.learninstruc.2024.101908
+UR  - https://doi.org/10.1016/j.learninstruc.2024.101908
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Järvelä, Sanna
+AU  - Hadwin, Allyson
+TI  - Triggers for self-regulated learning: A conceptual framework for advancing multimodal research about SRL
+JO  - Learning and Individual Differences
+T2  - Learning and Individual Differences
+JA  - Learning and Individual Differences
+PY  - 2024
+VL  - 115
+SP  - 102526
+DO  - 10.1016/j.lindif.2024.102526
+UR  - https://doi.org/10.1016/j.lindif.2024.102526
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Kapoor, Sayash
+AU  - Narayanan, Arvind
+TI  - Leakage and the reproducibility crisis in machine-learning-based science
+JO  - Patterns
+T2  - Patterns
+JA  - Patterns
+PY  - 2023
+VL  - 4
+IS  - 9
+SP  - 100804
+DO  - 10.1016/j.patter.2023.100804
+UR  - https://doi.org/10.1016/j.patter.2023.100804
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Salibašić Glamočić, Džana
+AU  - Mešić, Vanes
+AU  - Neumann, Knut
+AU  - Sušac, Ana
+AU  - Boone, William J.
+AU  - Aviani, Ivica
+AU  - Hasović, Elvedin
+AU  - Erceg, Nataša
+AU  - Repnik, Robert
+AU  - Grubelnik, Vladimir
+TI  - Maintaining item banks with the Rasch model: An example from wave optics
+JO  - Physical Review Physics Education Research
+T2  - Physical Review Physics Education Research
+JA  - Phys. Rev. Phys. Educ. Res.
+PY  - 2021
+VL  - 17
+IS  - 1
+DO  - 10.1103/physrevphyseducres.17.010105
+UR  - https://doi.org/10.1103/physrevphyseducres.17.010105
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Prinsloo, Paul
+AU  - Slade, Sharon
+AU  - Khalil, Mohammad
+TI  - The answer is (not only) technological: Considering student data privacy in learning analytics
+JO  - British Journal of Educational Technology
+T2  - British Journal of Educational Technology
+JA  - Brit J Educational Tech
+PY  - 2022
+VL  - 53
+IS  - 4
+SP  - 876
+EP  - 893
+DO  - 10.1111/bjet.13216
+UR  - https://doi.org/10.1111/bjet.13216
+N2  - Abstract Evidence shows that appropriate use of technology in education has the potential to increase the effectiveness of, eg, teaching, learning and student support. There is also evidence that technology can introduce new problems and ethical issues, eg, student privacy. This article maps some limitations of technological approaches that ensure student data privacy in learning analytics from a critical data studies (CDS) perspective. In this conceptual article, we map the claims, grounds and 
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Park, Eunsung
+AU  - Ifenthaler, Dirk
+AU  - Clariana, Roy B.
+TI  - Adaptive or adapted to: Sequence and reflexive thematic analysis to understand learners' self‐regulated learning in an adaptive learning analytics dashboard
+JO  - British Journal of Educational Technology
+T2  - British Journal of Educational Technology
+JA  - Brit J Educational Tech
+PY  - 2022
+VL  - 54
+IS  - 1
+SP  - 98
+EP  - 125
+DO  - 10.1111/bjet.13287
+UR  - https://doi.org/10.1111/bjet.13287
+N2  - Abstract The real‐time and granularized learning information and recommendations available from adaptive learning technology can provide learners with feedback that is personalized. However, at an individual level, learners often experience technological and pedagogical conflicts. Learners have more freedom to accept, ignore or reject the feedback while also having the challenges of building learning strategies and utilizing learning information that requires self‐regulated learning skills. Give
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Hao, Jiangang
+AU  - von Davier, Alina A.
+AU  - Yaneva, Victoria
+AU  - Lottridge, Susan
+AU  - von Davier, Matthias
+AU  - Harris, Deborah J.
+TI  - Transforming Assessment: The Impacts and Implications of Large Language Models and Generative AI
+JO  - Educational Measurement: Issues and Practice
+T2  - Educational Measurement: Issues and Practice
+JA  - Educational Measurement
+PY  - 2024
+VL  - 43
+IS  - 2
+SP  - 16
+EP  - 29
+DO  - 10.1111/emip.12602
+UR  - https://doi.org/10.1111/emip.12602
+N2  - AbstractThe remarkable strides in artificial intelligence (AI), exemplified by ChatGPT, have unveiled a wealth of opportunities and challenges in assessment. Applying cutting‐edge large language models (LLMs) and generative AI to assessment holds great promise in boosting efficiency, mitigating bias, and facilitating customized evaluations. Conversely, these innovations raise significant concerns regarding validity, reliability, transparency, fairness, equity, and test security, necessitating ca
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Collins, Gary S
+AU  - Moons, Karel G M
+AU  - Dhiman, Paula
+AU  - Riley, Richard D
+AU  - Beam, Andrew L
+AU  - Van Calster, Ben
+AU  - Ghassemi, Marzyeh
+AU  - Liu, Xiaoxuan
+AU  - Reitsma, Johannes B
+AU  - van Smeden, Maarten
+AU  - Boulesteix, Anne-Laure
+AU  - Camaradou, Jennifer Catherine
+AU  - Celi, Leo Anthony
+AU  - Denaxas, Spiros
+AU  - Denniston, Alastair K
+AU  - Glocker, Ben
+AU  - Golub, Robert M
+AU  - Harvey, Hugh
+AU  - Heinze, Georg
+AU  - Hoffman, Michael M
+AU  - Kengne, André Pascal
+AU  - Lam, Emily
+AU  - Lee, Naomi
+AU  - Loder, Elizabeth W
+AU  - Maier-Hein, Lena
+AU  - Mateen, Bilal A
+AU  - McCradden, Melissa D
+AU  - Oakden-Rayner, Lauren
+AU  - Ordish, Johan
+AU  - Parnell, Richard
+AU  - Rose, Sherri
+AU  - Singh, Karandeep
+AU  - Wynants, Laure
+AU  - Logullo, Patricia
+TI  - TRIPOD+AI statement: updated guidance for reporting clinical prediction models that use regression or machine learning methods
+JO  - BMJ
+T2  - BMJ
+JA  - BMJ
+PY  - 2024
+SP  - e078378
+DO  - 10.1136/bmj-2023-078378
+UR  - https://doi.org/10.1136/bmj-2023-078378
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Moons, Karel G M
+AU  - Damen, Johanna A A
+AU  - Kaul, Tabea
+AU  - Hooft, Lotty
+AU  - Andaur Navarro, Constanza
+AU  - Dhiman, Paula
+AU  - Beam, Andrew L
+AU  - Van Calster, Ben
+AU  - Celi, Leo Anthony
+AU  - Denaxas, Spiros
+AU  - Denniston, Alastair K
+AU  - Ghassemi, Marzyeh
+AU  - Heinze, Georg
+AU  - Kengne, André Pascal
+AU  - Maier-Hein, Lena
+AU  - Liu, Xiaoxuan
+AU  - Logullo, Patricia
+AU  - McCradden, Melissa D
+AU  - Liu, Nan
+AU  - Oakden-Rayner, Lauren
+AU  - Singh, Karandeep
+AU  - Ting, Daniel S
+AU  - Wynants, Laure
+AU  - Yang, Bada
+AU  - Reitsma, Johannes B
+AU  - Riley, Richard D
+AU  - Collins, Gary S
+AU  - van Smeden, Maarten
+TI  - PROBAST+AI: an updated quality, risk of bias, and applicability assessment tool for prediction models using regression or artificial intelligence methods
+JO  - BMJ
+T2  - BMJ
+JA  - BMJ
+PY  - 2025
+VL  - 388
+SP  - e082505
+DO  - 10.1136/bmj-2024-082505
+UR  - https://doi.org/10.1136/bmj-2024-082505
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Jacobs, Abigail Z.
+AU  - Wallach, Hanna
+TI  - Measurement and Fairness
+JO  - Proceedings of the 2021 ACM Conference on Fairness, Accountability, and Transparency
+T2  - Proceedings of the 2021 ACM Conference on Fairness, Accountability, and Transparency
+PY  - 2021
+SP  - 375
+EP  - 385
+DO  - 10.1145/3442188.3445901
+UR  - https://doi.org/10.1145/3442188.3445901
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Caton, Simon
+AU  - Haas, Christian
+TI  - Fairness in Machine Learning: A Survey
+JO  - ACM Computing Surveys
+T2  - ACM Computing Surveys
+JA  - ACM Comput. Surv.
+PY  - 2024
+VL  - 56
+IS  - 7
+SP  - 1
+EP  - 38
+DO  - 10.1145/3616865
+UR  - https://doi.org/10.1145/3616865
+N2  - When Machine Learning technologies are used in contexts that affect citizens, companies as well as researchers need to be confident that there will not be any unexpected social implications, such as bias towards gender, ethnicity, and/or people with disabilities. There is significant literature on approaches to mitigate bias and promote fairness, yet the area is complex and hard to penetrate for newcomers to the domain. This article seeks to provide an overview of the different schools of though
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Van Calster, Ben
+AU  - Steyerberg, Ewout W.
+AU  - Wynants, Laure
+AU  - van Smeden, Maarten
+TI  - There is no such thing as a validated prediction model
+JO  - BMC Medicine
+T2  - BMC Medicine
+JA  - BMC Med
+PY  - 2023
+VL  - 21
+IS  - 1
+DO  - 10.1186/s12916-023-02779-w
+UR  - https://doi.org/10.1186/s12916-023-02779-w
+N2  - Abstract Background Clinical prediction models should be validated before implementation in clinical practice. But is favorable performance at internal validation or one external validation sufficient to claim that a prediction model works well in the intended clinical context? Main body We argue to the contrary because (1) patient populations vary, (2) measurement procedures vary, and (3) populations and measurements change over time. Hence, we have to expect heterogeneity in model performance 
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Possaghi, Isabella
+AU  - Vesin, Boban
+AU  - Zhang, Feiran
+AU  - Sharma, Kshitij
+AU  - Knudsen, Cecilie
+AU  - Bjørkum, Håkon
+AU  - Papavlasopoulou, Sofia
+TI  - Integrating multi-modal learning analytics dashboard in K-12 education: insights for enhancing orchestration and teacher decision-making
+JO  - Smart Learning Environments
+T2  - Smart Learning Environments
+JA  - Smart Learn. Environ.
+PY  - 2025
+VL  - 12
+IS  - 1
+DO  - 10.1186/s40561-025-00410-4
+UR  - https://doi.org/10.1186/s40561-025-00410-4
+N2  - Abstract Technological advancements are transforming teaching methods while offering wider windows into students’ learning journeys. Multi-modal Learning Analytics Dashboards (LADs) are tools that facilitate smart classroom orchestration by aggregating and analyzing students’ responses through sensors, such as facial expressions and heart rate, for real-time insights into student engagement and emotional states. In this study, we developed an LAD for open-ended activities in K-12 settings, where
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Weidlich, Joshua
+AU  - Gašević, Dragan
+AU  - Drachsler, Hendrik
+TI  - Causal Inference and Bias in Learning Analytics
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - Learning Analytics
+PY  - 2022
+VL  - 9
+IS  - 3
+SP  - 183
+EP  - 199
+DO  - 10.18608/jla.2022.7577
+UR  - https://doi.org/10.18608/jla.2022.7577
+N2  - As a research field geared toward understanding and improving learning, Learning Analytics (LA) must be able to provide empirical support for causal claims. However, as a highly applied field, tightly controlled randomized experiments are not always feasible nor desirable. Instead, researchers often rely on observational data, based on which they may be reluctant to draw causal inferences. The past decades have seen much progress concerning causal inference in the absence of experimental data. T
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Kaveri, Anceli
+AU  - Silvola, Anni
+AU  - Muukkonen, Hanni
+TI  - Supporting Student Agency with a Student-Facing Learning Analytics Dashboard
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - Learning Analytics
+PY  - 2023
+VL  - 10
+IS  - 2
+SP  - 85
+EP  - 99
+DO  - 10.18608/jla.2023.7729
+UR  - https://doi.org/10.18608/jla.2023.7729
+N2  - Learning analytics dashboard (LAD) development has been criticized for being too data-driven and for developers lacking an understanding of the nontechnical aspects of learning analytics (LA). The ability of developers to address their understanding of learners as well as systematic efforts to involve students in the development process are central to creating pedagogically grounded student-facing dashboards. However, limited research is available about developer perceptions on supporting studen
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Francis, Mary
+AU  - Avoseh, Mejai
+AU  - Card, Karen
+AU  - Newland, Lisa
+AU  - Streff, Kevin
+TI  - Student Privacy and Learning Analytics
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - Learning Analytics
+PY  - 2023
+VL  - 10
+IS  - 3
+SP  - 102
+EP  - 114
+DO  - 10.18608/jla.2023.7975
+UR  - https://doi.org/10.18608/jla.2023.7975
+N2  - This single-site case study will seek to answer the following question: how is the concept of privacy addressed in relation to a student success information system within a small, public institution of higher education? Three themes were found within the inductive coding process, which used interviews, documentation, and videos as data resources. Overall, the case study shows an institution in the early stages of implementing a commercial learning analytics system and provides suggestions for ho
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Mohseni, Zeynab
+AU  - Masiello, Italo
+AU  - Martins, Rafael M.
+AU  - Nordmark, Susanna
+TI  - Visual Learning Analytics for Educational Interventions in Primary and Secondary Schools
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - Learning Analytics
+PY  - 2024
+VL  - 11
+IS  - 2
+SP  - 91
+EP  - 111
+DO  - 10.18608/jla.2024.8309
+UR  - https://doi.org/10.18608/jla.2024.8309
+N2  - Visual Learning Analytics (VLA) uses analytics to monitor and assess educational data by combining visual and automated analysis to provide educational explanations. Such tools could aid teachers in primary and secondary schools in making pedagogical decisions, however, the evidence of their effectiveness and benefits is still limited. With this scoping review, we provide a comprehensive overview of related research on proposed VLA methods, as well as identifying any gaps in the literature that 
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Weydner-Volkmann, Sebastian
+AU  - Bär, Dominik
+TI  - Student autonomy and Learning Analytics: Philosophical Considerations for Designing Feedback Tools
+JO  - Journal of Learning Analytics
+T2  - Journal of Learning Analytics
+JA  - Learning Analytics
+PY  - 2024
+SP  - 1
+EP  - 14
+DO  - 10.18608/jla.2024.8313
+UR  - https://doi.org/10.18608/jla.2024.8313
+N2  - LA-based feedback applications are becoming increasingly important in higher education institutions (HEIs). However, the impact of such systems on student autonomy is contested in parts of the research debate, where hopes and ambitions of learner autonomy and self-regulated learning are confronted with fears that learners are being reduced to mere numeric constructs and are caught up in neoliberal demands to self-optimize. We explore these challenges from the debate with a focus on automated, LA
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Kaldaras, Leonora
+AU  - Akaeze, Hope O.
+AU  - Reckase, Mark D.
+TI  - Developing valid assessments in the era of generative artificial intelligence
+JO  - Frontiers in Education
+T2  - Frontiers in Education
+JA  - Front. Educ.
+PY  - 2024
+VL  - 9
+DO  - 10.3389/feduc.2024.1399377
+UR  - https://doi.org/10.3389/feduc.2024.1399377
+N2  - Generative Artificial Intelligence (GAI) holds tremendous potential to transform the field of education because GAI models can consider context and therefore can be trained to deliver quick and meaningful evaluation of student learning outcomes. However, current versions of GAI tools have considerable limitations, such as social biases often inherent in the data sets used to train the models. Moreover, the GAI revolution comes during a period of moving away from memorization-based education syst
+DB  - CrossRef
+ER  -
+
+TY  - JOUR
+AU  - Arslan, Burcu
+AU  - Lehman, Blair
+AU  - Tenison, Caitlin
+AU  - Sparks, Jesse R.
+AU  - López, Alexis A.
+AU  - Gu, Lin
+AU  - Zapata-Rivera, Diego
+TI  - Opportunities and challenges of using generative AI to personalize educational assessment
+JO  - Frontiers in Artificial Intelligence
+T2  - Frontiers in Artificial Intelligence
+JA  - Front. Artif. Intell.
+PY  - 2024
+VL  - 7
+DO  - 10.3389/frai.2024.1460651
+UR  - https://doi.org/10.3389/frai.2024.1460651
+N2  - In line with the positive effects of personalized learning, personalized assessments are expected to maximize learner motivation and engagement, allowing learners to show what they truly know and can do. Considering the advances in Generative Artificial Intelligence (GenAI), in this perspective article, we elaborate on the opportunities of integrating GenAI into personalized educational assessments to maximize learner engagement, performance, and access. We also draw attention to the challenges 
+DB  - CrossRef
+ER  -

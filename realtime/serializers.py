@@ -57,7 +57,7 @@ def chat_thread_target_row(thread: ClassroomChatThread) -> dict | None:
     if thread.room_type == ClassroomChatThread.RoomType.GROUP and thread.group_id:
         return {
             "id": thread.group_id,
-            "name": thread.group.name,
+            "name": f"第{thread.group.group_no}组",
             "group_no": thread.group.group_no,
         }
     return None

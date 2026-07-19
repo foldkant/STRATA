@@ -1,44 +1,47 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import LoginView from '@/views/LoginView.vue'
-import SuperAdminDashboard from '@/views/super-admin/DashboardView.vue'
-import SchoolsView from '@/views/super-admin/SchoolsView.vue'
-import SchoolAdminsView from '@/views/super-admin/SchoolAdminsView.vue'
-import SchoolAdminDashboard from '@/views/school-admin/DashboardView.vue'
-import TeachersView from '@/views/school-admin/TeachersView.vue'
-import StudentsView from '@/views/school-admin/StudentsView.vue'
-import ClassesView from '@/views/school-admin/ClassesView.vue'
-import TeachingView from '@/views/school-admin/TeachingView.vue'
-import PretestsView from '@/views/school-admin/PretestsView.vue'
-import TeacherDashboard from '@/views/teacher/DashboardView.vue'
-import TeacherCoursesView from '@/views/teacher/CoursesView.vue'
-import TeacherClassroomView from '@/views/teacher/ClassroomView.vue'
-import TeacherClassroomConsoleView from '@/views/teacher/ClassroomConsoleView.vue'
-import TeacherDocumentsView from '@/views/teacher/DocumentsView.vue'
-import TeacherAIProviderView from '@/views/teacher/AIProviderView.vue'
-import TeacherLessonDesignerView from '@/views/teacher/LessonDesignerView.vue'
-import TeacherStudentsView from '@/views/teacher/StudentsView.vue'
-import TeacherNoticesView from '@/views/teacher/NoticesView.vue'
-import TeacherFeedbackView from '@/views/teacher/FeedbackView.vue'
-import TeacherResourcesView from '@/views/teacher/ResourcesView.vue'
-import TeacherQuestionBankView from '@/views/teacher/QuestionBankView.vue'
-import TeacherAssessmentsView from '@/views/teacher/AssessmentsView.vue'
-import TeacherModulePlaceholder from '@/views/teacher/ModulePlaceholderView.vue'
-import StudentDashboard from '@/views/student/DashboardView.vue'
-import StudentCoursesView from '@/views/student/CoursesView.vue'
-import StudentCourseDetailView from '@/views/student/CourseDetailView.vue'
-import StudentLessonWorkspaceView from '@/views/student/LessonWorkspaceView.vue'
-import StudentClassroomView from '@/views/student/ClassroomView.vue'
-import StudentOnboardingView from '@/views/student/OnboardingView.vue'
-import StudentPretestsView from '@/views/student/PretestsView.vue'
-import StudentNoticesView from '@/views/student/NoticesView.vue'
-import StudentFeedbackView from '@/views/student/FeedbackView.vue'
-import StudentAssessmentsView from '@/views/student/AssessmentsView.vue'
-import StudentAssessmentWorkspaceView from '@/views/student/AssessmentWorkspaceView.vue'
-import StudentProfileView from '@/views/student/ProfileView.vue'
-import StudentModulePlaceholder from '@/views/student/ModulePlaceholderView.vue'
-import PlaceholderView from '@/views/PlaceholderView.vue'
-import LearningPageView from '@/views/LearningPageView.vue'
+
+const SuperAdminDashboard = () => import('@/views/super-admin/DashboardView.vue')
+const SchoolsView = () => import('@/views/super-admin/SchoolsView.vue')
+const SchoolAdminsView = () => import('@/views/super-admin/SchoolAdminsView.vue')
+const SchoolAdminDashboard = () => import('@/views/school-admin/DashboardView.vue')
+const TeachersView = () => import('@/views/school-admin/TeachersView.vue')
+const StudentsView = () => import('@/views/school-admin/StudentsView.vue')
+const ClassesView = () => import('@/views/school-admin/ClassesView.vue')
+const TeachingView = () => import('@/views/school-admin/TeachingView.vue')
+const PretestsView = () => import('@/views/school-admin/PretestsView.vue')
+const SchoolAdminResourceReviewsView = () => import('@/views/school-admin/ResourceReviewsView.vue')
+const TeacherDashboard = () => import('@/views/teacher/DashboardView.vue')
+const TeacherCoursesView = () => import('@/views/teacher/CoursesView.vue')
+const TeacherClassroomView = () => import('@/views/teacher/ClassroomView.vue')
+const TeacherClassroomConsoleView = () => import('@/views/teacher/ClassroomConsoleView.vue')
+const TeacherDocumentsView = () => import('@/views/teacher/DocumentsView.vue')
+const TeacherAIProviderView = () => import('@/views/teacher/AIProviderView.vue')
+const TeacherLessonDesignerView = () => import('@/views/teacher/LessonDesignerView.vue')
+const TeacherStudentsView = () => import('@/views/teacher/StudentsView.vue')
+const TeacherNoticesView = () => import('@/views/teacher/NoticesView.vue')
+const TeacherFeedbackView = () => import('@/views/teacher/FeedbackView.vue')
+const TeacherResourcesView = () => import('@/views/teacher/ResourcesView.vue')
+const TeacherQuestionBankView = () => import('@/views/teacher/QuestionBankView.vue')
+const TeacherAssessmentsView = () => import('@/views/teacher/AssessmentsView.vue')
+const TeacherModulePlaceholder = () => import('@/views/teacher/ModulePlaceholderView.vue')
+const StudentDashboard = () => import('@/views/student/DashboardView.vue')
+const StudentCoursesView = () => import('@/views/student/CoursesView.vue')
+const StudentCourseDetailView = () => import('@/views/student/CourseDetailView.vue')
+const StudentLessonWorkspaceView = () => import('@/views/student/LessonWorkspaceView.vue')
+const StudentClassroomView = () => import('@/views/student/ClassroomView.vue')
+const StudentOnboardingView = () => import('@/views/student/OnboardingView.vue')
+const StudentPretestsView = () => import('@/views/student/PretestsView.vue')
+const StudentNoticesView = () => import('@/views/student/NoticesView.vue')
+const StudentFeedbackView = () => import('@/views/student/FeedbackView.vue')
+const StudentAssessmentsView = () => import('@/views/student/AssessmentsView.vue')
+const StudentAssessmentWorkspaceView = () => import('@/views/student/AssessmentWorkspaceView.vue')
+const StudentProfileView = () => import('@/views/student/ProfileView.vue')
+const StudentResourcesView = () => import('@/views/student/ResourcesView.vue')
+const StudentModulePlaceholder = () => import('@/views/student/ModulePlaceholderView.vue')
+const PlaceholderView = () => import('@/views/PlaceholderView.vue')
+const LearningPageView = () => import('@/views/LearningPageView.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/login' },
@@ -56,6 +59,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/school-admin/classes', component: ClassesView, meta: { role: 'school_admin' } },
   { path: '/school-admin/teaching', component: TeachingView, meta: { role: 'school_admin' } },
   { path: '/school-admin/pretests', component: PretestsView, meta: { role: 'school_admin' } },
+  { path: '/school-admin/resource-reviews', component: SchoolAdminResourceReviewsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/models', component: PlaceholderView, meta: { role: 'school_admin', title: '模型与训练' } },
   { path: '/teacher', component: TeacherDashboard, meta: { role: 'teacher' } },
   { path: '/teacher/courses', component: TeacherCoursesView, meta: { role: 'teacher' } },
@@ -105,6 +109,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/student/onboarding', component: StudentOnboardingView, meta: { role: 'student' } },
   { path: '/student/pretests/:subjectId', component: StudentPretestsView, meta: { role: 'student' } },
   { path: '/student/courses', component: StudentCoursesView, meta: { role: 'student' } },
+  { path: '/student/resources', component: StudentResourcesView, meta: { role: 'student' } },
   { path: '/student/courses/:courseId', component: StudentCourseDetailView, meta: { role: 'student' } },
   { path: '/student/lessons/:lessonId/workspace', component: StudentLessonWorkspaceView, meta: { role: 'student' } },
   { path: '/student/classroom/:sessionId', component: StudentClassroomView, meta: { role: 'student' } },

@@ -403,10 +403,10 @@ onMounted(async () => {
           <button :class="{ active: scope === 'shared' }" type="button" @click="scope = 'shared'; load()">共享题库</button>
           <button :class="{ active: scope === 'mine' }" type="button" @click="scope = 'mine'; load()">我的题目</button>
         </div>
-        <input v-model.trim="query" placeholder="搜索题干或知识点" @keyup.enter="load" />
-        <select v-model="subject" @change="load"><option value="">全部学科</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select>
-        <select v-model="questionType" @change="load"><option value="">全部题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select>
-        <select v-model="difficulty" @change="load"><option value="">全部难度</option><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+        <input v-model.trim="query" aria-label="搜索题目" placeholder="搜索题干或知识点" @keyup.enter="load" />
+        <select v-model="subject" aria-label="按学科筛选" @change="load"><option value="">全部学科</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select>
+        <select v-model="questionType" aria-label="按题型筛选" @change="load"><option value="">全部题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+        <select v-model="difficulty" aria-label="按难度筛选" @change="load"><option value="">全部难度</option><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select>
         <button class="secondary-button" type="button" @click="load">查询</button>
       </div>
 

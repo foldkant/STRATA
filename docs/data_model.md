@@ -1,5 +1,7 @@
 # 底层数据模型
 
+> AI 隐性动态分层的目标模型以 [设计报告](student_behavior_ai_stratification_design.md) 为科学与产品依据，以 [开发路线图](student_behavior_ai_stratification_development_roadmap.md) 为迁移顺序。本文中的现有字段用于描述当前实现，不得覆盖目标模型的用途和可见性约束。
+
 ## accounts
 
 - `User`：统一用户表，角色为超级管理员、学校管理员、教师、学生。
@@ -10,7 +12,7 @@
 - `ClassGroup`：班级，支持启用、停用、归档；毕业时设为归档。
 - `ClassGroup.graduated_at`：班级毕业归档时间。
 - `ClassGroup.graduated_by`：执行毕业归档的学校管理员。
-- `StudentProfile`：学生档案扩展，保存班级、当前分层、分组、积分和首次使用状态。新生允许暂不选班级、暂不分层。
+- `StudentProfile`：学生档案扩展，保存班级、过渡期 `current_layer` 缓存、积分和首次使用状态。新生允许暂不选班级、暂不分层；正式隐性分层迁移到按学科/课程和有效期保存的 `StudentSubjectBand` 后，`current_layer` 逐步只读并删除。
 - `StudentProfile.student_no`：学号，可为空。新生账号先发放，学号后续通过批量导入按登录账号匹配更新；非空学号在班级内唯一。
 - `TeachingAssignment`：任课关系，只维护本校教师与任教班级的对应关系；课程、公有课/私有课后续由课程模块单独处理。
 
@@ -40,6 +42,7 @@
 - `ClassroomSession`：课堂场次，字段包括学校、教师、课程、课时、班级、状态、当前投放环节、环节投放状态、提交锁定状态、开始时间和结束时间。
 - `ClassroomSession.is_layered`：历史兼容字段，业务上不再作为教师可配置开关。接口中的 `is_layered` 表示当前投放环节是否含分层题，由 `LessonStep.question_items` 自动计算。
 - `ClassroomActivity`：课堂场次下的活动和控制指令，当前支持签到、随机点名、抢答、倒计时、课堂广播、即时题、讨论、课堂任务和未懂反馈。
+- 签到活动开启后生成全班 `attendance` 学习机会。学生自助签到与教师考勤确认追加 `attendance.recorded`；状态修订引用前一事件，不覆盖历史。未响应保持未知并在课堂结束时撤回，不自动转为缺勤。
 - `ClassroomActivity.metadata`：课堂指令结构化参数，例如 `command`、倒计时秒数、随机点名学生、广播已读统计等。
 - `Resource`：平台资源。
 - `ClassroomGroupCollaboration`：课堂小组合作配置。按课堂场次一对一保存是否开启、分组策略、每组人数、协作文档类型、共享空间配额、是否允许学生上传和是否允许在线编辑。
@@ -76,6 +79,8 @@
 - 评价项配置不作为课堂运行态保存，而是备课阶段的课程级设置。入口放在课时设计页，教师选择性开启自评、互评和师评；课堂中只调用已保存配置。单次课堂是否开放评价保存为 `ClassroomSession.evaluation_enabled`，默认关闭，重新开始课堂也重置为关闭；评价结果只记录 1-5 星，不记录百分制分数。
 - 小组分组第一版采用默认分组：按 A/B/C 层级优先组内同层，未分层学生均衡补齐；随机分组可选；`ai_layer` 策略已预留，当前仍回退到同层优先规则。
 - 小组协作文档按组生成一份独立 Word/PPT/Excel 文件。STRATA 负责账号和权限，ONLYOFFICE 负责在线编辑；无 ONLYOFFICE 时仍保留文件下载和共享文件上传能力。
+- `ClassroomGroupDocumentVersion` 保存小组协作文档的不可变版本号、文件副本、SHA-256、大小、来源、回调状态、文档 key 和经过 JWT 校验的编辑者 ID。编辑者列表只用于组级审计，不直接归因个人贡献。
+- `ClassroomGroupFile` 使用 `public_id`、`analytics_attempt_id` 和 `version_no` 标识一次共享区提交；业务表保留文件名与描述，V2 事件不复制这些正文信息。
 - 小组共享空间按组限制容量，第一版由教师设置 MB 配额，上传文件只允许 Office、PDF、压缩包、图片、音视频和常见文本格式。
 - `LessonStep.question_items` 第一版保存在 JSON 中，题目可包含 `target_layer`、`use_layer_scores` 和 `layer_scores`，用于学生端自动分层过滤和分值适配。
 - `target_layer` 支持 `all`、`A`、`B`、`C`、`A/B`、`B/C`、`A/B/C`；第一版不支持 `A/C`。
@@ -94,9 +99,12 @@
 - `PretestPaper`：学科前测套卷。按学校、学科、前测类型和版本管理。
 - `PretestQuestion`：前测题目。支持单选、多选、量表和简答。
 - `PretestSubmission`：学生前测作答记录。后续学生端提交前测时写入。
-- `StudentWorkAttachment`：学生课堂附件提交。字段包括学校、班级、课程、课时、环节、课堂场次、学生、题目 ID、题干快照、文件、原始文件名、格式、大小、教师评分、教师反馈和批阅人。
-- `ClassroomEvaluationConfig`：课程评价配置。与 `Course` 一对一，记录自评、互评、师评三类 5 星评价项；旧的类型开关只作兼容字段，实际判断以是否存在评价项为准。
-- `ClassroomEvaluationSubmission`：评价提交。记录课程、可选课堂场次、班级、评价类型、评价者、被评价者、小组、各评价项星级和备注。课堂提交按同一课堂唯一；课程级师评按同一课程、同一评价者、同一被评价者唯一。
+- `StudentWorkAttachment`：学生课堂附件提交版本。除教学上下文、文件和批阅缓存外，包含唯一 `submission_id`、`upload_version` 和 `supersedes`；重新上传追加记录，不删除旧文件。
+- `LessonStepAttempt`：学生一次课堂环节提交。使用唯一 `attempt_id` 和递增 `attempt_no`，保存课堂/环节上下文、正文、题目计数和客观题汇总。
+- `LessonStepAttemptAnswer`：课堂提交的逐题业务答案，保存题目版本、题型、响应正文、自动评分和可选附件版本引用；分析事件只引用该业务记录，不复制答案正文。
+- `ClassroomEvaluationConfig`：课程评价配置草案。与 `Course` 一对一，记录教师当前编辑的自评、互评、师评三类 5 星评价项；保存后按内容哈希发布量规版本。
+- `ClassroomEvaluationConfigVersion`：不可变课程量规版本。保存课程内递增版本号、SHA-256、三类开关和评价项快照；相同内容不重复发布。课堂首次开启评价时把版本外键冻结到 `ClassroomSession.evaluation_config_version`。
+- `ClassroomEvaluationSubmission`：不可变评价提交版本。记录课程、可选课堂、班级、评价者、被评价者、小组、量规版本、逐项星级和备注；修订使用新的 `submission_id/analytics_attempt_id`、递增 `submission_version` 和 `supersedes`，不能修改或删除旧行。
 - `TeacherNote`：建议新增，教师对任教班级学生的教学备注和干预记录。
 - `StudentLearningLog`：建议新增，学生学习日志。由系统根据 `LearningEvent` 自动生成，也可由学生反思或教师补充。
 - `ClassLearningLog`：建议新增，班级学习日志。记录课堂运行、任务推进、项目阶段、共性问题、教师干预和课后复盘。
@@ -109,22 +117,21 @@
 - 日志可以引用多个 `LearningEvent`，但不能替代 `LearningEvent`。
 - AI 特征工程应优先使用 `LearningEvent` 做统计特征，同时使用学习日志提取阶段性、反思性和协作性特征。
 
-课堂作答事件第一版：
+课堂作答事实层：
 
-- 学生在课堂页提交当前环节题目或任务文字时，写入 `LearningEvent.event_type=answer_submit`。
-- `object_type=lesson_step`，`object_id` 为 `LessonStep.id`。
-- `metadata.action=lesson_step_answer`，`metadata.classroom_session` 记录本次课堂场次。
-- `metadata.answer` 保存结构化作答：课堂题为 `{ questions: { question_id: value }, text: string }`，纯任务文字为字符串；附件提交题的 `value` 保存附件编号、文件名、地址、格式和大小。
-- `metadata.answered_count`、`question_count`、`required_count`、`auto_score`、`auto_score_max`、`correct_count` 用于教师端实时完成情况和后续特征聚合。
-- 附件提交文件进入 `StudentWorkAttachment`，教师评分和反馈也保存在该表；教师评分会额外写入 `LearningEvent.event_type=teacher_intervention`。
-- 学生打开小组协作文档时写入 `LearningEvent.event_type=resource_view`，`metadata.action=group_document_open`。
-- 学生上传小组共享文件时写入 `LearningEvent.event_type=task_submit`，`metadata.action=group_file_upload`。
-- 学生提交课堂自评时写入 `LearningEvent.event_type=answer_submit`，`metadata.action=self_evaluation_submit`。
-- 学生提交课堂互评时写入 `LearningEvent.event_type=answer_submit`，`metadata.action=peer_evaluation_submit`。
-- 教师提交课堂师评时写入 `LearningEvent.event_type=teacher_intervention`，`metadata.action=teacher_evaluation_submit`。
-- 教师提交课程级师评时写入 `LearningEvent.event_type=teacher_intervention`，`metadata.action=course_teacher_evaluation_submit`。
+- 环节投放按题目和适用带创建 `LearningOpportunity`；文件题使用 `task` 机会，其他题使用 `question` 机会。
+- 学生每次提交追加 `LessonStepAttempt` 和逐题 `LessonStepAttemptAnswer`，不会覆盖上一版；教师完成情况读取当前课堂下最新尝试。
+- 非文件题逐题写 `item.submitted@1.1`。客观题同时形成 `item.graded final/automatic`，简答题先形成无分数 `pending`。
+- 附件每次上传追加 `StudentWorkAttachment` 并写 `task.submitted`；教师首次批阅形成 `final`，复评形成 `revised`，评分事实通过 `supersedes` 保留历史。
+- `LearningEventV2` 仅保存对象版本、机会 UUID、尝试 UUID 和统计契约，不保存答案正文、聊天原文或文件地址。
+- 小组文档和共享区分别生成非必做 `document/task` 学习机会，并通过 `content.released@1.1.target_student_ids` 只投放给当前组员。
+- 学生打开小组协作文档时统一双写 `group.document.opened`；学生上传共享文件时统一双写 `group.file.shared`。
+- ONLYOFFICE 保存回调通过 JWT、文档 key、下载来源和大小校验后追加文档版本及 `group.document.saved`。该事件分析单位是 `group`，不能据此推断某位学生完成了多少内容。
+- 协作关闭和课堂结束撤回未完成机会；有打开、保存或上传证据后禁止重新分组，防止删除成员关系和文件证据。
+- 自评、互评、课堂师评和课程师评统一双写 `rubric.rating.submitted`；V1 仅保留兼容动作和星级，V2 不复制评价备注。
+- 自评事件的评价者和归属学生相同；师评及互评分别保留真实评价者，证据归属被评价学生。互评跨学生归属只能由已校验同组关系的服务端入口写入。
 - 课堂评价星级、评价完成时间、评价者和被评价者关系可作为过程性评价和后续 AI 分层/分组特征；星级本身不直接作为分层 label。
-- 正式批阅、历史答案查询和导出后续可新增 `LessonStepSubmission` 或同类表，`LearningEvent` 继续作为原始行为事件。
+- 课堂历史提交和附件版本底座已经建立；后续批量批阅与导出应读取业务提交表和成熟评分事实，不从事件 JSON 反解析答案。
 
 前测套卷规则：
 
@@ -146,27 +153,121 @@
 
 分层建议规则：
 
-- AI 训练任务只生成 `StratificationDecision`。
-- 模型不能直接修改 `StudentProfile.current_layer`。
-- 教师采纳建议后才更新学生当前层级。
-- 教师拒绝建议或手动调整层级必须写审计日志。
+- 当前 `StratificationDecision` 只是 V1 骨架；目标模型拆分为候选建议、教师决定观测和有效 `StudentSubjectBand`。
+- 模型不能直接修改 `StudentProfile.current_layer` 或 `StudentSubjectBand`；教师确认后才生成新的有效内容带版本。
+- 教师拒绝、保持、手动调整或延后建议必须写审计日志，且只允许查看本人任教班级。
+- A/B/C、概率、排名和分组依据只向任课教师显示；学生接口只返回已分配的任务、资源和支持。
 - 课堂题的 `target_layer`、`layer_scores` 和分层达成率是训练特征和评价上下文，不作为主要 label。
-- 主要 label 应来自教师最终确认的层级、教师采纳/拒绝 AI 建议记录，以及下一阶段表现标签。
+- 教师最终确认层级和采纳/拒绝记录属于弱监督、人机一致性与实施数据，不是学生能力或模型效果的主要真值。
+- 主要预测结局来自预先计划的下一阶段掌握、必做任务完成、逾期和成长结果；动态分层是否有效需要单独的前瞻性干预研究。
 
 ## aiops
 
 - `ModelVersion`：班级模型版本。
 - `TrainingJob`：训练任务。
 
+## learning_analytics
+
+- `AnalyticsOperatingMode`：每校一条分析安全运行状态，状态为 `collect_only/shadow/teacher_review/active/suspended`；不能从仅采集直接跳到正式投放，暂停必须记录原因。
+- `SensitiveInferenceAccessLog`：内容带、个体解释和分组依据的敏感访问审计。保存访问者角色、学校/班级作用域、用途、字段类别、导出标记、允许/拒绝和原因；创建后不可修改。
+- `EventSchemaDefinition`：版本化事件模式登记表。保存事件名、模式版本、Pydantic 生成的 JSON Schema、上下文要求、允许来源、隐私类别、分析单位和 SHA-256；启用后不可覆盖，只能停用并发布新版本。
+- `LearningEventV2`：研究级不可变事件信封。分别保存执行人和证据归属学生、学校/班级/学科/课程/课时/课堂/环节上下文、对象与尝试/机会 UUID、客户端发生和服务端接收时间、载荷、隐私类别及质量状态。
+- `LearningEventV2.idempotency_key`：服务端按学校、执行人、来源和客户端会话/序号计算的 SHA-256；与 `event_id` 共同防止离线重试重复写入。
+- `LearningEventV2.event_fingerprint`：不包含服务器接收时间和事件 UUID 的规范化事实摘要。相同幂等键但指纹不同会拒绝为 `idempotency_conflict`。
+- `LearningEventV2.legacy_event`：统一业务写入产生的 V1 `LearningEvent` 一对一追溯键。V2 使用教师作为操作人、学生作为证据归属对象时，允许与为兼容旧页面而保留学生 `actor` 的 V1 记录语义不同。
+- `LearningEventV2.payload`：只允许注册表中的严格字段，未知字段拒绝，规范化后不得超过 16KB；答卷正文、聊天原文、作品内容和文件明细继续保留在业务表。
+- `LearningEventV2.quality_status`：`received/schema_valid/context_valid/deduplicated/accepted/quarantined/legacy_unmapped`。批量服务在写入前完成模式、上下文和幂等检查；超过 24 小时/7 天及客户端时钟超前写入质量标记，不因离线乱序直接丢弃。
+- `LearningEventV2.opportunity_id/opportunity_record`：迁移期同时保留旧 UUID 和新机会外键。新接受事件必须让两者指向同一条可验证机会；仅 `legacy_unmapped` 可暂时保留 UUID 而无外键，便于增量迁移而不破坏历史信封。
+- `LearningOpportunity`：按学生展开的不可变学习机会分母，保存学校、班级、学科、课程、课时、课堂、环节、内容 ID/版本、必做标记、实际投放带、教学阶段和可用窗口。唯一约束为“学生 + 投放事件”，不能由提交结果反推。
+- `LearningOpportunityTransitionFact`：机会状态的只增事实，支持 `assigned/released/exposed/started/submitted/graded/withdrawn/excused/unavailable`。撤回、豁免和不可用互斥；迟到但发生更早的离线证据追加保存，不覆盖旧时间。
+- `AssessmentResultFact`：按学习机会和 `attempt_id` 保存不可变评分版本，成熟状态为 `pending/final/revised`。最终和修订评分必须有实际得分；修订必须引用同一次作答的既有成熟版本。当前成熟版本按最大 `grade_version` 派生，不通过修改旧行维护 `is_current`。
+- `AssessmentResultFact` 只在同一 `attempt_id` 已存在 `submitted` 事实后生成。主观题 `pending` 可保留空得分，不计为 0；`item.graded` 事件、机会的 `graded` 状态与评分事实处于同一事务，失败时整体回滚。
+- `ParticipationPointLedger`：课堂激励积分不可变流水。保存来源事件、学生、班级/课程/课堂、结构化原因、执行教师、增量、记账前后余额和冲正引用；同一来源事件只能生成一条，原流水不能编辑或删除。
+- `ParticipationPointLedger` 单次增减绝对值不超过 100，普通扣分和冲正后余额不能低于 0；冲正值必须与原流水方向相反且绝对值相同，同一原流水只能冲正一次。
+- `learning_analytics.services.participation_points.reconcile_participation_point_cache`：以第一笔流水的迁移期起始余额和全部增量重算 `StudentProfile.score`。旧字段只是显示缓存，不是学业成绩、核心素养或 AI 主模型特征。
+- `learning_analytics.services.dual_write.record_learning_event`：统一服务端写入入口。`dual_required` 模式下 V1/V2 在同一数据库事务中创建并互相追溯，V2 模式/权限/上下文失败时 V1 同步回滚；`v1_only` 只保留旧业务写入，用于紧急回退。
+- `learning_analytics.services.dual_write.record_classroom_point_adjustment`：统一计算“旧评分替换为新评分”产生的实际积分增量，锁定学生缓存后写 V1、V2 和积分流水；重复相同评分不重复记账。
+- `learning_analytics.services.dual_write.reconcile_v1_v2_events`：检查所有标记为双写的 V1 记录是否存在唯一 V2 映射，并验证事件 UUID 和事件名。
+- `LearningEventRejection`：无效或冲突事件的短期隔离审计。原始 JSON 信封使用 Fernet 加密，保存 SHA-256、错误码、可重放状态和保留期限；超过 64KB 时只加密保存摘要并标记不可重放。
+- `learning_analytics.services.access_audit.teacher_has_class_scope`：按学校和有效任课关系判断教师是否可查看班级个体分析，单纯教师角色不足以授权。
+- `sync_learning_event_schemas`：将代码中 25 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
+- `purge_expired_event_rejections`：删除超过本地保留期限的加密拒绝记录；正式环境后续由 Celery beat 定时调用。
+- 当前 app 已完成 M0 首批安全基线和 `DATA-01A/01B/02A/02B`，`DATA-01C` 已覆盖课堂积分、测试、课堂题目/附件、AI 学习网页、课堂普通资源、五星量规、小组协作、签到、抢答和随机点名。其余课堂控制/普通学习入口、质量流水线、特征生成和模型训练尚未完成。
+
+机会状态当前只支持立即投放：`content.released` 的发生时间即实际开放时间。未来定时任务必须先增加 `content.assigned`，到点后再追加 `released`；不能把未来计划时间提前记成已开放。
+
+计划新增但尚未迁移：
+
+- `BadgeDefinitionVersion/StudentBadgeAward`：版本化奖章规则、证据和撤销。
+- `SubjectCompetencyFramework/StudentCompetencyEvidence`：学科核心素养框架及任务证据，不从点击量或积分直接推断。
+
+首批登记事件：
+
+- `content.released`
+- `content.withdrawn`
+- `session.heartbeat`
+- `resource.opened`
+- `video.progress`
+- `document.progress`
+- `group.document.opened`
+- `group.document.saved`
+- `group.file.shared`
+- `attendance.recorded`
+- `quick_answer.responded`
+- `random_call.selected`
+- `item.submitted`
+- `item.graded`
+- `task.submitted`
+- `learning_page.opened`
+- `learning_page.block_viewed`
+- `learning_page.form_submitted`
+- `rubric.rating.submitted`
+- `intervention.created`
+- `client.offline`
+
+`content.released` 当前保留四个不可覆盖版本：
+
+- `1.0`：按班级和 `target_layers` 展开机会。
+- `1.1`：在保留层级范围的同时允许服务端提交唯一 `target_student_ids`，用于小组成员等明确对象集合；请求中的学生必须全部是当前班级启用学生，否则整次投放失败。
+- `1.2`：保持 `1.1` 的显式对象集合能力，并新增 `attendance` 内容类型。签到不得回写或覆盖既有 `1.0/1.1` 契约。
+- `1.3`：保持 `1.2` 能力，并新增 `interaction` 内容类型。用于抢答等可选课堂互动机会，不修改既有签到契约。
+
+签到事实补充：
+
+- `LearningOpportunity.content_type=attendance` 表示学生实际获得一次签到机会，不与题目、成绩或积分混用。
+- `attendance.recorded` 载荷仅保存 `attendance_status`、`recorded_by`、`revision_no` 和可选前序事件 UUID；教师备注留在业务兼容记录。
+- 学生来源只允许本人 `signed`，教师来源可记录 `signed/late/leave/absent`。统一接收层拒绝学生伪造教师考勤状态。
+- 课堂结束后，已有状态的机会保留 `submitted`，无状态机会追加 `withdrawn`。分析时必须把未知未响应与明确缺勤分开。
+
+课堂互动事实补充：
+
+- `LearningOpportunity.content_type=interaction` 当前用于抢答的非必做机会；未响应不能计作未完成必做任务。
+- `quick_answer.responded` 仅保存服务端计算的首次响应排名和响应延迟，回答正文留在业务兼容记录；重复提交幂等。
+- `random_call.selected` 保存教师操作下的选择方法、候选人数、选择序次和既往入选次数。它不创建学生学习机会，不代表学生作答、完成或掌握。
+
+`item.submitted` 当前保留两个不可覆盖版本：
+
+- `1.0`：要求提供经过客户端有效计时的 `response_time_ms`。
+- `1.1`：允许 `response_time_ms` 缺失，用于旧测试模块只能证明提交、不能重建单题时长的场景。缺失时字段省略，不写 0 或整场测试时长。
+
+测试事实补充：
+
+- `TestAttempt.analytics_attempt_id`：跨 V1/V2 事实使用的稳定 UUID；迁移时逐行生成后再添加唯一约束。
+- 测试开启后，每个目标班级和试题快照生成 `content.released`，题目版本为题干、选项、答案、解析、知识点和分值快照的 SHA-256。
+- 每道题先写 `item.submitted`，再写 `item.graded`。客观题使用 `final/automatic`；主观题提交时使用无实际得分的 `pending`，教师完整批阅后写 `final/teacher`，复评分写 `revised/teacher`。
+- 测试结束先提交仍在作答的答卷，再对尚未完成的机会追加 `withdrawn`；已经提交或评分的机会保留原事实。
+
 ## AI 学习网页
 
 - `LearningWebPage`：教师在某门课程、某个课时中创建的受控学习网页，保存当前 JSON schema、当前版本和原始生成要求。
 - `LearningWebPageVersion`：每次 AI 生成或修改后的不可变版本快照，用于追溯修改过程和后续回滚扩展。
-- `LearningWebPageResponse`：学生对某个网页表单的提交，记录网页版本、表单编号、学生、班级、课时环节、课堂场次、结构化回答和尝试次数。
+- `LearningWebPageResponse`：学生对某个网页表单的提交，记录网页版本、表单编号、学生、班级、课时环节、课堂场次、结构化回答、尝试次数和唯一 `analytics_attempt_id`。
 - `LessonStep.resource_items` 通过 `kind=learning_page`、`learning_page_id` 绑定网页，沿用现有资源顺序和课堂投放流程。
 - `LearningWebPage.schema.blocks` 支持受控 `visualization` 区块，类型限定为 `process/timeline/bars/binary`；只保存结构化动画数据，不保存或执行 AI 生成的 HTML、CSS、JavaScript。
 - `LearningWebPage.schema.blocks` 也支持 `interactive`，保存受长度限制的 `html/css/javascript/height`；代码只在无同源权限、无网络权限的嵌套沙箱中执行，不作为平台业务代码运行。
 - 网页表单回答属于过程性学习行为，可聚合为参与度、选择分布、量表变化、反思文本和任务达成特征；不能直接作为分层 label。
+- 网页随课堂环节投放时生成学生级 `learning_page` 机会；`opened` 记录打开方式，`block_viewed` 只记录受控区块 ID/类型、可见时长和比例，`form_submitted` 只引用业务响应及尝试 UUID。
+- 页面正文、交互脚本和表单答案均不复制到 `LearningEventV2`。区块行为采集失败不得阻断学生继续浏览或提交。
 ## 测试与题库
 
 - `QuestionBankItem`：学校共享题目。记录创建教师、学科、题型、选项、答案、解析、难度、知识点、默认分值、状态和使用次数。
@@ -183,3 +284,16 @@
 - `ClassroomChatReadState`：用户在线程中的最后已读消息，用于计算未读数。
 
 消息状态为 `visible`、`pending`、`removed`。`removed` 消息只对教师返回，任何学生都不能再读取原文。聊天消息写入 `LearningEvent.chat_message`，教师审核写入 `LearningEvent.teacher_intervention`；学生确认警告、撤回或扣分反馈时写入 `LearningEvent.page_view` 和 `metadata.action=classroom_chat_moderation_feedback_ack`。原文只保存在聊天消息表，不复制到学习事件元数据。
+
+## 教学资源中心
+
+- `Resource.public_id`：跨校交换使用的稳定 UUID，不依赖各校数据库自增编号。
+- `Resource.resource_type`：`file/article/link/student_project`。
+- `Resource.visibility`：`private/classes/school/external`。
+- `Resource.publish_status`：`published/pending/approved/rejected/archived`。资源中心不设草稿；个人、班级和校内资源保存即发布，跨校资源进入审核状态。
+- `Resource.subject`、`grade_scope`、`tags`：资源检索和推荐元数据。
+- `Resource.target_classes`：指定班级共享范围，只允许教师本人任教班级。
+- `Resource.project_type`、`project_members`、`project_course`、比赛信息：学生项目展示元数据。
+- `ResourceFile`：一个资源的补充文件。普通资源角色为 `supplement`，学生项目过程材料角色为 `process`。
+
+学生项目的日志、甘特图和阶段成果通过 `ResourceFile(role=process)` 保存，全部为选填。学生浏览资源写入 `LearningEvent.resource_view`，`object_type=resource_center`。

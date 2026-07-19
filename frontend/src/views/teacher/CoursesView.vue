@@ -26,9 +26,12 @@ import {
 } from '@/api/teacher'
 import type { ClassGroupRow, PageResult, SubjectRow } from '@/api/management'
 import AppShell from '@/layouts/AppShell.vue'
+import ClassChipList from '@/components/ClassChipList.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import FilePicker from '@/components/FilePicker.vue'
 import CourseEvaluationModal from '@/components/teacher/CourseEvaluationModal.vue'
 import ManagementPage from '@/components/ManagementPage.vue'
+import MultiSelectActions from '@/components/MultiSelectActions.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import { teacherNav } from './nav'
 
@@ -159,22 +162,19 @@ function openEditCourse(row: CourseRow) {
   courseModalOpen.value = true
 }
 
-function onCourseCoverChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
+function onCourseCoverChange(files: File[]) {
+  const file = files[0]
   if (!file) return
   const errors: FieldErrors = { ...courseErrors.value }
   delete errors.cover
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
     errors.cover = ['封面仅支持 JPG、PNG、WEBP 图片。']
     courseErrors.value = errors
-    input.value = ''
     return
   }
   if (file.size > 5 * 1024 * 1024) {
     errors.cover = ['封面不能超过 5MB。']
     courseErrors.value = errors
-    input.value = ''
     return
   }
   if (coverPreviewUrl.value.startsWith('blob:')) {
@@ -545,15 +545,7 @@ onMounted(async () => {
           <td>{{ item.teaching_model_label }}</td>
           <td><span class="status-pill" :class="item.is_active ? 'status-published' : 'status-draft'">{{ item.status_label }}</span></td>
           <td>{{ item.lesson_count }}</td>
-          <td>
-            <div class="class-chip-list notice-class-list">
-              <span v-for="classItem in item.target_classes.slice(0, 3)" :key="classItem.id" class="class-chip">
-                {{ classLabel(classItem) }}
-              </span>
-              <span v-if="item.target_classes.length > 3" class="class-chip">+{{ item.target_classes.length - 3 }}</span>
-              <span v-if="!item.target_classes.length" class="muted-text">未绑定</span>
-            </div>
-          </td>
+          <td><ClassChipList class="notice-class-list" :classes="item.target_classes" empty-label="未绑定" /></td>
           <td>{{ new Date(item.updated_at).toLocaleString() }}</td>
           <td>
             <div class="row-actions">
@@ -621,10 +613,20 @@ onMounted(async () => {
                 </div>
               </div>
               <div class="course-cover-controls">
-                <span>课程封面</span>
-                <p>推荐 16:9 图片，支持 JPG、PNG、WEBP，最大 5MB。未上传时系统会使用蓝色默认封面。</p>
-                <input type="file" accept="image/jpeg,image/png,image/webp" @change="onCourseCoverChange" />
-                <small v-if="courseErrors.cover" class="field-error">{{ courseErrors.cover[0] }}</small>
+                <FilePicker
+                  label="课程封面"
+                  hint="推荐 16:9 图片，支持 JPG、PNG、WEBP，最大 5MB；未上传时使用课程默认封面。"
+                  accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                  choose-text="选择图片"
+                  replace-text="更换图片"
+                  :file="selectedCoverFile"
+                  :current-name="!selectedCoverFile && coverPreviewUrl ? '当前课程封面' : ''"
+                  current-detail="保存时继续使用当前封面。"
+                  :disabled="saving"
+                  :error="courseErrors.cover?.[0] || ''"
+                  compact
+                  @select="onCourseCoverChange"
+                />
                 <div class="row-actions">
                   <button type="button" @click="removeCourseCover">使用默认封面</button>
                 </div>
@@ -651,11 +653,13 @@ onMounted(async () => {
           </header>
           <div class="batch-modal-body">
             <div class="class-check-header">
-              <span>已选择 {{ selectedClassIds.length }} 个班级</span>
-              <div class="row-actions">
-                <button type="button" @click="selectAllClasses">全选</button>
-                <button type="button" @click="selectedClassIds = []">清空</button>
-              </div>
+              <span>课程可见班级</span>
+              <MultiSelectActions
+                :selected-count="selectedClassIds.length"
+                :total-count="classOptions.length"
+                @select-all="selectAllClasses"
+                @clear="selectedClassIds = []"
+              />
             </div>
             <small v-if="courseErrors.class_groups" class="field-error">{{ courseErrors.class_groups[0] }}</small>
             <div class="class-checkbox-grid">

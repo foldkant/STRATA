@@ -1,0 +1,4 @@
+*.pdf binary
+*.bib -whitespace
+*.ris -whitespace
+*.md -whitespace

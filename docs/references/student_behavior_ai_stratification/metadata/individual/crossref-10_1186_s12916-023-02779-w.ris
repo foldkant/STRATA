@@ -1,0 +1,17 @@
+TY  - JOUR
+AU  - Van Calster, Ben
+AU  - Steyerberg, Ewout W.
+AU  - Wynants, Laure
+AU  - van Smeden, Maarten
+TI  - There is no such thing as a validated prediction model
+JO  - BMC Medicine
+T2  - BMC Medicine
+JA  - BMC Med
+PY  - 2023
+VL  - 21
+IS  - 1
+DO  - 10.1186/s12916-023-02779-w
+UR  - https://doi.org/10.1186/s12916-023-02779-w
+N2  - Abstract Background Clinical prediction models should be validated before implementation in clinical practice. But is favorable performance at internal validation or one external validation sufficient to claim that a prediction model works well in the intended clinical context? Main body We argue to the contrary because (1) patient populations vary, (2) measurement procedures vary, and (3) populations and measurements change over time. Hence, we have to expect heterogeneity in model performance 
+DB  - CrossRef
+ER  - 
