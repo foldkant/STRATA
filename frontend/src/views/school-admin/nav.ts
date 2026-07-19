@@ -5,7 +5,6 @@ export const schoolAdminNavItems = [
   { label: '班级管理', path: '/school-admin/classes' },
   { label: '任课关系', path: '/school-admin/teaching' },
   { label: '学科与学科前测', path: '/school-admin/pretests' },
-  { label: '评价管理', path: '/school-admin/evaluations' },
   { label: '资源审核', path: '/school-admin/resource-reviews' },
   { label: '数据检查', path: '/school-admin/data-quality' },
   { label: '分层分析', path: '/school-admin/models' }

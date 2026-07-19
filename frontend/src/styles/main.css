@@ -12194,6 +12194,13 @@ th {
   gap: 4px;
 }
 
+.evaluation-section-head .evaluation-section-actions {
+  min-width: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .evaluation-section-head span,
 .evaluation-ai-panel span,
 .evaluation-type-editor header span,

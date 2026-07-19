@@ -90,6 +90,7 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
         if request and request.user.is_authenticated:
             self.fields["course"].queryset = Course.objects.filter(
                 subject__school=request.user.school,
+                teacher=request.user,
             ).select_related("subject")
 
     def validate(self, attrs):
@@ -175,6 +176,7 @@ class EvaluationStandardWriteSerializer(StrictModelSerializer):
             self.fields["plan"].queryset = EvaluationPlan.objects.filter(
                 school=request.user.school,
                 scope=EvaluationScope.COURSE,
+                course__teacher=request.user,
             ).select_related("subject", "course")
 
     def validate(self, attrs):
@@ -254,6 +256,7 @@ class EvaluationTrialRecordWriteSerializer(StrictModelSerializer):
             self.fields["standard_version"].queryset = (
                 EvaluationStandardVersion.objects.filter(
                     school=request.user.school,
+                    course__teacher=request.user,
                 ).select_related("source", "subject", "course")
             )
 

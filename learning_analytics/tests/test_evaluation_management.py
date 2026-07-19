@@ -46,6 +46,12 @@ class EvaluationManagementApiTests(TestCase):
             role=User.Role.TEACHER,
             school=self.other_school,
         )
+        self.peer_teacher = User.objects.create_user(
+            username="peer_evaluation_teacher",
+            password="Teacher123!",
+            role=User.Role.TEACHER,
+            school=self.school,
+        )
         self.student = User.objects.create_user(
             username="evaluation_student",
             password="123456",
@@ -76,8 +82,14 @@ class EvaluationManagementApiTests(TestCase):
             teacher=self.other_teacher,
             is_active=True,
         )
+        self.peer_course = Course.objects.create(
+            subject=self.subject,
+            title="Peer Teacher Course",
+            teacher=self.peer_teacher,
+            is_active=True,
+        )
         self.client = APIClient()
-        self.client.force_authenticate(self.school_admin)
+        self.client.force_authenticate(self.teacher)
 
     def plan_payload(self) -> dict:
         return {
@@ -163,7 +175,7 @@ class EvaluationManagementApiTests(TestCase):
 
     def create_plan(self) -> dict:
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/plans/",
+            "/api/v1/teacher/evaluations/plans/",
             self.plan_payload(),
             format="json",
         )
@@ -173,28 +185,28 @@ class EvaluationManagementApiTests(TestCase):
     def create_published_standard(self) -> EvaluationStandardVersion:
         plan = self.create_plan()
         response = self.client.post(
-            f"/api/v1/school-admin/evaluations/plans/{plan['id']}/publish/",
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
             {},
             format="json",
         )
         self.assertEqual(response.status_code, 200, response.data)
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/standards/",
+            "/api/v1/teacher/evaluations/standards/",
             self.standard_payload(plan["id"]),
             format="json",
         )
         self.assertEqual(response.status_code, 201, response.data)
         standard_id = response.data["data"]["id"]
         response = self.client.post(
-            f"/api/v1/school-admin/evaluations/standards/{standard_id}/publish/",
+            f"/api/v1/teacher/evaluations/standards/{standard_id}/publish/",
             {},
             format="json",
         )
         self.assertEqual(response.status_code, 200, response.data)
         return EvaluationStandardVersion.objects.get(source_id=standard_id)
 
-    def test_options_and_drafts_are_school_scoped(self):
-        response = self.client.get("/api/v1/school-admin/evaluations/options/")
+    def test_options_and_drafts_are_teacher_course_scoped(self):
+        response = self.client.get("/api/v1/teacher/evaluations/options/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual([row["id"] for row in response.data["data"]["courses"]], [self.course.id])
         enabled = [row for row in response.data["data"]["scopes"] if row["enabled"]]
@@ -203,7 +215,7 @@ class EvaluationManagementApiTests(TestCase):
         payload = self.plan_payload()
         payload["course"] = self.other_course.id
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/plans/",
+            "/api/v1/teacher/evaluations/plans/",
             payload,
             format="json",
         )
@@ -213,19 +225,28 @@ class EvaluationManagementApiTests(TestCase):
         student_client = APIClient()
         student_client.force_authenticate(self.student)
         self.assertEqual(
-            student_client.get("/api/v1/school-admin/evaluations/plans/").status_code,
+            student_client.get("/api/v1/teacher/evaluations/plans/").status_code,
             403,
         )
-        teacher_client = APIClient()
-        teacher_client.force_authenticate(self.teacher)
+        school_admin_client = APIClient()
+        school_admin_client.force_authenticate(self.school_admin)
         self.assertEqual(
-            teacher_client.get("/api/v1/school-admin/evaluations/plans/").status_code,
+            school_admin_client.get("/api/v1/teacher/evaluations/plans/").status_code,
             403,
         )
 
+        peer_payload = self.plan_payload()
+        peer_payload["course"] = self.peer_course.id
+        response = self.client.post(
+            "/api/v1/teacher/evaluations/plans/",
+            peer_payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_incomplete_draft_can_save_but_cannot_publish(self):
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/plans/",
+            "/api/v1/teacher/evaluations/plans/",
             {"course": self.course.id, "title": "Working draft"},
             format="json",
         )
@@ -233,7 +254,7 @@ class EvaluationManagementApiTests(TestCase):
         plan_id = response.data["data"]["id"]
 
         response = self.client.post(
-            f"/api/v1/school-admin/evaluations/plans/{plan_id}/publish/",
+            f"/api/v1/teacher/evaluations/plans/{plan_id}/publish/",
             {},
             format="json",
         )
@@ -242,7 +263,7 @@ class EvaluationManagementApiTests(TestCase):
 
     def test_plan_publish_is_immutable_idempotent_and_versioned(self):
         plan = self.create_plan()
-        publish_url = f"/api/v1/school-admin/evaluations/plans/{plan['id']}/publish/"
+        publish_url = f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/"
 
         response = self.client.post(publish_url, {}, format="json")
         self.assertEqual(response.status_code, 200, response.data)
@@ -261,7 +282,7 @@ class EvaluationManagementApiTests(TestCase):
         payload = self.plan_payload()
         payload["follow_up_suggestion"] = "Provide a contrast case and ask the student to revise the explanation before the next task."
         response = self.client.patch(
-            f"/api/v1/school-admin/evaluations/plans/{plan['id']}/",
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/",
             payload,
             format="json",
         )
@@ -276,12 +297,12 @@ class EvaluationManagementApiTests(TestCase):
     def test_standard_publish_creates_normalized_immutable_level_descriptions(self):
         plan = self.create_plan()
         self.client.post(
-            f"/api/v1/school-admin/evaluations/plans/{plan['id']}/publish/",
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
             {},
             format="json",
         )
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/standards/",
+            "/api/v1/teacher/evaluations/standards/",
             self.standard_payload(plan["id"]),
             format="json",
         )
@@ -289,7 +310,7 @@ class EvaluationManagementApiTests(TestCase):
         standard_id = response.data["data"]["id"]
 
         response = self.client.post(
-            f"/api/v1/school-admin/evaluations/standards/{standard_id}/publish/",
+            f"/api/v1/teacher/evaluations/standards/{standard_id}/publish/",
             {},
             format="json",
         )
@@ -308,32 +329,32 @@ class EvaluationManagementApiTests(TestCase):
     def test_forbidden_operational_indicator_cannot_enter_published_standard(self):
         plan = self.create_plan()
         self.client.post(
-            f"/api/v1/school-admin/evaluations/plans/{plan['id']}/publish/",
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
             {},
             format="json",
         )
         payload = self.standard_payload(plan["id"])
         payload["criteria"][0]["title"] = "签到与出勤表现"
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/standards/",
+            "/api/v1/teacher/evaluations/standards/",
             payload,
             format="json",
         )
         self.assertEqual(response.status_code, 201)
         standard_id = response.data["data"]["id"]
         response = self.client.post(
-            f"/api/v1/school-admin/evaluations/standards/{standard_id}/publish/",
+            f"/api/v1/teacher/evaluations/standards/{standard_id}/publish/",
             {},
             format="json",
         )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(EvaluationStandardVersion.objects.exists())
 
-    def test_other_school_admin_cannot_read_or_publish_plans(self):
+    def test_other_teacher_cannot_read_or_publish_plans(self):
         plan = self.create_plan()
         other_client = APIClient()
-        other_client.force_authenticate(self.other_school_admin)
-        detail_url = f"/api/v1/school-admin/evaluations/plans/{plan['id']}/"
+        other_client.force_authenticate(self.other_teacher)
+        detail_url = f"/api/v1/teacher/evaluations/plans/{plan['id']}/"
         publish_url = f"{detail_url}publish/"
         self.assertEqual(other_client.get(detail_url).status_code, 404)
         self.assertEqual(other_client.post(publish_url, {}, format="json").status_code, 404)
@@ -342,7 +363,7 @@ class EvaluationManagementApiTests(TestCase):
         payload = self.plan_payload()
         payload["scope"] = EvaluationScope.ANALYSIS
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/plans/",
+            "/api/v1/teacher/evaluations/plans/",
             payload,
             format="json",
         )
@@ -351,7 +372,7 @@ class EvaluationManagementApiTests(TestCase):
 
     def test_trial_record_flow_and_completed_history_protection(self):
         version = self.create_published_standard()
-        options = self.client.get("/api/v1/school-admin/evaluations/options/")
+        options = self.client.get("/api/v1/teacher/evaluations/options/")
         self.assertEqual(options.status_code, 200)
         self.assertEqual(
             [row["id"] for row in options.data["data"]["standard_versions"]],
@@ -372,7 +393,7 @@ class EvaluationManagementApiTests(TestCase):
             "action_items": [],
         }
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/trials/",
+            "/api/v1/teacher/evaluations/trials/",
             payload,
             format="json",
         )
@@ -390,7 +411,7 @@ class EvaluationManagementApiTests(TestCase):
             }
         )
         response = self.client.patch(
-            f"/api/v1/school-admin/evaluations/trials/{record_id}/",
+            f"/api/v1/teacher/evaluations/trials/{record_id}/",
             payload,
             format="json",
         )
@@ -398,13 +419,13 @@ class EvaluationManagementApiTests(TestCase):
         self.assertEqual(response.data["data"]["status_label"], "已完成")
 
         response = self.client.patch(
-            f"/api/v1/school-admin/evaluations/trials/{record_id}/",
+            f"/api/v1/teacher/evaluations/trials/{record_id}/",
             {"title": "不应修改"},
             format="json",
         )
         self.assertEqual(response.status_code, 400)
         response = self.client.delete(
-            f"/api/v1/school-admin/evaluations/trials/{record_id}/"
+            f"/api/v1/teacher/evaluations/trials/{record_id}/"
         )
         self.assertEqual(response.status_code, 409)
         self.assertTrue(EvaluationTrialRecord.objects.filter(pk=record_id).exists())
@@ -425,7 +446,7 @@ class EvaluationManagementApiTests(TestCase):
             "action_items": [],
         }
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/trials/",
+            "/api/v1/teacher/evaluations/trials/",
             payload,
             format="json",
         )
@@ -434,13 +455,13 @@ class EvaluationManagementApiTests(TestCase):
 
         payload["agreement_rate"] = "87.50"
         response = self.client.post(
-            "/api/v1/school-admin/evaluations/trials/",
+            "/api/v1/teacher/evaluations/trials/",
             payload,
             format="json",
         )
         self.assertEqual(response.status_code, 201, response.data)
 
-    def test_trial_records_are_school_scoped_and_exportable(self):
+    def test_trial_records_are_teacher_scoped_and_exportable(self):
         version = self.create_published_standard()
         record = EvaluationTrialRecord.objects.create(
             school=self.school,
@@ -454,20 +475,20 @@ class EvaluationManagementApiTests(TestCase):
             summary="审核完成。",
             issues=[],
             action_items=[],
-            created_by=self.school_admin,
-            updated_by=self.school_admin,
+            created_by=self.teacher,
+            updated_by=self.teacher,
         )
         other_client = APIClient()
-        other_client.force_authenticate(self.other_school_admin)
+        other_client.force_authenticate(self.other_teacher)
         self.assertEqual(
             other_client.get(
-                f"/api/v1/school-admin/evaluations/trials/{record.id}/"
+                f"/api/v1/teacher/evaluations/trials/{record.id}/"
             ).status_code,
             404,
         )
 
         response = self.client.get(
-            "/api/v1/school-admin/evaluations/trials/export/"
+            "/api/v1/teacher/evaluations/trials/export/"
         )
         self.assertEqual(response.status_code, 200)
         workbook = load_workbook(BytesIO(response.content), read_only=True)

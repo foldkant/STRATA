@@ -323,16 +323,16 @@
 
 正式夜间检查排除 `is_synthetic=true` 的模拟学校；正式学校检查报告始终排除已关联 `synthetic_run` 的测试事件和计数。模拟事件仍通过正式写入、任务关联和评分服务生成，以验证程序，详细边界见[模拟数据开发说明](synthetic_data_research_track.md)。
 
-## 学校评价管理
+## 教师评价标准管理
 
-- `EvaluationPlan`：学校管理员维护的评价方案，保存课程、适用学生、学习目标、评价依据、学习任务、评价内容、思维要求、可用帮助、评分规则和后续教学建议。
+- `EvaluationPlan`：教师为本人课程维护的评价方案，保存课程、适用学生、学习目标、评价依据、学习任务、评价内容、思维要求、可用帮助、评分规则和后续教学建议。
 - `EvaluationPlanVersion`：已发布的评价方案版本。相同内容不重复发布，修改后生成下一版本。
-- `EvaluationStandard`：学校管理员维护的评价标准，绑定评价方案并保存评价对象和评价指标。
+- `EvaluationStandard`：教师为本人课程维护的评价标准，绑定评价方案并保存评价对象和评价指标。
 - `EvaluationStandardVersion`：已发布的评价标准版本，必须绑定对应的评价方案版本。
 - `EvaluationCriterionVersion`：单项评价指标，保存评价方面、材料来源、具体表现、暂不评价条件、可用帮助、常见问题、1-5 星表现说明和后续教学建议。
 - `EvaluationScoringExample`：评价指标的评分示例，登记星级、示例说明和可选材料引用。
 - `EvaluationTrialRecord`：评价试用与审核记录，绑定已发布评价标准版本，保存记录类型、日期、参与人数、状态、评分一致率、处理结论、问题和后续安排。
 
-实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录。已完成记录由 API 禁止修改和删除。完整约束见[学校评价管理](evaluation_management.md)。
+实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
 
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

@@ -1488,21 +1488,21 @@ GET  /api/v1/school-admin/analytics/quality/export/
 
 导出返回本校 XLSX，包含“检查报告、检查指标、待处理问题、自动检查记录、执行阶段”五张表。完整口径见 `docs/data_quality_pipeline.md`。
 
-## 学校评价管理
+## 教师评价标准管理
 
-所有接口仅允许学校管理员访问，并按登录账号所属学校隔离。客户端不能提交 `school`、`subject`、`scope` 或 `review_status`；课程决定学科和学校，新建内容默认处于“课程使用、编辑中”。教师和学生访问这些接口返回 403。
+所有接口仅允许教师访问，并同时按学校和课程所属教师隔离。客户端不能提交 `school`、`subject`、`scope`、`review_status` 或教师 ID；课程决定学科和学校，新建内容默认处于“课程使用、编辑中”。学校管理员、学生和其他教师不能读取或修改当前教师的评价内容。
 
 ```text
-GET  /api/v1/school-admin/evaluations/options/
-GET|POST /api/v1/school-admin/evaluations/plans/
-GET|PATCH /api/v1/school-admin/evaluations/plans/{id}/
-POST /api/v1/school-admin/evaluations/plans/{id}/publish/
-GET|POST /api/v1/school-admin/evaluations/standards/
-GET|PATCH /api/v1/school-admin/evaluations/standards/{id}/
-POST /api/v1/school-admin/evaluations/standards/{id}/publish/
-GET|POST /api/v1/school-admin/evaluations/trials/
-GET|PATCH|DELETE /api/v1/school-admin/evaluations/trials/{id}/
-GET /api/v1/school-admin/evaluations/trials/export/
+GET  /api/v1/teacher/evaluations/options/
+GET|POST /api/v1/teacher/evaluations/plans/
+GET|PATCH /api/v1/teacher/evaluations/plans/{id}/
+POST /api/v1/teacher/evaluations/plans/{id}/publish/
+GET|POST /api/v1/teacher/evaluations/standards/
+GET|PATCH /api/v1/teacher/evaluations/standards/{id}/
+POST /api/v1/teacher/evaluations/standards/{id}/publish/
+GET|POST /api/v1/teacher/evaluations/trials/
+GET|PATCH|DELETE /api/v1/teacher/evaluations/trials/{id}/
+GET /api/v1/teacher/evaluations/trials/export/
 ```
 
 编辑中的内容允许暂时不完整；发布接口检查学习目标、评价依据、学习任务、星级说明和评分示例。发布成功返回详情及最新版本；相同内容重复发布返回现有版本，不新增行。发布失败返回：
@@ -1519,4 +1519,4 @@ GET /api/v1/school-admin/evaluations/trials/export/
 
 试用记录必须绑定本校已发布的评价标准版本。类型为“内容审核、课堂试用、评分培训、评分一致性检查”，状态为“待进行、进行中、已完成”。已完成记录必须填写参与人数、结果说明和处理结论；评分一致性检查还必须填写 0-100 的一致率。已完成记录不能修改或删除，导出返回本校 XLSX。
 
-发布后的评价方案版本、评价标准版本、评价指标和评分示例不可 PATCH 或 DELETE。完整字段见[学校评价管理](evaluation_management.md)。
+发布后的评价方案版本、评价标准版本、评价指标和评分示例不可 PATCH 或 DELETE。完整字段见[教师评价标准管理](evaluation_management.md)。

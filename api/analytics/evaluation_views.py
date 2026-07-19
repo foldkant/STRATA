@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 
-from api.permissions import IsSchoolAdmin
+from api.permissions import IsTeacher
 from api.responses import fail, ok
 from courses.models import Course
 from learning_analytics.evaluation_models import (
@@ -182,21 +182,24 @@ def _trial_row(record: EvaluationTrialRecord) -> dict:
     }
 
 
-def _school_plans(request):
+def _teacher_plans(request):
     return EvaluationPlan.objects.filter(
         school=request.user.school,
+        course__teacher=request.user,
     ).select_related("subject", "course")
 
 
-def _school_standards(request):
+def _teacher_standards(request):
     return EvaluationStandard.objects.filter(
         school=request.user.school,
+        course__teacher=request.user,
     ).select_related("subject", "course", "plan")
 
 
-def _school_trial_records(request):
+def _teacher_trial_records(request):
     return EvaluationTrialRecord.objects.filter(
         school=request.user.school,
+        standard_version__course__teacher=request.user,
     ).select_related(
         "standard_version__subject",
         "standard_version__course",
@@ -206,11 +209,12 @@ def _school_trial_records(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def evaluation_options(request):
     courses = list(
         Course.objects.filter(
             subject__school=request.user.school,
+            teacher=request.user,
         )
         .select_related("subject")
         .order_by("subject__name", "title")
@@ -218,6 +222,7 @@ def evaluation_options(request):
     standard_versions = list(
         EvaluationStandardVersion.objects.filter(
             school=request.user.school,
+            course__teacher=request.user,
         )
         .select_related("subject", "course", "source")
         .order_by("subject__name", "title", "-version_no")
@@ -298,10 +303,10 @@ def evaluation_options(request):
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def plans(request):
     if request.method == "GET":
-        rows = _school_plans(request).prefetch_related("versions__published_by")
+        rows = _teacher_plans(request).prefetch_related("versions__published_by")
         for row in rows:
             row.prefetched_versions = sorted(
                 row.versions.all(),
@@ -321,9 +326,9 @@ def plans(request):
 
 
 @api_view(["GET", "PATCH"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def plan_detail(request, pk: int):
-    plan = _school_plans(request).filter(pk=pk).first()
+    plan = _teacher_plans(request).filter(pk=pk).first()
     if plan is None:
         return fail("评价方案不存在或无权访问。", status=404)
     if request.method == "GET":
@@ -341,9 +346,9 @@ def plan_detail(request, pk: int):
 
 
 @api_view(["POST"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def publish_plan_view(request, pk: int):
-    plan = _school_plans(request).filter(pk=pk).first()
+    plan = _teacher_plans(request).filter(pk=pk).first()
     if plan is None:
         return fail("评价方案不存在或无权访问。", status=404)
     try:
@@ -356,10 +361,10 @@ def publish_plan_view(request, pk: int):
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def standards(request):
     if request.method == "GET":
-        rows = _school_standards(request).prefetch_related("versions__published_by")
+        rows = _teacher_standards(request).prefetch_related("versions__published_by")
         for row in rows:
             row.prefetched_versions = sorted(
                 row.versions.all(),
@@ -379,9 +384,9 @@ def standards(request):
 
 
 @api_view(["GET", "PATCH"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def standard_detail(request, pk: int):
-    standard = _school_standards(request).filter(pk=pk).first()
+    standard = _teacher_standards(request).filter(pk=pk).first()
     if standard is None:
         return fail("评价标准不存在或无权访问。", status=404)
     if request.method == "GET":
@@ -399,9 +404,9 @@ def standard_detail(request, pk: int):
 
 
 @api_view(["POST"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def publish_standard_view(request, pk: int):
-    standard = _school_standards(request).filter(pk=pk).first()
+    standard = _teacher_standards(request).filter(pk=pk).first()
     if standard is None:
         return fail("评价标准不存在或无权访问。", status=404)
     try:
@@ -414,10 +419,10 @@ def publish_standard_view(request, pk: int):
 
 
 @api_view(["GET", "POST"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def trial_records(request):
     if request.method == "GET":
-        rows = _school_trial_records(request)
+        rows = _teacher_trial_records(request)
         record_type = request.query_params.get("type", "").strip()
         status = request.query_params.get("status", "").strip()
         if record_type:
@@ -437,9 +442,9 @@ def trial_records(request):
 
 
 @api_view(["GET", "PATCH", "DELETE"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def trial_record_detail(request, pk: int):
-    record = _school_trial_records(request).filter(pk=pk).first()
+    record = _teacher_trial_records(request).filter(pk=pk).first()
     if record is None:
         return fail("评价试用记录不存在或无权访问。", status=404)
     if request.method == "GET":
@@ -463,10 +468,10 @@ def trial_record_detail(request, pk: int):
 
 
 @api_view(["GET"])
-@permission_classes([IsSchoolAdmin])
+@permission_classes([IsTeacher])
 def export_trial_records(request):
     school = request.user.school
-    rows = _school_trial_records(request)
+    rows = _teacher_trial_records(request)
     workbook = build_workbook(
         [
             {

@@ -5,6 +5,7 @@ export const teacherNavItems = [
   { label: '学生管理', path: '/teacher/students' },
   { label: '测试管理', path: '/teacher/assessments' },
   { label: '题库管理', path: '/teacher/question-bank' },
+  { label: '评价标准', path: '/teacher/evaluations' },
   { label: '资源中心', path: '/teacher/resources' },
   { label: '协作文档', path: '/teacher/documents' },
   { label: 'AI接入', path: '/teacher/ai' },

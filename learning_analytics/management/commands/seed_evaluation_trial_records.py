@@ -21,7 +21,7 @@ TEST_PREFIX = "测试-"
 
 
 class Command(BaseCommand):
-    help = "为学校管理员评价管理页面创建或清理评价试用测试记录。"
+    help = "为教师评价标准页面创建或清理评价试用测试记录。"
 
     def add_arguments(self, parser):
         parser.add_argument("--school-code", required=True)
@@ -43,25 +43,28 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f"已清理 {deleted} 条评价试用测试记录。"))
             return
 
-        admins = User.objects.filter(
+        teachers = User.objects.filter(
             school=school,
-            role=User.Role.SCHOOL_ADMIN,
+            role=User.Role.TEACHER,
             is_active=True,
         )
         if options.get("username"):
-            admin = admins.filter(username=options["username"]).first()
+            teacher = teachers.filter(username=options["username"]).first()
         else:
-            admin = admins.order_by("id").first()
-        if admin is None:
-            raise CommandError("未找到可用的学校管理员账号。")
+            teacher = None
+        if options.get("username") and teacher is None:
+            raise CommandError("未找到可用的教师账号。")
 
         versions = EvaluationStandardVersion.objects.filter(school=school)
+        if teacher is not None:
+            versions = versions.filter(course__teacher=teacher)
         if options.get("standard_version_id"):
             version = versions.filter(pk=options["standard_version_id"]).first()
         else:
             version = versions.order_by("-published_at", "-id").first()
         if version is None:
-            raise CommandError("本校没有已发布评价标准，请先发布评价标准。")
+            raise CommandError("该教师没有已发布评价标准，请先发布评价标准。")
+        teacher = version.course.teacher
 
         today = timezone.localdate()
         rows = [
@@ -124,8 +127,8 @@ class Command(BaseCommand):
                 title=row["title"],
                 defaults={
                     **row,
-                    "created_by": admin,
-                    "updated_by": admin,
+                    "created_by": teacher,
+                    "updated_by": teacher,
                 },
             )
             if created:

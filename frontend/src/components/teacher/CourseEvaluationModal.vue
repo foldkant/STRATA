@@ -300,7 +300,10 @@ watch(
                 <span>课程评价设置</span>
                 <strong>自评、互评、师评</strong>
               </div>
-              <button class="secondary-button mini" type="button" :disabled="loading" @click="loadEvaluation">刷新</button>
+              <div class="evaluation-section-actions">
+                <RouterLink class="secondary-button mini" to="/teacher/evaluations" @click="close">评价标准库</RouterLink>
+                <button class="secondary-button mini" type="button" :disabled="loading" @click="loadEvaluation">刷新</button>
+              </div>
             </header>
 
             <div class="evaluation-ai-panel">

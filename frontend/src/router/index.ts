@@ -13,7 +13,6 @@ const TeachingView = () => import('@/views/school-admin/TeachingView.vue')
 const PretestsView = () => import('@/views/school-admin/PretestsView.vue')
 const SchoolAdminResourceReviewsView = () => import('@/views/school-admin/ResourceReviewsView.vue')
 const SchoolAdminDataQualityView = () => import('@/views/school-admin/DataQualityView.vue')
-const SchoolAdminEvaluationManagementView = () => import('@/views/school-admin/EvaluationManagementView.vue')
 const TeacherDashboard = () => import('@/views/teacher/DashboardView.vue')
 const TeacherCoursesView = () => import('@/views/teacher/CoursesView.vue')
 const TeacherClassroomView = () => import('@/views/teacher/ClassroomView.vue')
@@ -27,6 +26,7 @@ const TeacherFeedbackView = () => import('@/views/teacher/FeedbackView.vue')
 const TeacherResourcesView = () => import('@/views/teacher/ResourcesView.vue')
 const TeacherQuestionBankView = () => import('@/views/teacher/QuestionBankView.vue')
 const TeacherAssessmentsView = () => import('@/views/teacher/AssessmentsView.vue')
+const TeacherEvaluationManagementView = () => import('@/views/teacher/EvaluationManagementView.vue')
 const TeacherModulePlaceholder = () => import('@/views/teacher/ModulePlaceholderView.vue')
 const StudentDashboard = () => import('@/views/student/DashboardView.vue')
 const StudentCoursesView = () => import('@/views/student/CoursesView.vue')
@@ -63,7 +63,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/school-admin/pretests', component: PretestsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/resource-reviews', component: SchoolAdminResourceReviewsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/data-quality', component: SchoolAdminDataQualityView, meta: { role: 'school_admin' } },
-  { path: '/school-admin/evaluations', component: SchoolAdminEvaluationManagementView, meta: { role: 'school_admin' } },
+  { path: '/school-admin/evaluations', redirect: '/school-admin' },
   { path: '/school-admin/models', component: PlaceholderView, meta: { role: 'school_admin', title: '分层分析' } },
   { path: '/teacher', component: TeacherDashboard, meta: { role: 'teacher' } },
   { path: '/teacher/courses', component: TeacherCoursesView, meta: { role: 'teacher' } },
@@ -71,6 +71,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/teacher/classroom', component: TeacherClassroomView, meta: { role: 'teacher' } },
   { path: '/teacher/classroom/:sessionId', component: TeacherClassroomConsoleView, meta: { role: 'teacher' } },
   { path: '/teacher/assessments', component: TeacherAssessmentsView, meta: { role: 'teacher' } },
+  { path: '/teacher/evaluations', component: TeacherEvaluationManagementView, meta: { role: 'teacher' } },
   { path: '/teacher/tasks', redirect: '/teacher/assessments' },
   {
     path: '/teacher/projects',

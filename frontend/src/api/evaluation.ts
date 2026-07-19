@@ -192,7 +192,7 @@ export type EvaluationTrialRow = {
   updated_at: string
 }
 
-const baseUrl = '/api/v1/school-admin/evaluations'
+const baseUrl = '/api/v1/teacher/evaluations'
 
 export function getEvaluationOptions() {
   return apiRequest<EvaluationOptions>(`${baseUrl}/options/`)

@@ -1,11 +1,11 @@
-# STRATA 学校评价管理
+# STRATA 教师评价标准管理
 
 > 实现日期：2026-07-19  
-> 当前状态：评价方案、评价标准、版本管理和试用记录已经完成；当前使用测试记录验证流程，正式学校试用结论尚未形成。
+> 当前状态：教师评价方案、评价标准、版本管理和试用记录已经完成；当前使用测试记录验证流程，正式课堂试用结论尚未形成。
 
 ## 1. 功能定位
 
-评价管理由学校管理员维护，用于统一本校课程的评价要求。教师不再维护学校级方案，只在课程和课堂中选用已发布内容、完成评分并查看任教学生结果。
+评价标准由教师围绕本人课程制定和维护。教师负责明确学习目标、评价依据、学习任务、评价指标和星级说明，并在课程或课堂中使用已发布版本完成自评、互评和师评。学校管理员不制定评价标准，也不直接评价学生，只查看学校层面的汇总和运行情况。
 
 平台统一使用以下名称：
 
@@ -28,7 +28,7 @@
 
 ## 3. 评价方案
 
-评价方案绑定本校课程，包含：
+评价方案绑定教师本人的课程，包含：
 
 - 方案名称和适用内容版本。
 - 适用学生和总体学习目标。
@@ -64,34 +64,34 @@
 
 ## 6. 权限
 
-- 学校管理员：查看和维护本校全部评价方案、评价标准及其版本。
-- 教师：不能访问学校管理员评价管理 API；后续只读取学校发布内容并用于本人课程。
+- 教师：查看和维护本人课程的评价方案、评价标准、版本和试用记录；不能读取其他教师课程的内容。
+- 学校管理员：不进入评价标准编辑页面，不直接修改教师评价内容；后续只查看不含学生个体敏感信息的学校汇总。
 - 学生：不能访问评价管理页面，只在学习任务中看到教师公开的评价要求和本人结果。
 - 超级管理员：不直接编辑成员校评价内容。
 
-所有学校管理员请求都从登录账号取得学校范围，不接受客户端传入学校 ID。
+所有教师请求都从登录账号取得学校和本人课程范围，不接受客户端传入学校 ID、教师 ID 或越权课程。
 
 ## 7. 页面与接口
 
 页面：
 
 ```text
-/app/school-admin/evaluations
+/app/teacher/evaluations
 ```
 
 接口：
 
 ```text
-GET      /api/v1/school-admin/evaluations/options/
-GET|POST /api/v1/school-admin/evaluations/plans/
-GET|PATCH /api/v1/school-admin/evaluations/plans/{id}/
-POST     /api/v1/school-admin/evaluations/plans/{id}/publish/
-GET|POST /api/v1/school-admin/evaluations/standards/
-GET|PATCH /api/v1/school-admin/evaluations/standards/{id}/
-POST     /api/v1/school-admin/evaluations/standards/{id}/publish/
-GET|POST /api/v1/school-admin/evaluations/trials/
-GET|PATCH|DELETE /api/v1/school-admin/evaluations/trials/{id}/
-GET      /api/v1/school-admin/evaluations/trials/export/
+GET      /api/v1/teacher/evaluations/options/
+GET|POST /api/v1/teacher/evaluations/plans/
+GET|PATCH /api/v1/teacher/evaluations/plans/{id}/
+POST     /api/v1/teacher/evaluations/plans/{id}/publish/
+GET|POST /api/v1/teacher/evaluations/standards/
+GET|PATCH /api/v1/teacher/evaluations/standards/{id}/
+POST     /api/v1/teacher/evaluations/standards/{id}/publish/
+GET|POST /api/v1/teacher/evaluations/trials/
+GET|PATCH|DELETE /api/v1/teacher/evaluations/trials/{id}/
+GET      /api/v1/teacher/evaluations/trials/export/
 ```
 
 页面包含“评价方案、评价标准、试用记录”三个页签。试用记录支持 XLSX 导出。
@@ -126,7 +126,7 @@ SQLite 升级前备份位于 `storage/dev.before-evaluation-rename.sqlite3`。
 当前小榄中学已生成 4 条带“测试-”前缀的记录，用于检查页面和导出：
 
 ```powershell
-.\.venv\Scripts\python.exe manage.py seed_evaluation_trial_records --school-code 001 --username xlzx_admin
+.\.venv\Scripts\python.exe manage.py seed_evaluation_trial_records --school-code 001 --username <教师账号>
 ```
 
 清理测试记录：
@@ -139,7 +139,7 @@ SQLite 升级前备份位于 `storage/dev.before-evaluation-rename.sqlite3`。
 
 ## 11. 后续开发
 
-1. 教师在课程或课时中选择学校发布的评价标准。
+1. 教师在课程或课时中选择本人发布的评价标准，并冻结本次使用版本。
 2. 为题库题目增加审核、试用、启用和停用状态。
 3. 建立共同测试和不同版本结果比较。
 4. 使用正式课堂数据补充真实试用记录。
