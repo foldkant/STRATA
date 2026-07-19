@@ -10,7 +10,13 @@ export type AssessmentOptions = {
   courses: CourseOption[]
   question_types: Array<{ value: string; label: string }>
   difficulties: Array<{ value: string; label: string }>
+  question_statuses: Array<{ value: BankQuestionStatus; label: string }>
+  question_sources: Array<{ value: BankQuestionSource; label: string }>
 }
+
+export type BankQuestionStatus = 'draft' | 'pending_review' | 'trial' | 'active' | 'disabled'
+export type BankQuestionSource = 'manual' | 'xlsx' | 'ai' | 'copy' | 'existing'
+export type BankQuestionLibraryScope = 'personal' | 'school'
 
 export type BankQuestion = {
   id: number
@@ -26,12 +32,54 @@ export type BankQuestion = {
   difficulty_label: string
   knowledge_point: string
   default_score: number
-  status: 'active' | 'disabled'
+  status: BankQuestionStatus
   status_label: string
+  source: BankQuestionSource
+  source_label: string
+  library_scope: BankQuestionLibraryScope
+  library_scope_label: string
+  version_no: number
+  content_hash: string
   usage_count: number
+  response_count: number
+  correct_count: number
+  correct_rate: number | null
+  trial_usage_count: number
+  trial_response_count: number
+  trial_correct_count: number
+  trial_correct_rate: number | null
+  submitted_for_review_at: string | null
+  reviewed_by: { id: number; username: string; display_name: string } | null
+  reviewed_at: string | null
+  review_note: string
+  disabled_by: { id: number; username: string; display_name: string } | null
+  disabled_at: string | null
+  disabled_reason: string
   is_owner: boolean
   created_at: string
   updated_at: string
+  option_distribution?: Array<{ option: string; count: number }>
+  versions?: Array<{
+    id: number
+    version_no: number
+    content_hash: string
+    source: BankQuestionSource
+    source_label: string
+    status_snapshot: BankQuestionStatus
+    status_snapshot_label: string
+    created_by: { id: number; username: string; display_name: string }
+    created_at: string
+  }>
+  lifecycle?: Array<{
+    id: number
+    from_status: string
+    to_status: BankQuestionStatus
+    to_status_label: string
+    action: string
+    note: string
+    actor: { id: number; username: string; display_name: string }
+    created_at: string
+  }>
 }
 
 export type BankQuestionPayload = {
@@ -70,7 +118,9 @@ export type AiQuestionGenerationResult = {
 
 export type AssessmentQuestion = {
   id: number
-  source_question: number | null
+  source_question?: number | null
+  source_version?: number | null
+  source_status?: BankQuestionStatus
   question_type: string
   question_type_label: string
   stem: string
@@ -161,8 +211,19 @@ export function createBankQuestion(payload: BankQuestionPayload) {
   return apiRequest<BankQuestion>('/api/v1/teacher/question-bank/', { method: 'POST', body: toJsonBody(payload) })
 }
 
-export function updateBankQuestion(id: number, payload: Partial<BankQuestionPayload> | { status: string }) {
+export function updateBankQuestion(id: number, payload: Partial<BankQuestionPayload>) {
   return apiRequest<BankQuestion>(`/api/v1/teacher/question-bank/${id}/`, { method: 'PATCH', body: toJsonBody(payload) })
+}
+
+export function actionBankQuestion(
+  id: number,
+  action: 'submit_review' | 'withdraw' | 'disable' | 'copy',
+  note = ''
+) {
+  return apiRequest<BankQuestion>(`/api/v1/teacher/question-bank/${id}/action/`, {
+    method: 'POST',
+    body: toJsonBody({ action, note })
+  })
 }
 
 export function deleteBankQuestion(id: number) {
@@ -177,6 +238,34 @@ export function importQuestionBank(file: File) {
 
 export const questionBankTemplateUrl = '/api/v1/teacher/question-bank/template/'
 export const questionBankExportUrl = '/api/v1/teacher/question-bank/export/'
+
+export type QuestionReviewPage = {
+  count: number
+  page: number
+  page_size: number
+  results: BankQuestion[]
+}
+
+export function getQuestionReviews(params: Record<string, string | number> = {}) {
+  return apiRequest<QuestionReviewPage>(`/api/v1/school-admin/question-reviews/${queryString(params)}`)
+}
+
+export function getQuestionReviewDetail(id: number) {
+  return apiRequest<BankQuestion>(`/api/v1/school-admin/question-reviews/${id}/`)
+}
+
+export function reviewQuestion(
+  id: number,
+  action: 'approve_trial' | 'return' | 'activate' | 'disable',
+  note = ''
+) {
+  return apiRequest<BankQuestion>(`/api/v1/school-admin/question-reviews/${id}/action/`, {
+    method: 'POST',
+    body: toJsonBody({ action, note })
+  })
+}
+
+export const questionReviewsExportUrl = '/api/v1/school-admin/question-reviews/export/'
 
 export function generateQuestionBankDrafts(payload: AiQuestionGenerationPayload) {
   return apiRequest<AiQuestionGenerationResult>('/api/v1/teacher/question-bank/ai-generate/', {

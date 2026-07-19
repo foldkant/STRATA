@@ -248,8 +248,22 @@ class QuestionBankItem(models.Model):
         HARD = "hard", "挑战"
 
     class Status(models.TextChoices):
+        DRAFT = "draft", "草稿"
+        PENDING_REVIEW = "pending_review", "待审核"
+        TRIAL = "trial", "可试用"
         ACTIVE = "active", "启用"
         DISABLED = "disabled", "停用"
+
+    class Source(models.TextChoices):
+        MANUAL = "manual", "手工创建"
+        XLSX = "xlsx", "XLSX 导入"
+        AI = "ai", "AI 生成"
+        COPY = "copy", "复制题目"
+        EXISTING = "existing", "既有题目"
+
+    class LibraryScope(models.TextChoices):
+        PERSONAL = "personal", "个人题目"
+        SCHOOL = "school", "校内共享"
 
     school = models.ForeignKey(
         "school.School", on_delete=models.CASCADE, related_name="question_bank_items"
@@ -274,9 +288,37 @@ class QuestionBankItem(models.Model):
     knowledge_point = models.CharField(max_length=128, blank=True)
     default_score = models.FloatField(default=2)
     status = models.CharField(
-        max_length=16, choices=Status.choices, default=Status.ACTIVE
+        max_length=24, choices=Status.choices, default=Status.DRAFT
     )
-    usage_count = models.PositiveIntegerField(default=0)
+    source = models.CharField(
+        max_length=16, choices=Source.choices, default=Source.MANUAL
+    )
+    library_scope = models.CharField(
+        max_length=16,
+        choices=LibraryScope.choices,
+        default=LibraryScope.PERSONAL,
+    )
+    version_no = models.PositiveIntegerField(default=1)
+    content_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    submitted_for_review_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="reviewed_question_bank_items",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_note = models.TextField(blank=True)
+    disabled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="disabled_question_bank_items",
+    )
+    disabled_at = models.DateTimeField(null=True, blank=True)
+    disabled_reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -284,12 +326,121 @@ class QuestionBankItem(models.Model):
         indexes = [
             models.Index(fields=["school", "subject", "status", "updated_at"]),
             models.Index(fields=["school", "creator", "status"]),
+            models.Index(fields=["school", "library_scope", "status"]),
+            models.Index(fields=["school", "status", "submitted_for_review_at"]),
             models.Index(fields=["question_type", "difficulty"]),
         ]
         ordering = ["-updated_at", "-id"]
 
     def __str__(self) -> str:
         return self.stem[:48]
+
+
+class QuestionBankItemVersion(models.Model):
+    question = models.ForeignKey(
+        QuestionBankItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="versions",
+    )
+    original_question_id = models.PositiveBigIntegerField()
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="question_bank_item_versions",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="question_bank_item_versions",
+    )
+    creator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_question_bank_item_versions",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recorded_question_bank_item_versions",
+    )
+    version_no = models.PositiveIntegerField()
+    content_hash = models.CharField(max_length=64)
+    source = models.CharField(max_length=16, choices=QuestionBankItem.Source.choices)
+    status_snapshot = models.CharField(
+        max_length=24, choices=QuestionBankItem.Status.choices
+    )
+    stem = models.TextField()
+    question_type = models.CharField(
+        max_length=16, choices=QuestionBankItem.QuestionType.choices
+    )
+    options = models.JSONField(default=list, blank=True)
+    answer = models.JSONField(default=list, blank=True)
+    analysis = models.TextField(blank=True)
+    difficulty = models.CharField(
+        max_length=16, choices=QuestionBankItem.Difficulty.choices
+    )
+    knowledge_point = models.CharField(max_length=128, blank=True)
+    default_score = models.FloatField(default=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "original_question_id", "version_no"],
+                name="uniq_question_bank_item_version",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "original_question_id", "content_hash"],
+                name="uniq_question_bank_item_content_hash",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["school", "subject", "created_at"]),
+            models.Index(fields=["question", "version_no"]),
+            models.Index(fields=["content_hash"]),
+        ]
+        ordering = ["original_question_id", "version_no"]
+
+    def __str__(self) -> str:
+        return f"{self.original_question_id}@{self.version_no}"
+
+
+class QuestionBankItemLifecycleRecord(models.Model):
+    question = models.ForeignKey(
+        QuestionBankItem,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lifecycle_records",
+    )
+    original_question_id = models.PositiveBigIntegerField()
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="question_bank_lifecycle_records",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="question_bank_lifecycle_actions",
+    )
+    from_status = models.CharField(max_length=24, blank=True)
+    to_status = models.CharField(max_length=24, choices=QuestionBankItem.Status.choices)
+    action = models.CharField(max_length=32)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["school", "to_status", "created_at"]),
+            models.Index(fields=["question", "created_at"]),
+        ]
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.original_question_id}:{self.from_status}->{self.to_status}"
 
 
 class TestAssessment(models.Model):
@@ -359,6 +510,18 @@ class TestAssessmentQuestion(models.Model):
         null=True,
         blank=True,
         related_name="assessment_questions",
+    )
+    source_version = models.ForeignKey(
+        QuestionBankItemVersion,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="assessment_questions",
+    )
+    source_status = models.CharField(
+        max_length=24,
+        choices=QuestionBankItem.Status.choices,
+        default=QuestionBankItem.Status.ACTIVE,
     )
     question_type = models.CharField(
         max_length=16, choices=QuestionBankItem.QuestionType.choices

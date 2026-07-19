@@ -1370,14 +1370,15 @@ POST /api/v1/student/learning-pages/{id}/submit/
 
 ### 教师
 
-- `GET /api/v1/teacher/assessment-options/`：本校学科、本人任教班级、本人课程、题型和难度选项。
-- `GET|POST /api/v1/teacher/question-bank/`：查询学校共享题库或新增本人题目。查询支持 `scope=shared|mine`、`q`、`subject`、`question_type`、`difficulty`。
-- `PATCH|DELETE /api/v1/teacher/question-bank/{id}/`：维护本人题目。删除前必须先设置 `status=disabled`。
+- `GET /api/v1/teacher/assessment-options/`：本校学科、本人任教班级、本人课程、题型、难度、题目状态和题目来源选项。
+- `GET|POST /api/v1/teacher/question-bank/`：查询题库或新增本人题目。查询支持 `scope=shared|mine|compose`、`q`、`subject`、`question_type`、`difficulty`、`status`、`source`。`shared` 只返回 `library_scope=school` 的已启用题目；`mine` 返回当前教师全部题目；`compose` 返回校内已启用题目以及当前教师本人的个人可用题目和可试用题目。所有列表按更新时间、ID 倒序。
+- `PATCH|DELETE /api/v1/teacher/question-bank/{id}/`：维护本人题目。只有草稿可以修改；只有已停用题目可以删除。
+- `POST /api/v1/teacher/question-bank/{id}/action/`：教师题目操作。`action=submit_review|withdraw|disable|copy`，分别用于申请校内共享、撤回共享申请、停用本人题目和复制为新的个人题目。申请共享时 `library_scope` 改为 `school`；撤回后恢复为 `personal`。
 - `GET /api/v1/teacher/question-bank/template/`：下载离线 XLSX 导入模板。
-- `GET /api/v1/teacher/question-bank/export/`：导出学校共享题库 XLSX。
-- `POST /api/v1/teacher/question-bank/import/`：上传 XLSX 批量导入本人题目，单次最多 1000 道。
+- `GET /api/v1/teacher/question-bank/export/`：导出本人题目和本校已启用共享题目，不包含其他教师未共享的个人题目。
+- `POST /api/v1/teacher/question-bank/import/`：上传 XLSX 批量导入“我的题目”，单次最多 1000 道，导入后本人可直接组卷。
 - `POST /api/v1/teacher/question-bank/ai-generate/`：使用当前教师 DeepSeek 配置生成 1-20 道题目草稿。请求包含 `subject/direction/knowledge_point/question_type/difficulty/count/requirement`，不写数据库。
-- `POST /api/v1/teacher/question-bank/ai-confirm/`：提交教师选择并修改后的草稿，整批校验通过后写入学校共享题库。
+- `POST /api/v1/teacher/question-bank/ai-confirm/`：提交教师选择并修改后的草稿，整批校验通过后保存到“我的题目”，本人可直接组卷，不直接共享。
 - `GET|POST /api/v1/teacher/assessments/`：测试列表与创建。
 - `GET|PATCH|DELETE /api/v1/teacher/assessments/{id}/`：测试详情与草稿维护。
 - `PUT /api/v1/teacher/assessments/{id}/questions/`：保存题目顺序、分值、`randomize_question_order` 和 `randomize_option_order`，同时建立试卷快照。
@@ -1389,6 +1390,21 @@ POST /api/v1/student/learning-pages/{id}/submit/
 - `GET|PATCH /api/v1/teacher/test-attempts/{id}/grade/`：读取完整答卷或保存主观题评分；存在未评分简答题时拒绝结束批阅，整次评分事务回滚。
 - `GET|PATCH /api/v1/teacher/test-attempts/{id}/grade/`：查看答卷和保存人工评分。
 
+### 学校管理员题库审核
+
+- `GET /api/v1/school-admin/question-reviews/`：本校共享申请和已共享题目列表，只返回 `library_scope=school`，支持 `status/subject/source/q/page/page_size`，按更新时间、ID 倒序。
+- `GET /api/v1/school-admin/question-reviews/export/`：导出本校题目状态、版本、试用情况和审核说明 XLSX。
+- `GET /api/v1/school-admin/question-reviews/{id}/`：题目完整内容、真实使用统计、选项分布、版本记录和状态变化记录。
+- `POST /api/v1/school-admin/question-reviews/{id}/action/`：`action=approve_trial|return|activate|disable`。退回和停用必须填写 `note`；正式启用要求题目处于可试用状态且至少有 1 次真实试用作答。
+
+题目创建、XLSX 导入和 AI 确认均以 `personal + draft` 开始，此时教师本人可直接组卷。只有主动申请共享才进入以下流程：
+
+```text
+draft -> pending_review -> trial -> active -> disabled
+```
+
+退回会从 `pending_review/trial` 回到 `school + draft` 等待修改；教师可从 `pending_review` 撤回并恢复为个人题目。试卷快照保存 `source_version` 和 `source_status`，题目后续停用或删除不改变历史答卷。
+
 ### 学生
 
 - `GET /api/v1/student/assessments/`：当前班级测试列表。
@@ -1396,6 +1412,8 @@ POST /api/v1/student/learning-pages/{id}/submit/
 - `POST /api/v1/student/assessments/{id}/start/`：创建或继续唯一答卷；首次开始时按测试设置固化该学生的题目和选项顺序。
 - `PATCH /api/v1/student/assessments/{id}/answer/`：逐题暂存答案。
 - `POST /api/v1/student/assessments/{id}/submit/`：交卷、自动判分并写入学习事件。
+
+学生测试题目响应不返回 `source_question/source_version/source_status/library_scope`。这些字段只用于教师组卷、学校审核和历史追溯，不能作为学生端展示信息。
 
 测试详细设计见 `docs/assessment_module_design.md`。
 

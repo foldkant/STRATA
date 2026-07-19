@@ -303,6 +303,26 @@ urlpatterns = [
         views.school_admin_resource_reviews,
         name="api_school_admin_resource_review_detail",
     ),
+    path(
+        "school-admin/question-reviews/",
+        assessment_views.school_admin_question_reviews,
+        name="api_school_admin_question_reviews",
+    ),
+    path(
+        "school-admin/question-reviews/export/",
+        assessment_views.school_admin_question_reviews_export,
+        name="api_school_admin_question_reviews_export",
+    ),
+    path(
+        "school-admin/question-reviews/<int:pk>/",
+        assessment_views.school_admin_question_review_detail,
+        name="api_school_admin_question_review_detail",
+    ),
+    path(
+        "school-admin/question-reviews/<int:pk>/action/",
+        assessment_views.school_admin_question_review_action,
+        name="api_school_admin_question_review_action",
+    ),
     path("teacher/dashboard/", views.teacher_dashboard, name="api_teacher_dashboard"),
     path("teacher/classes/", views.teacher_classes, name="api_teacher_classes"),
     path(
@@ -396,6 +416,11 @@ urlpatterns = [
         "teacher/question-bank/<int:pk>/",
         assessment_views.teacher_question_bank_detail,
         name="api_teacher_question_bank_detail",
+    ),
+    path(
+        "teacher/question-bank/<int:pk>/action/",
+        assessment_views.teacher_question_bank_action,
+        name="api_teacher_question_bank_action",
     ),
     path(
         "teacher/assessments/",

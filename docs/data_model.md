@@ -271,11 +271,15 @@
 - 页面正文、交互脚本和表单答案均不复制到 `LearningEventV2`。区块行为采集失败不得阻断学生继续浏览或提交。
 ## 测试与题库
 
-- `QuestionBankItem`：学校共享题目。记录创建教师、学科、题型、选项、答案、解析、难度、知识点、默认分值、状态和使用次数。
+- `QuestionBankItem`：题目当前版本。`library_scope=personal|school` 区分“我的题目”和“校内共享”；同时记录创建教师、学科、题型、选项、答案、解析、难度、知识点、默认分值、来源、当前状态、当前版本号、内容哈希和审核/停用信息。状态为 `draft/pending_review/trial/active/disabled`。
+- `QuestionBankItemVersion`：不可修改的题目内容版本，保留原题编号、版本号、内容哈希、创建人、来源和创建时状态。教师修改草稿后创建新版本，旧版本不覆盖。
+- `QuestionBankItemLifecycleRecord`：题目状态变化记录，保存原状态、新状态、操作、处理人、时间和说明。
 - `TestAssessment`：教师创建的测试，关联学科、可选课程和多个任教班级，包含时长、时间窗口、运行状态和成绩显示策略。
-- `TestAssessmentQuestion`：试卷题目快照。保留题库来源但不依赖来源内容，历史试卷不受题库修改影响。
+- `TestAssessmentQuestion`：试卷题目快照。保存来源题目、来源版本和组卷时状态，但不依赖来源内容，历史试卷不受题库修改、停用或删除影响。
 - `TestAttempt`：学生唯一答卷，记录答题、提交、评分状态和客观/主观/总分。
 - `TestAttemptAnswer`：逐题答案、自动得分、人工得分、正确状态和教师评语。
+
+题目使用次数、作答人数、正确数、正确率、试用次数和试用正确率均由 `TestAssessmentQuestion` 与 `TestAttemptAnswer` 计算，不在题目表中维护递增计数。`personal + draft` 保存后创建教师即可组卷；`school + trial` 只有创建教师能试用；`school + active` 才对同校其他教师共享。学校管理员审核查询只读取 `library_scope=school`，不会读取未申请共享的个人题目。
 
 ## realtime 课堂聊天
 

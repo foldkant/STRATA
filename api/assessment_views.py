@@ -4,11 +4,12 @@ import random
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import Avg, Count, F, Q, Sum
+from django.core.paginator import Paginator
+from django.db.models import Avg, Count, Q, Sum
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 
-from api.permissions import IsStudent, IsTeacher
+from api.permissions import IsSchoolAdmin, IsStudent, IsTeacher
 from api.responses import fail, ok
 from api.services import ServiceError, generate_question_bank_drafts_with_ai
 from courses.models import Course, Subject
@@ -26,6 +27,11 @@ from learning_analytics.services.assessment_events import (
     record_assessment_item_submission,
     release_assessment_opportunities,
     withdraw_assessment_opportunities,
+)
+from learning.services.question_bank import (
+    create_question_items,
+    ensure_question_version,
+    transition_question,
 )
 from ops.xlsx import build_workbook, export_rows, read_table_rows, template_response, workbook_response
 from school.models import ClassGroup, StudentProfile, TeachingAssignment
@@ -132,7 +138,73 @@ def _clean_question_payload(data) -> dict:
     }
 
 
+def _question_queryset():
+    return QuestionBankItem.objects.select_related(
+        "school",
+        "subject",
+        "creator",
+        "reviewed_by",
+        "disabled_by",
+    ).annotate(
+        assessment_use_count=Count("assessment_questions", distinct=True),
+        response_count=Count(
+            "assessment_questions__attempt_answers",
+            distinct=True,
+        ),
+        correct_count=Count(
+            "assessment_questions__attempt_answers",
+            filter=Q(assessment_questions__attempt_answers__is_correct=True),
+            distinct=True,
+        ),
+        trial_use_count=Count(
+            "assessment_questions",
+            filter=Q(assessment_questions__source_status=QuestionBankItem.Status.TRIAL),
+            distinct=True,
+        ),
+        trial_response_count=Count(
+            "assessment_questions__attempt_answers",
+            filter=Q(
+                assessment_questions__source_status=QuestionBankItem.Status.TRIAL
+            ),
+            distinct=True,
+        ),
+        trial_correct_count=Count(
+            "assessment_questions__attempt_answers",
+            filter=Q(
+                assessment_questions__source_status=QuestionBankItem.Status.TRIAL,
+                assessment_questions__attempt_answers__is_correct=True,
+            ),
+            distinct=True,
+        ),
+    )
+
+
+def _question_stats(question: QuestionBankItem) -> dict:
+    response_count = int(getattr(question, "response_count", 0) or 0)
+    correct_count = int(getattr(question, "correct_count", 0) or 0)
+    trial_response_count = int(getattr(question, "trial_response_count", 0) or 0)
+    trial_correct_count = int(getattr(question, "trial_correct_count", 0) or 0)
+    return {
+        "usage_count": int(getattr(question, "assessment_use_count", 0) or 0),
+        "response_count": response_count,
+        "correct_count": correct_count,
+        "correct_rate": round(correct_count * 100 / response_count, 2)
+        if response_count
+        else None,
+        "trial_usage_count": int(getattr(question, "trial_use_count", 0) or 0),
+        "trial_response_count": trial_response_count,
+        "trial_correct_count": trial_correct_count,
+        "trial_correct_rate": round(
+            trial_correct_count * 100 / trial_response_count,
+            2,
+        )
+        if trial_response_count
+        else None,
+    }
+
+
 def question_row(question: QuestionBankItem, *, include_answer: bool = True) -> dict:
+    stats = _question_stats(question)
     row = {
         "id": question.id,
         "subject": _subject_row(question.subject),
@@ -147,13 +219,78 @@ def question_row(question: QuestionBankItem, *, include_answer: bool = True) -> 
         "default_score": question.default_score,
         "status": question.status,
         "status_label": question.get_status_display(),
-        "usage_count": question.usage_count,
+        "source": question.source,
+        "source_label": question.get_source_display(),
+        "library_scope": question.library_scope,
+        "library_scope_label": question.get_library_scope_display(),
+        "version_no": question.version_no,
+        "content_hash": question.content_hash,
+        "submitted_for_review_at": question.submitted_for_review_at,
+        "reviewed_by": _user_row(question.reviewed_by)
+        if question.reviewed_by_id
+        else None,
+        "reviewed_at": question.reviewed_at,
+        "review_note": question.review_note,
+        "disabled_by": _user_row(question.disabled_by)
+        if question.disabled_by_id
+        else None,
+        "disabled_at": question.disabled_at,
+        "disabled_reason": question.disabled_reason,
+        **stats,
         "is_owner": False,
         "created_at": question.created_at,
         "updated_at": question.updated_at,
     }
     if include_answer:
         row.update({"answer": question.answer, "analysis": question.analysis})
+    return row
+
+
+def _question_detail_row(question: QuestionBankItem) -> dict:
+    row = question_row(question)
+    row["versions"] = [
+        {
+            "id": version.id,
+            "version_no": version.version_no,
+            "content_hash": version.content_hash,
+            "source": version.source,
+            "source_label": version.get_source_display(),
+            "status_snapshot": version.status_snapshot,
+            "status_snapshot_label": version.get_status_snapshot_display(),
+            "created_by": _user_row(version.created_by),
+            "created_at": version.created_at,
+        }
+        for version in question.versions.select_related("created_by").order_by(
+            "-version_no"
+        )
+    ]
+    row["lifecycle"] = [
+        {
+            "id": record.id,
+            "from_status": record.from_status,
+            "to_status": record.to_status,
+            "to_status_label": record.get_to_status_display(),
+            "action": record.action,
+            "note": record.note,
+            "actor": _user_row(record.actor),
+            "created_at": record.created_at,
+        }
+        for record in question.lifecycle_records.select_related("actor").all()[:50]
+    ]
+    option_counts: dict[str, int] = {}
+    answers = TestAttemptAnswer.objects.filter(
+        question__source_question=question
+    ).values_list("answer", flat=True)
+    for answer in answers.iterator(chunk_size=500):
+        values = answer if isinstance(answer, list) else []
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                option_counts[text] = option_counts.get(text, 0) + 1
+    row["option_distribution"] = [
+        {"option": option, "count": option_counts.get(option, 0)}
+        for option in question.options
+    ]
     return row
 
 
@@ -166,15 +303,15 @@ QUESTION_DIFFICULTY_IMPORT = {label: value for value, label in QuestionBankItem.
 @permission_classes([IsTeacher])
 def teacher_question_bank_template(request):
     return template_response(
-        "共享题库批量导入模板.xlsx",
-        "共享题库",
+        "我的题目批量导入模板.xlsx",
+        "我的题目",
         QUESTION_IMPORT_HEADERS,
         [["IT", "单选", "十进制 2 的二进制表示是？", "10|11|01|00", "10", "基础", "二进制编码", "2", "2 对应二进制 10"]],
         instructions=[
             "学科编号必须使用学校管理员设置的学科编号。",
             "单选、多选、判断题的选项使用英文竖线 | 分隔；多选参考答案也使用 | 分隔。",
             "判断题选项可留空，系统自动使用“正确|错误”；简答题参考答案可留空。",
-            "导入的题目进入学校共享题库，其他教师可查看并组卷，但只能由导入教师维护。",
+            "导入成功后题目保存到“我的题目”，教师本人可直接组卷；需要校内共享时再申请审核。",
         ],
         dropdowns={
             "题型": [label for _, label in QuestionBankItem.QuestionType.choices],
@@ -186,13 +323,19 @@ def teacher_question_bank_template(request):
 @api_view(["GET"])
 @permission_classes([IsTeacher])
 def teacher_question_bank_export(request):
-    questions = QuestionBankItem.objects.filter(school=request.user.school).select_related("subject", "creator")
+    questions = _question_queryset().filter(school=request.user.school).filter(
+        Q(creator=request.user)
+        | Q(
+            library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+            status=QuestionBankItem.Status.ACTIVE,
+        )
+    )
     return export_rows(
-        f"{request.user.school.code}_学校共享题库_{timezone.localtime():%Y%m%d%H%M%S}.xlsx",
-        "共享题库",
-        ["ID", "学科", "学科编号", "题型", "题干", "选项", "参考答案", "难度", "知识点", "默认分值", "答案解析", "创建教师", "状态", "使用次数", "更新时间"],
+        f"{request.user.school.code}_题库导出_{timezone.localtime():%Y%m%d%H%M%S}.xlsx",
+        "题库导出",
+        ["ID", "学科", "学科编号", "题型", "题干", "选项", "参考答案", "难度", "知识点", "默认分值", "答案解析", "创建教师", "来源", "题库范围", "状态", "版本", "试卷使用次数", "作答人数", "正确率", "审核说明", "更新时间"],
         [
-            [item.id, item.subject.name, item.subject.code, item.get_question_type_display(), item.stem, "|".join(item.options or []), "|".join(item.answer or []), item.get_difficulty_display(), item.knowledge_point, item.default_score, item.analysis, item.creator.display_name or item.creator.username, item.get_status_display(), item.usage_count, item.updated_at]
+            [item.id, item.subject.name, item.subject.code, item.get_question_type_display(), item.stem, "|".join(item.options or []), "|".join(item.answer or []), item.get_difficulty_display(), item.knowledge_point, item.default_score, item.analysis, item.creator.display_name or item.creator.username, item.get_source_display(), item.get_library_scope_display(), item.get_status_display(), item.version_no, item.assessment_use_count, item.response_count, round(item.correct_count * 100 / item.response_count, 2) if item.response_count else "", item.review_note or item.disabled_reason, item.updated_at]
             for item in questions
         ],
     )
@@ -235,18 +378,35 @@ def teacher_question_bank_import(request):
                 "knowledge_point": row.get("知识点"),
                 "default_score": row.get("默认分值") or 2,
             })
-            created.append(QuestionBankItem(school=request.user.school, subject=subject, creator=request.user, **payload))
+            created.append(
+                QuestionBankItem(
+                    school=request.user.school,
+                    subject=subject,
+                    creator=request.user,
+                    source=QuestionBankItem.Source.XLSX,
+                    status=QuestionBankItem.Status.DRAFT,
+                    **payload,
+                )
+            )
         except AssessmentError as exc:
             row_errors.append({"row": row_number, "message": exc.message})
     if created:
-        QuestionBankItem.objects.bulk_create(created)
-    return ok({"created": len(created), "failed": len(row_errors), "errors": row_errors[:100]}, f"题库导入完成：成功 {len(created)} 道，失败 {len(row_errors)} 道。")
+        create_question_items(created, actor=request.user)
+    return ok(
+        {"created": len(created), "failed": len(row_errors), "errors": row_errors[:100]},
+        f"题库导入完成：已保存到“我的题目” {len(created)} 道，失败 {len(row_errors)} 道。",
+    )
 
 
-def assessment_question_row(question: TestAssessmentQuestion, *, include_answer: bool, options=None) -> dict:
+def assessment_question_row(
+    question: TestAssessmentQuestion,
+    *,
+    include_answer: bool,
+    options=None,
+    include_source_metadata: bool = True,
+) -> dict:
     row = {
         "id": question.id,
-        "source_question": question.source_question_id,
         "question_type": question.question_type,
         "question_type_label": question.get_question_type_display(),
         "stem": question.stem,
@@ -255,6 +415,14 @@ def assessment_question_row(question: TestAssessmentQuestion, *, include_answer:
         "score": question.score,
         "sort_order": question.sort_order,
     }
+    if include_source_metadata:
+        row.update(
+            {
+                "source_question": question.source_question_id,
+                "source_version": question.source_version_id,
+                "source_status": question.source_status,
+            }
+        )
     if include_answer:
         row.update({"answer": question.answer, "analysis": question.analysis})
     return row
@@ -330,6 +498,8 @@ def teacher_assessment_options(request):
         "courses": [{**_course_row(item), "subject": item.subject_id} for item in courses],
         "question_types": [{"value": value, "label": label} for value, label in QuestionBankItem.QuestionType.choices],
         "difficulties": [{"value": value, "label": label} for value, label in QuestionBankItem.Difficulty.choices],
+        "question_statuses": [{"value": value, "label": label} for value, label in QuestionBankItem.Status.choices],
+        "question_sources": [{"value": value, "label": label} for value, label in QuestionBankItem.Source.choices],
     })
 
 
@@ -342,24 +512,58 @@ def teacher_question_bank(request):
             if subject is None:
                 raise AssessmentError("请选择本校有效学科。", errors={"subject": ["学科不存在或已停用。"]})
             payload = _clean_question_payload(request.data)
-            question = QuestionBankItem.objects.create(
-                school=request.user.school, subject=subject, creator=request.user, **payload
-            )
+            question = create_question_items(
+                [
+                    QuestionBankItem(
+                        school=request.user.school,
+                        subject=subject,
+                        creator=request.user,
+                        source=QuestionBankItem.Source.MANUAL,
+                        status=QuestionBankItem.Status.DRAFT,
+                        **payload,
+                    )
+                ],
+                actor=request.user,
+            )[0]
+            question = _question_queryset().get(pk=question.pk)
             row = question_row(question)
             row["is_owner"] = True
-            return ok(row, "题目已加入学校共享题库。", status=201)
+            return ok(
+                row,
+                "题目已保存到“我的题目”，可直接用于本人组卷。",
+                status=201,
+            )
         except AssessmentError as exc:
             return _error(exc)
 
-    queryset = QuestionBankItem.objects.filter(school=request.user.school).select_related("subject", "creator")
+    queryset = _question_queryset().filter(school=request.user.school)
     scope = str(request.query_params.get("scope") or "shared")
     if scope == "mine":
         queryset = queryset.filter(creator=request.user)
+    elif scope == "compose":
+        queryset = queryset.filter(
+            Q(
+                library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+                status=QuestionBankItem.Status.ACTIVE,
+            )
+            | Q(
+                status__in={
+                    QuestionBankItem.Status.DRAFT,
+                    QuestionBankItem.Status.TRIAL,
+                },
+                creator=request.user,
+            )
+        )
     else:
-        queryset = queryset.filter(Q(status=QuestionBankItem.Status.ACTIVE) | Q(creator=request.user))
+        queryset = queryset.filter(
+            library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+            status=QuestionBankItem.Status.ACTIVE,
+        )
     subject_id = request.query_params.get("subject")
     question_type = request.query_params.get("question_type")
     difficulty = request.query_params.get("difficulty")
+    status_filter = str(request.query_params.get("status") or "").strip()
+    source_filter = str(request.query_params.get("source") or "").strip()
     query = str(request.query_params.get("q") or "").strip()
     if subject_id:
         queryset = queryset.filter(subject_id=subject_id)
@@ -367,10 +571,14 @@ def teacher_question_bank(request):
         queryset = queryset.filter(question_type=question_type)
     if difficulty:
         queryset = queryset.filter(difficulty=difficulty)
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    if source_filter:
+        queryset = queryset.filter(source=source_filter)
     if query:
         queryset = queryset.filter(Q(stem__icontains=query) | Q(knowledge_point__icontains=query))
     rows = []
-    for question in queryset[:500]:
+    for question in queryset.order_by("-updated_at", "-id")[:500]:
         row = question_row(question)
         row["is_owner"] = question.creator_id == request.user.id
         rows.append(row)
@@ -419,22 +627,40 @@ def teacher_question_bank_ai_confirm(request):
             status=400,
         )
     with transaction.atomic():
-        created = QuestionBankItem.objects.bulk_create([
-            QuestionBankItem(school=request.user.school, subject=subject, creator=request.user, **payload)
-            for payload in cleaned
-        ])
+        created = create_question_items(
+            [
+                QuestionBankItem(
+                    school=request.user.school,
+                    subject=subject,
+                    creator=request.user,
+                    source=QuestionBankItem.Source.AI,
+                    status=QuestionBankItem.Status.DRAFT,
+                    **payload,
+                )
+                for payload in cleaned
+            ],
+            actor=request.user,
+        )
     rows = []
-    for question in QuestionBankItem.objects.filter(pk__in=[item.pk for item in created]).select_related("subject", "creator"):
+    for question in _question_queryset().filter(pk__in=[item.pk for item in created]):
         row = question_row(question)
         row["is_owner"] = True
         rows.append(row)
-    return ok({"created_count": len(rows), "questions": rows}, f"已将 {len(rows)} 道 AI 题目加入学校共享题库。", status=201)
+    return ok(
+        {"created_count": len(rows), "questions": rows},
+        f"已保存 {len(rows)} 道 AI 题目到“我的题目”，可直接用于本人组卷。",
+        status=201,
+    )
 
 
 @api_view(["PATCH", "DELETE"])
 @permission_classes([IsTeacher])
 def teacher_question_bank_detail(request, pk):
-    question = QuestionBankItem.objects.filter(pk=pk, school=request.user.school, creator=request.user).select_related("subject", "creator").first()
+    question = _question_queryset().filter(
+        pk=pk,
+        school=request.user.school,
+        creator=request.user,
+    ).first()
     if question is None:
         return fail("只能维护本人创建的题目。", status=404)
     try:
@@ -443,26 +669,294 @@ def teacher_question_bank_detail(request, pk):
                 raise AssessmentError("请先停用题目，再执行删除。")
             question.delete()
             return ok({}, "题目已删除；已生成试卷仍保留题目快照。")
-        if "status" in request.data and set(request.data.keys()).issubset({"status"}):
-            status_value = str(request.data.get("status") or "")
-            if status_value not in {QuestionBankItem.Status.ACTIVE, QuestionBankItem.Status.DISABLED}:
-                raise AssessmentError("题目状态不正确。")
-            question.status = status_value
-            question.save(update_fields=["status", "updated_at"])
-        else:
-            subject = Subject.objects.filter(pk=request.data.get("subject"), school=request.user.school, is_active=True).first()
-            if subject is None:
-                raise AssessmentError("请选择本校有效学科。", errors={"subject": ["学科不存在或已停用。"]})
-            payload = _clean_question_payload(request.data)
-            for field, value in payload.items():
-                setattr(question, field, value)
-            question.subject = subject
-            question.save()
+        if question.status != QuestionBankItem.Status.DRAFT:
+            raise AssessmentError("只有个人可用或已退回的题目可以修改；其他题目请复制为新的个人题目。")
+        subject = Subject.objects.filter(
+            pk=request.data.get("subject"),
+            school=request.user.school,
+            is_active=True,
+        ).first()
+        if subject is None:
+            raise AssessmentError(
+                "请选择本校有效学科。",
+                errors={"subject": ["学科不存在或已停用。"]},
+            )
+        payload = _clean_question_payload(request.data)
+        for field, value in payload.items():
+            setattr(question, field, value)
+        question.subject = subject
+        question.save()
+        ensure_question_version(question, actor=request.user)
+        question = _question_queryset().get(pk=question.pk)
         row = question_row(question)
         row["is_owner"] = True
-        return ok(row, "题目已更新。")
+        return ok(row, "个人题目已更新并保留新版本。")
     except AssessmentError as exc:
         return _error(exc)
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_question_bank_action(request, pk):
+    question = _question_queryset().filter(
+        pk=pk,
+        school=request.user.school,
+        creator=request.user,
+    ).first()
+    if question is None:
+        return fail("只能维护本人创建的题目。", status=404)
+    action = str(request.data.get("action") or "").strip()
+    note = str(request.data.get("note") or "").strip()[:1000]
+    try:
+        if action == "submit_review":
+            if question.status != QuestionBankItem.Status.DRAFT:
+                raise AssessmentError("只有个人可用或已退回的题目可以申请共享。")
+            ensure_question_version(question, actor=request.user)
+            transition_question(
+                question,
+                actor=request.user,
+                to_status=QuestionBankItem.Status.PENDING_REVIEW,
+                action=action,
+                library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+            )
+            message = "校内共享申请已提交学校管理员审核。"
+        elif action == "withdraw":
+            if question.status != QuestionBankItem.Status.PENDING_REVIEW:
+                raise AssessmentError("只有待审核题目可以撤回。")
+            transition_question(
+                question,
+                actor=request.user,
+                to_status=QuestionBankItem.Status.DRAFT,
+                action=action,
+                library_scope=QuestionBankItem.LibraryScope.PERSONAL,
+            )
+            message = "共享申请已撤回，题目继续作为个人题目使用。"
+        elif action == "disable":
+            if question.status != QuestionBankItem.Status.DRAFT:
+                raise AssessmentError("教师只能停用个人可用或已退回的题目。")
+            transition_question(
+                question,
+                actor=request.user,
+                to_status=QuestionBankItem.Status.DISABLED,
+                action=action,
+                note=note or "教师停止使用草稿",
+            )
+            message = "个人题目已停用，可以删除。"
+        elif action == "copy":
+            copied = create_question_items(
+                [
+                    QuestionBankItem(
+                        school=question.school,
+                        subject=question.subject,
+                        creator=request.user,
+                        stem=question.stem,
+                        question_type=question.question_type,
+                        options=question.options,
+                        answer=question.answer,
+                        analysis=question.analysis,
+                        difficulty=question.difficulty,
+                        knowledge_point=question.knowledge_point,
+                        default_score=question.default_score,
+                        status=QuestionBankItem.Status.DRAFT,
+                        source=QuestionBankItem.Source.COPY,
+                        library_scope=QuestionBankItem.LibraryScope.PERSONAL,
+                    )
+                ],
+                actor=request.user,
+            )[0]
+            copied = _question_queryset().get(pk=copied.pk)
+            row = question_row(copied)
+            row["is_owner"] = True
+            return ok(row, "题目已复制为新的个人题目。", status=201)
+        else:
+            raise AssessmentError("题目操作不正确。")
+        question = _question_queryset().get(pk=question.pk)
+        row = question_row(question)
+        row["is_owner"] = True
+        return ok(row, message)
+    except AssessmentError as exc:
+        return _error(exc)
+
+
+def _school_admin_question(user, pk) -> QuestionBankItem:
+    question = _question_queryset().filter(
+        pk=pk,
+        school=user.school,
+        library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+    ).first()
+    if question is None:
+        raise AssessmentError("题目不存在或不属于本校。", status=404)
+    return question
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_question_reviews(request):
+    queryset = _question_queryset().filter(
+        school=request.user.school,
+        library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+    )
+    status_filter = str(request.query_params.get("status") or "").strip()
+    subject_id = request.query_params.get("subject")
+    source_filter = str(request.query_params.get("source") or "").strip()
+    query = str(request.query_params.get("q") or "").strip()
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    if subject_id:
+        queryset = queryset.filter(subject_id=subject_id)
+    if source_filter:
+        queryset = queryset.filter(source=source_filter)
+    if query:
+        queryset = queryset.filter(
+            Q(stem__icontains=query)
+            | Q(knowledge_point__icontains=query)
+            | Q(creator__display_name__icontains=query)
+            | Q(creator__username__icontains=query)
+        )
+    try:
+        page_size = min(max(int(request.query_params.get("page_size") or 30), 1), 100)
+        page_number = max(int(request.query_params.get("page") or 1), 1)
+    except (TypeError, ValueError):
+        page_size = 30
+        page_number = 1
+    page = Paginator(
+        queryset.order_by("-updated_at", "-id"),
+        page_size,
+    ).get_page(page_number)
+    return ok(
+        {
+            "count": page.paginator.count,
+            "page": page.number,
+            "page_size": page_size,
+            "results": [question_row(question) for question in page.object_list],
+        }
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_question_review_detail(request, pk):
+    try:
+        return ok(_question_detail_row(_school_admin_question(request.user, pk)))
+    except AssessmentError as exc:
+        return _error(exc)
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_question_review_action(request, pk):
+    try:
+        question = _school_admin_question(request.user, pk)
+        action = str(request.data.get("action") or "").strip()
+        note = str(request.data.get("note") or "").strip()[:1000]
+        if action == "approve_trial":
+            if question.status != QuestionBankItem.Status.PENDING_REVIEW:
+                raise AssessmentError("只有待审核题目可以通过为可试用。")
+            transition_question(
+                question,
+                actor=request.user,
+                to_status=QuestionBankItem.Status.TRIAL,
+                action=action,
+                note=note,
+            )
+            message = "题目已通过审核，可由创建教师试用。"
+        elif action == "return":
+            if question.status not in {
+                QuestionBankItem.Status.PENDING_REVIEW,
+                QuestionBankItem.Status.TRIAL,
+            }:
+                raise AssessmentError("当前题目不能退回修改。")
+            if not note:
+                raise AssessmentError("退回时需要填写修改说明。", errors={"note": ["请填写退回原因。"]})
+            transition_question(
+                question,
+                actor=request.user,
+                to_status=QuestionBankItem.Status.DRAFT,
+                action=action,
+                note=note,
+            )
+            message = "题目已退回教师修改。"
+        elif action == "activate":
+            if question.status != QuestionBankItem.Status.TRIAL:
+                raise AssessmentError("只有可试用题目可以正式启用。")
+            if int(getattr(question, "trial_response_count", 0) or 0) < 1:
+                raise AssessmentError("题目尚无试用作答，不能正式启用。")
+            transition_question(
+                question,
+                actor=request.user,
+                to_status=QuestionBankItem.Status.ACTIVE,
+                action=action,
+                note=note,
+            )
+            message = "题目已正式启用并进入学校共享题库。"
+        elif action == "disable":
+            if question.status == QuestionBankItem.Status.DISABLED:
+                raise AssessmentError("题目已经停用。")
+            if not note:
+                raise AssessmentError("停用时需要填写原因。", errors={"note": ["请填写停用原因。"]})
+            transition_question(
+                question,
+                actor=request.user,
+                to_status=QuestionBankItem.Status.DISABLED,
+                action=action,
+                note=note,
+            )
+            message = "题目已停用；历史试卷和答卷不受影响。"
+        else:
+            raise AssessmentError("审核操作不正确。")
+        return ok(_question_detail_row(_school_admin_question(request.user, pk)), message)
+    except AssessmentError as exc:
+        return _error(exc)
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def school_admin_question_reviews_export(request):
+    questions = _question_queryset().filter(
+        school=request.user.school,
+        library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+    )
+    return export_rows(
+        f"{request.user.school.code}_题库审核_{timezone.localtime():%Y%m%d%H%M%S}.xlsx",
+        "题库审核",
+        [
+            "ID",
+            "学科",
+            "题型",
+            "题干",
+            "创建教师",
+            "来源",
+            "状态",
+            "版本",
+            "试卷使用次数",
+            "试用作答人数",
+            "试用正确率",
+            "审核说明",
+            "提交审核时间",
+            "更新时间",
+        ],
+        [
+            [
+                item.id,
+                item.subject.name,
+                item.get_question_type_display(),
+                item.stem,
+                item.creator.display_name or item.creator.username,
+                item.get_source_display(),
+                item.get_status_display(),
+                item.version_no,
+                item.assessment_use_count,
+                item.trial_response_count,
+                round(item.trial_correct_count * 100 / item.trial_response_count, 2)
+                if item.trial_response_count
+                else "",
+                item.review_note or item.disabled_reason,
+                item.submitted_for_review_at,
+                item.updated_at,
+            ]
+            for item in questions.order_by("-updated_at", "-id")
+        ],
+    )
 
 
 def _clean_assessment_payload(user, data, assessment=None) -> tuple[dict, list[ClassGroup]]:
@@ -582,11 +1076,25 @@ def teacher_assessment_questions(request, pk):
         source_map = {
             item.id: item
             for item in QuestionBankItem.objects.filter(
-                id__in=question_ids, school=request.user.school, subject=assessment.subject, status=QuestionBankItem.Status.ACTIVE
+                id__in=question_ids,
+                school=request.user.school,
+                subject=assessment.subject,
+            ).filter(
+                Q(
+                    library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+                    status=QuestionBankItem.Status.ACTIVE,
+                )
+                | Q(
+                    status__in={
+                        QuestionBankItem.Status.DRAFT,
+                        QuestionBankItem.Status.TRIAL,
+                    },
+                    creator=request.user,
+                )
             )
         }
         if len(source_map) != len(set(question_ids)):
-            raise AssessmentError("部分题目不存在、已停用或学科不匹配。")
+            raise AssessmentError("部分题目未启用、不是本人可试用题目或学科不匹配。")
         snapshots = []
         total_score = 0.0
         for index, raw_item in enumerate(raw_items, start=1):
@@ -600,9 +1108,12 @@ def teacher_assessment_questions(request, pk):
             if score <= 0 or score > 100:
                 raise AssessmentError(f"第 {index} 题分值不正确。")
             total_score += score
+            source_version = ensure_question_version(source, actor=source.creator)
             snapshots.append(TestAssessmentQuestion(
                 assessment=assessment,
                 source_question=source,
+                source_version=source_version,
+                source_status=source.status,
                 question_type=source.question_type,
                 stem=source.stem,
                 options=source.options,
@@ -620,7 +1131,6 @@ def teacher_assessment_questions(request, pk):
             assessment.randomize_question_order = bool(request.data.get("randomize_question_order", False))
             assessment.randomize_option_order = bool(request.data.get("randomize_option_order", False))
             assessment.save(update_fields=["randomize_question_order", "randomize_option_order", "updated_at"])
-            QuestionBankItem.objects.filter(id__in=question_ids).update(usage_count=F("usage_count") + 1)
         assessment = _teacher_assessment(request.user, pk)
         return ok(assessment_row(assessment, detail=True), "试卷题目已保存。")
     except AssessmentError as exc:
@@ -991,6 +1501,7 @@ def _attempt_questions(attempt: TestAttempt) -> list[dict]:
                 question,
                 include_answer=False,
                 options=attempt.option_orders.get(str(question.id), question.options),
+                include_source_metadata=False,
             )
         )
     return rows

@@ -126,7 +126,13 @@ async function openEdit(row: TestAssessment) {
           stem: question.stem, question_type: question.question_type, question_type_label: question.question_type_label,
           options: question.options, answer: question.answer || [], analysis: question.analysis || '', difficulty: 'normal',
           difficulty_label: '快照', knowledge_point: question.knowledge_point, default_score: question.score,
-          status: 'active', status_label: '启用', usage_count: 0, is_owner: false, created_at: '', updated_at: ''
+          status: 'active', status_label: '启用', source: 'existing', source_label: '试卷快照',
+          library_scope: 'school', library_scope_label: '校内共享',
+          version_no: 1, content_hash: '', usage_count: 0, response_count: 0, correct_count: 0,
+          correct_rate: null, trial_usage_count: 0, trial_response_count: 0, trial_correct_count: 0,
+          trial_correct_rate: null, submitted_for_review_at: null, reviewed_by: null, reviewed_at: null,
+          review_note: '', disabled_by: null, disabled_at: null, disabled_reason: '',
+          is_owner: false, created_at: '', updated_at: ''
         }, score: question.score
       }
     })
@@ -174,7 +180,7 @@ async function saveInfoAndCompose() {
 }
 
 async function loadBank(subjectId: number) {
-  bankRows.value = await getQuestionBank({ subject: subjectId, scope: 'shared' })
+  bankRows.value = await getQuestionBank({ subject: subjectId, scope: 'compose' })
 }
 
 function inPaper(id: number) {

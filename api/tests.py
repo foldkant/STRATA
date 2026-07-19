@@ -178,6 +178,13 @@ class AssessmentWorkflowTests(TestCase):
         self.teacher2 = User.objects.create_user(
             username="teacher2", password="Teacher123!", role=User.Role.TEACHER, school=self.school, display_name="教师二"
         )
+        self.school_admin = User.objects.create_user(
+            username="school_admin1",
+            password="Admin123!",
+            role=User.Role.SCHOOL_ADMIN,
+            school=self.school,
+            display_name="学校管理员",
+        )
         TeachingAssignment.objects.create(school=self.school, class_group=self.class_group, teacher=self.teacher)
         TeachingAssignment.objects.create(school=self.school, class_group=self.class_group, teacher=self.teacher2)
         self.student = User.objects.create_user(
@@ -209,14 +216,55 @@ class AssessmentWorkflowTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         question_id = response.data["data"]["id"]
+        self.assertEqual(response.data["data"]["status"], QuestionBankItem.Status.DRAFT)
+        self.assertEqual(
+            response.data["data"]["library_scope"],
+            QuestionBankItem.LibraryScope.PERSONAL,
+        )
+        question = QuestionBankItem.objects.get(pk=question_id)
+        self.assertEqual(question.versions.count(), 1)
 
         self.client.force_authenticate(self.teacher2)
         response = self.client.get("/api/v1/teacher/question-bank/")
         self.assertEqual(response.status_code, 200)
-        shared = next(item for item in response.data["data"] if item["id"] == question_id)
-        self.assertFalse(shared["is_owner"])
+        self.assertFalse(any(item["id"] == question_id for item in response.data["data"]))
+
+        self.client.force_authenticate(self.school_admin)
+        response = self.client.get("/api/v1/school-admin/question-reviews/")
+        self.assertFalse(
+            any(item["id"] == question_id for item in response.data["data"]["results"])
+        )
 
         self.client.force_authenticate(self.teacher)
+        compose = self.client.get("/api/v1/teacher/question-bank/?scope=compose")
+        self.assertTrue(any(item["id"] == question_id for item in compose.data["data"]))
+        response = self.client.post(
+            f"/api/v1/teacher/question-bank/{question_id}/action/",
+            {"action": "submit_review"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["status"], QuestionBankItem.Status.PENDING_REVIEW)
+        self.assertEqual(
+            response.data["data"]["library_scope"],
+            QuestionBankItem.LibraryScope.SCHOOL,
+        )
+
+        self.client.force_authenticate(self.school_admin)
+        review_list = self.client.get("/api/v1/school-admin/question-reviews/?status=pending_review")
+        self.assertEqual(review_list.status_code, 200)
+        self.assertTrue(any(item["id"] == question_id for item in review_list.data["data"]["results"]))
+        response = self.client.post(
+            f"/api/v1/school-admin/question-reviews/{question_id}/action/",
+            {"action": "approve_trial"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["status"], QuestionBankItem.Status.TRIAL)
+
+        self.client.force_authenticate(self.teacher)
+        compose = self.client.get("/api/v1/teacher/question-bank/?scope=compose")
+        self.assertTrue(any(item["id"] == question_id for item in compose.data["data"]))
         response = self.client.post(
             "/api/v1/teacher/assessments/",
             {
@@ -257,7 +305,12 @@ class AssessmentWorkflowTests(TestCase):
         self.client.force_authenticate(self.student)
         response = self.client.post(f"/api/v1/student/assessments/{assessment_id}/start/")
         self.assertEqual(response.status_code, 200)
-        assessment_question_id = self.client.get(f"/api/v1/student/assessments/{assessment_id}/").data["data"]["questions"][0]["id"]
+        student_detail = self.client.get(f"/api/v1/student/assessments/{assessment_id}/")
+        student_question = student_detail.data["data"]["questions"][0]
+        self.assertNotIn("source_question", student_question)
+        self.assertNotIn("source_version", student_question)
+        self.assertNotIn("source_status", student_question)
+        assessment_question_id = student_question["id"]
         response = self.client.patch(
             f"/api/v1/student/assessments/{assessment_id}/answer/",
             {"question_id": assessment_question_id, "answer": ["10"]},
@@ -282,6 +335,20 @@ class AssessmentWorkflowTests(TestCase):
         self.assertIsNone(result_fact.grader)
         self.assertEqual(result_fact.source_event.legacy_event.actor, self.student)
 
+        self.client.force_authenticate(self.school_admin)
+        response = self.client.post(
+            f"/api/v1/school-admin/question-reviews/{question_id}/action/",
+            {"action": "activate"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["status"], QuestionBankItem.Status.ACTIVE)
+
+        self.client.force_authenticate(self.teacher2)
+        response = self.client.get("/api/v1/teacher/question-bank/")
+        shared = next(item for item in response.data["data"] if item["id"] == question_id)
+        self.assertFalse(shared["is_owner"])
+
         self.client.force_authenticate(self.teacher)
         dashboard_response = self.client.get("/api/v1/teacher/assessments/")
         self.assertEqual(dashboard_response.status_code, 200)
@@ -290,7 +357,8 @@ class AssessmentWorkflowTests(TestCase):
     def test_teacher_close_auto_submits_in_progress_attempt(self):
         question = QuestionBankItem.objects.create(
             school=self.school, subject=self.subject, creator=self.teacher, stem="1+1=?", question_type="single",
-            options=["1", "2"], answer=["2"], default_score=2,
+            options=["1", "2"], answer=["2"], default_score=2, status=QuestionBankItem.Status.ACTIVE,
+            library_scope=QuestionBankItem.LibraryScope.SCHOOL,
         )
         self.client.force_authenticate(self.teacher)
         assessment = self.client.post(
@@ -329,6 +397,124 @@ class AssessmentWorkflowTests(TestCase):
             400,
         )
 
+    def test_personal_question_can_be_used_without_school_review(self):
+        self.client.force_authenticate(self.teacher)
+        question = self.client.post(
+            "/api/v1/teacher/question-bank/",
+            {
+                "subject": self.subject.id,
+                "stem": "本人直接使用的个人题目",
+                "question_type": "judge",
+                "options": ["正确", "错误"],
+                "answer": ["正确"],
+                "analysis": "个人题目无需共享审核。",
+                "difficulty": "normal",
+                "knowledge_point": "个人题库",
+                "default_score": 2,
+            },
+            format="json",
+        ).data["data"]
+        assessment = self.client.post(
+            "/api/v1/teacher/assessments/",
+            {
+                "title": "个人题目组卷测试",
+                "subject": self.subject.id,
+                "course": "",
+                "class_ids": [self.class_group.id],
+                "instruction": "",
+                "duration_minutes": 30,
+                "start_at": "",
+                "end_at": "",
+                "show_score_after_submit": True,
+            },
+            format="json",
+        ).data["data"]
+        saved = self.client.put(
+            f"/api/v1/teacher/assessments/{assessment['id']}/questions/",
+            {"questions": [{"question_id": question["id"], "score": 2}]},
+            format="json",
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(
+            saved.data["data"]["questions"][0]["source_status"],
+            QuestionBankItem.Status.DRAFT,
+        )
+
+    def test_question_review_return_creates_new_content_version(self):
+        self.client.force_authenticate(self.teacher)
+        created = self.client.post(
+            "/api/v1/teacher/question-bank/",
+            {
+                "subject": self.subject.id,
+                "stem": "原始题干",
+                "question_type": "judge",
+                "options": ["正确", "错误"],
+                "answer": ["正确"],
+                "analysis": "原始解析",
+                "difficulty": "normal",
+                "knowledge_point": "审核测试",
+                "default_score": 2,
+            },
+            format="json",
+        ).data["data"]
+        question_id = created["id"]
+
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/school-admin/question-reviews/{question_id}/action/",
+                {"action": "approve_trial"},
+                format="json",
+            ).status_code,
+            403,
+        )
+        self.client.post(
+            f"/api/v1/teacher/question-bank/{question_id}/action/",
+            {"action": "submit_review"},
+            format="json",
+        )
+
+        self.client.force_authenticate(self.school_admin)
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/school-admin/question-reviews/{question_id}/action/",
+                {"action": "return", "note": ""},
+                format="json",
+            ).status_code,
+            400,
+        )
+        returned = self.client.post(
+            f"/api/v1/school-admin/question-reviews/{question_id}/action/",
+            {"action": "return", "note": "请补充题干背景。"},
+            format="json",
+        )
+        self.assertEqual(returned.status_code, 200)
+        self.assertEqual(returned.data["data"]["status"], QuestionBankItem.Status.DRAFT)
+
+        self.client.force_authenticate(self.teacher)
+        updated = self.client.patch(
+            f"/api/v1/teacher/question-bank/{question_id}/",
+            {
+                "subject": self.subject.id,
+                "stem": "补充背景后的题干",
+                "question_type": "judge",
+                "options": ["正确", "错误"],
+                "answer": ["正确"],
+                "analysis": "更新解析",
+                "difficulty": "normal",
+                "knowledge_point": "审核测试",
+                "default_score": 2,
+            },
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.data["data"]["version_no"], 2)
+
+        self.client.force_authenticate(self.school_admin)
+        detail = self.client.get(f"/api/v1/school-admin/question-reviews/{question_id}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(len(detail.data["data"]["versions"]), 2)
+        self.assertGreaterEqual(len(detail.data["data"]["lifecycle"]), 3)
+
     def test_randomized_question_and_option_orders_are_stable_per_attempt(self):
         questions = [
             QuestionBankItem.objects.create(
@@ -340,6 +526,8 @@ class AssessmentWorkflowTests(TestCase):
                 options=[f"选项 {index}-A", f"选项 {index}-B", f"选项 {index}-C", f"选项 {index}-D"],
                 answer=[f"选项 {index}-A"],
                 default_score=2,
+                status=QuestionBankItem.Status.ACTIVE,
+                library_scope=QuestionBankItem.LibraryScope.SCHOOL,
             )
             for index in range(1, 4)
         ]
@@ -515,7 +703,11 @@ class AssessmentWorkflowTests(TestCase):
         self.client.force_authenticate(self.teacher)
         self.assertEqual(self.client.delete(f"/api/v1/teacher/question-bank/{question.id}/").status_code, 400)
         self.assertEqual(
-            self.client.patch(f"/api/v1/teacher/question-bank/{question.id}/", {"status": "disabled"}, format="json").status_code,
+            self.client.post(
+                f"/api/v1/teacher/question-bank/{question.id}/action/",
+                {"action": "disable"},
+                format="json",
+            ).status_code,
             200,
         )
         self.assertEqual(self.client.delete(f"/api/v1/teacher/question-bank/{question.id}/").status_code, 200)
@@ -570,7 +762,10 @@ class AssessmentWorkflowTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["data"]["created_count"], 1)
-        self.assertTrue(QuestionBankItem.objects.filter(stem="AI 生成的判断题", creator=self.teacher).exists())
+        created = QuestionBankItem.objects.get(stem="AI 生成的判断题", creator=self.teacher)
+        self.assertEqual(created.status, QuestionBankItem.Status.DRAFT)
+        self.assertEqual(created.source, QuestionBankItem.Source.AI)
+        self.assertEqual(created.versions.count(), 1)
 
         invalid = {**valid, "stem": "无效 AI 题", "options": ["正确", "错误"], "answer": ["不存在"]}
         response = self.client.post(

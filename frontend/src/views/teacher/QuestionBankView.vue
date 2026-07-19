@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ApiError, type FieldErrors } from '@/api/client'
 import {
+  actionBankQuestion,
   confirmQuestionBankDrafts,
   createBankQuestion,
   deleteBankQuestion,
@@ -33,6 +34,8 @@ const query = ref('')
 const subject = ref('')
 const questionType = ref('')
 const difficulty = ref('')
+const status = ref('')
+const source = ref('')
 const modalOpen = ref(false)
 const editing = ref<BankQuestion | null>(null)
 const errors = ref<FieldErrors>({})
@@ -72,9 +75,9 @@ const isJudge = computed(() => form.question_type === 'judge')
 const needsAnswerText = computed(() => form.question_type === 'blank')
 const summary = computed(() => [
   { label: '当前题目', value: rows.value.length, sub: scope.value === 'mine' ? '本人创建' : '学校共享' },
-  { label: '我的题目', value: rows.value.filter((item) => item.is_owner).length, sub: '可编辑维护' },
-  { label: '启用题目', value: rows.value.filter((item) => item.status === 'active').length, sub: '可用于组卷' },
-  { label: '累计使用', value: rows.value.reduce((sum, item) => sum + item.usage_count, 0), sub: '组卷引用次数' }
+  { label: '个人可用', value: rows.value.filter((item) => item.library_scope === 'personal' && item.status === 'draft').length, sub: '无需审核即可组卷' },
+  { label: '共享处理中', value: rows.value.filter((item) => item.library_scope === 'school' && item.status !== 'active' && item.status !== 'disabled').length, sub: '申请共享与试用' },
+  { label: '累计使用', value: rows.value.reduce((sum, item) => sum + item.usage_count, 0), sub: '真实试卷引用次数' }
 ])
 const selectedAiDrafts = computed(() => aiDrafts.value.filter((item) => item.selected))
 
@@ -200,7 +203,7 @@ async function confirmAiDrafts() {
     }))
     const result = await confirmQuestionBankDrafts(aiForm.subject, cleaned)
     aiOpen.value = false
-    notice.value = `已将 ${result.created_count} 道 AI 题目加入学校共享题库。`
+    notice.value = `已保存 ${result.created_count} 道 AI 题目到“我的题目”。`
     scope.value = 'mine'
     await load()
   } catch (error) {
@@ -233,7 +236,7 @@ function openCreate() {
 }
 
 function openEdit(row: BankQuestion) {
-  if (!row.is_owner) return
+  if (!row.is_owner || row.status !== 'draft') return
   editing.value = row
   errors.value = {}
   Object.assign(form, {
@@ -307,7 +310,7 @@ async function save() {
       knowledge_point: form.knowledge_point.trim()
     }
     await (editing.value ? updateBankQuestion(editing.value.id, payload) : createBankQuestion(payload))
-    notice.value = editing.value ? '题目已更新。' : '题目已加入学校共享题库。'
+    notice.value = editing.value ? '个人题目已更新。' : '题目已保存到“我的题目”。'
     modalOpen.value = false
     await load()
   } catch (error) {
@@ -320,13 +323,30 @@ async function save() {
   }
 }
 
-async function toggleStatus(row: BankQuestion) {
+async function runQuestionAction(
+  row: BankQuestion,
+  action: 'submit_review' | 'withdraw' | 'disable' | 'copy'
+) {
+  const confirmMessages: Partial<Record<typeof action, string>> = {
+    submit_review: `确认申请将“${row.stem.slice(0, 30)}”共享给本校教师？学校管理员将进行审核。`,
+    withdraw: `确认撤回“${row.stem.slice(0, 30)}”并继续修改？`,
+    disable: `确认停用草稿“${row.stem.slice(0, 30)}”？停用后才能删除。`,
+    copy: `确认把“${row.stem.slice(0, 30)}”复制为新的草稿？`
+  }
+  if (!window.confirm(confirmMessages[action] || '确认执行此操作？')) return
   try {
-    await updateBankQuestion(row.id, { status: row.status === 'active' ? 'disabled' : 'active' })
-    notice.value = row.status === 'active' ? '题目已停用。' : '题目已启用。'
+    await actionBankQuestion(row.id, action)
+    const messages = {
+      submit_review: '共享申请已提交审核。',
+      withdraw: '题目已撤回草稿。',
+      disable: '题目草稿已停用。',
+      copy: '题目已复制为新的草稿。'
+    }
+    notice.value = messages[action]
+    if (action === 'copy') scope.value = 'mine'
     await load()
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '状态更新失败。'
+    notice.value = error instanceof ApiError ? error.message : '题目操作失败。'
   }
 }
 
@@ -352,7 +372,7 @@ async function importFile(event: Event) {
   saving.value = true
   try {
     const result = await importQuestionBank(file)
-    notice.value = `题库导入完成：成功 ${result.created} 道，失败 ${result.failed} 道。${result.errors[0] ? ` 第一个错误：第 ${result.errors[0].row} 行 ${result.errors[0].message}` : ''}`
+    notice.value = `题库导入完成：已保存到“我的题目” ${result.created} 道，失败 ${result.failed} 道。${result.errors[0] ? ` 第一个错误：第 ${result.errors[0].row} 行 ${result.errors[0].message}` : ''}`
     await load()
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '题库导入失败。'
@@ -365,12 +385,25 @@ async function importFile(event: Event) {
 async function load() {
   loading.value = true
   try {
-    rows.value = await getQuestionBank({ scope: scope.value, q: query.value, subject: subject.value, question_type: questionType.value, difficulty: difficulty.value })
+    rows.value = await getQuestionBank({
+      scope: scope.value,
+      q: query.value,
+      subject: subject.value,
+      question_type: questionType.value,
+      difficulty: difficulty.value,
+      status: scope.value === 'mine' ? status.value : '',
+      source: source.value
+    })
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '题库加载失败。'
   } finally {
     loading.value = false
   }
+}
+
+function teacherStatusLabel(item: BankQuestion) {
+  if (item.status === 'draft') return item.library_scope === 'personal' ? '个人可用' : '待修改'
+  return item.status_label
 }
 
 onMounted(async () => {
@@ -388,7 +421,7 @@ onMounted(async () => {
 
     <section class="panel assessment-library-panel">
       <div class="panel-heading split">
-        <div><h2>学校共享题库</h2><p>同校教师可检索和组卷；本人创建的题目可编辑、停用和删除。</p></div>
+        <div><h2>{{ scope === 'mine' ? '我的题目' : '学校共享题库' }}</h2><p>{{ scope === 'mine' ? '个人题目保存后即可用于本人组卷；只有申请校内共享时才需要审核。' : '展示学校已启用的共享题目，同校教师可直接用于组卷。' }}</p></div>
         <div class="heading-actions assessment-heading-actions">
           <a class="secondary-button" :href="questionBankExportUrl">导出 XLSX</a>
           <a class="secondary-button" :href="questionBankTemplateUrl">下载模板</a>
@@ -398,7 +431,7 @@ onMounted(async () => {
           <button class="primary-button" type="button" @click="openCreate">新增题目</button>
         </div>
       </div>
-      <div class="assessment-filter-bar">
+      <div class="assessment-filter-bar question-bank-filter">
         <div class="assessment-segmented">
           <button :class="{ active: scope === 'shared' }" type="button" @click="scope = 'shared'; load()">共享题库</button>
           <button :class="{ active: scope === 'mine' }" type="button" @click="scope = 'mine'; load()">我的题目</button>
@@ -407,33 +440,57 @@ onMounted(async () => {
         <select v-model="subject" aria-label="按学科筛选" @change="load"><option value="">全部学科</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select>
         <select v-model="questionType" aria-label="按题型筛选" @change="load"><option value="">全部题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select>
         <select v-model="difficulty" aria-label="按难度筛选" @change="load"><option value="">全部难度</option><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+        <select v-if="scope === 'mine'" v-model="status" aria-label="按状态筛选" @change="load"><option value="">全部状态</option><option v-for="item in options?.question_statuses" :key="item.value" :value="item.value">{{ item.value === 'draft' ? '个人可用 / 待修改' : item.label }}</option></select>
+        <select v-model="source" aria-label="按来源筛选" @change="load"><option value="">全部来源</option><option v-for="item in options?.question_sources" :key="item.value" :value="item.value">{{ item.label }}</option></select>
         <button class="secondary-button" type="button" @click="load">查询</button>
       </div>
 
       <div class="assessment-question-library">
-        <article v-for="item in rows" :key="item.id" class="assessment-bank-card" :class="{ disabled: item.status === 'disabled' }">
+        <article v-for="item in rows" :key="item.id" class="assessment-bank-card lifecycle-bank-card" :class="`question-status-${item.status}`">
           <header>
-            <div><span>{{ item.subject.name }} · {{ item.question_type_label }} · {{ item.difficulty_label }}</span><strong>{{ item.stem }}</strong></div>
+            <div>
+              <span>{{ item.subject.name }} · {{ item.question_type_label }} · {{ item.difficulty_label }}</span>
+              <strong>{{ item.stem }}</strong>
+              <div class="question-lifecycle-meta">
+                <span class="question-status-badge" :class="`question-status-${item.status}`">{{ teacherStatusLabel(item) }}</span>
+                <span>{{ item.library_scope_label }}</span>
+                <span>{{ item.source_label }}</span>
+                <span>版本 {{ item.version_no }}</span>
+              </div>
+            </div>
             <b>{{ item.default_score }} 分</b>
           </header>
           <div v-if="item.options.length" class="assessment-option-preview"><span v-for="(option, index) in item.options" :key="option">{{ String.fromCharCode(65 + index) }}. {{ option }}</span></div>
+          <div class="question-usage-strip">
+            <span>组卷 {{ item.usage_count }} 次</span>
+            <span>作答 {{ item.response_count }} 人次</span>
+            <span>正确率 {{ item.correct_rate === null ? '-' : `${item.correct_rate}%` }}</span>
+            <span v-if="item.status === 'trial'">试用作答 {{ item.trial_response_count }} 人次</span>
+            <span v-if="item.status === 'trial'">试用正确率 {{ item.trial_correct_rate === null ? '-' : `${item.trial_correct_rate}%` }}</span>
+          </div>
+          <p v-if="item.review_note" class="question-review-note">审核说明：{{ item.review_note }}</p>
+          <p v-else-if="item.disabled_reason" class="question-review-note danger">停用原因：{{ item.disabled_reason }}</p>
           <footer>
-            <span>{{ item.knowledge_point || '未设置知识点' }} · {{ item.creator.display_name }} · 使用 {{ item.usage_count }} 次</span>
-            <div v-if="item.is_owner">
-              <button type="button" @click="openEdit(item)">编辑</button>
-              <button type="button" @click="toggleStatus(item)">{{ item.status === 'active' ? '停用' : '启用' }}</button>
+            <span>{{ item.knowledge_point || '未设置知识点' }} · {{ item.creator.display_name }}</span>
+            <div v-if="item.is_owner" class="question-card-actions">
+              <button v-if="item.status === 'draft'" type="button" @click="openEdit(item)">编辑</button>
+              <button v-if="item.status === 'draft'" class="primary-action" type="button" @click="runQuestionAction(item, 'submit_review')">申请共享</button>
+              <button v-if="item.status === 'draft'" class="danger-link" type="button" @click="runQuestionAction(item, 'disable')">停用</button>
+              <button v-if="item.status === 'pending_review'" type="button" @click="runQuestionAction(item, 'withdraw')">撤回</button>
+              <button v-if="['trial', 'active', 'disabled'].includes(item.status)" type="button" @click="runQuestionAction(item, 'copy')">复制为草稿</button>
               <button v-if="item.status === 'disabled'" class="danger-link" type="button" @click="remove(item)">删除</button>
             </div>
             <small v-else>共享只读</small>
           </footer>
         </article>
-        <p v-if="!loading && !rows.length" class="empty">当前筛选下暂无题目。</p>
+        <p v-if="loading" class="empty">正在加载题目</p>
+        <p v-else-if="!rows.length" class="empty">当前筛选下暂无题目。</p>
       </div>
     </section>
 
     <div v-if="modalOpen" class="modal-backdrop" @click.self="modalOpen = false">
       <section class="entity-modal assessment-question-modal" role="dialog" aria-modal="true">
-        <header class="modal-header"><div><h2>{{ editing ? '编辑题目' : '新增题目' }}</h2><p>保存后进入本校共享题库。</p></div><button class="icon-button" type="button" aria-label="关闭" @click="modalOpen = false">×</button></header>
+        <header class="modal-header"><div><h2>{{ editing ? '编辑个人题目' : '新增题目' }}</h2><p>保存后立即进入“我的题目”，本人可直接组卷；申请共享时才进入审核。</p></div><button class="icon-button" type="button" aria-label="关闭" @click="modalOpen = false">×</button></header>
         <div class="assessment-modal-body">
           <div class="assessment-form-grid">
             <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><select v-model="form.subject" required><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select><small v-if="errors.subject" class="field-error">{{ errors.subject[0] }}</small></label>
@@ -460,14 +517,14 @@ onMounted(async () => {
             <label class="assessment-analysis-field"><span>答案解析</span><textarea v-model.trim="form.analysis" rows="3" maxlength="4000" placeholder="可选"></textarea></label>
           </div>
         </div>
-        <footer class="modal-actions"><button class="secondary-button" type="button" @click="modalOpen = false">取消</button><button class="primary-button" type="button" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存题目' }}</button></footer>
+        <footer class="modal-actions"><button class="secondary-button" type="button" @click="modalOpen = false">取消</button><button class="primary-button" type="button" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存到我的题目' }}</button></footer>
       </section>
     </div>
 
     <div v-if="aiOpen" class="modal-backdrop" @click.self="!aiLoading && !aiSaving && (aiOpen = false)">
       <section class="entity-modal assessment-ai-modal" role="dialog" aria-modal="true" aria-labelledby="assessment-ai-title">
         <header class="modal-header">
-          <div><h2 id="assessment-ai-title">AI 批量出题</h2><p>使用教师自己的 DeepSeek 接口生成草稿，确认后才进入学校共享题库。</p></div>
+          <div><h2 id="assessment-ai-title">AI 批量出题</h2><p>使用教师自己的 DeepSeek 接口生成题目，确认后保存到“我的题目”，无需共享审核。</p></div>
           <button class="icon-button" type="button" aria-label="关闭" :disabled="aiLoading || aiSaving" @click="aiOpen = false">×</button>
         </header>
 
@@ -526,7 +583,7 @@ onMounted(async () => {
             <div v-if="aiErrors.questions" class="assessment-ai-error-list" role="alert"><span v-for="message in aiErrors.questions" :key="message">{{ message }}</span></div>
           </main>
         </div>
-        <footer class="modal-actions"><button class="secondary-button" type="button" :disabled="aiLoading || aiSaving" @click="aiOpen = false">关闭</button><button class="primary-button" type="button" :disabled="aiLoading || aiSaving || !selectedAiDrafts.length" @click="confirmAiDrafts">{{ aiSaving ? '正在入库' : `确认 ${selectedAiDrafts.length} 道并入库` }}</button></footer>
+        <footer class="modal-actions"><button class="secondary-button" type="button" :disabled="aiLoading || aiSaving" @click="aiOpen = false">关闭</button><button class="primary-button" type="button" :disabled="aiLoading || aiSaving || !selectedAiDrafts.length" @click="confirmAiDrafts">{{ aiSaving ? '正在保存' : `保存 ${selectedAiDrafts.length} 道到我的题目` }}</button></footer>
       </section>
     </div>
   </AppShell>

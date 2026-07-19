@@ -12,6 +12,7 @@ const ClassesView = () => import('@/views/school-admin/ClassesView.vue')
 const TeachingView = () => import('@/views/school-admin/TeachingView.vue')
 const PretestsView = () => import('@/views/school-admin/PretestsView.vue')
 const SchoolAdminResourceReviewsView = () => import('@/views/school-admin/ResourceReviewsView.vue')
+const SchoolAdminQuestionReviewsView = () => import('@/views/school-admin/QuestionReviewsView.vue')
 const SchoolAdminDataQualityView = () => import('@/views/school-admin/DataQualityView.vue')
 const TeacherDashboard = () => import('@/views/teacher/DashboardView.vue')
 const TeacherCoursesView = () => import('@/views/teacher/CoursesView.vue')
@@ -62,6 +63,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/school-admin/teaching', component: TeachingView, meta: { role: 'school_admin' } },
   { path: '/school-admin/pretests', component: PretestsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/resource-reviews', component: SchoolAdminResourceReviewsView, meta: { role: 'school_admin' } },
+  { path: '/school-admin/question-reviews', component: SchoolAdminQuestionReviewsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/data-quality', component: SchoolAdminDataQualityView, meta: { role: 'school_admin' } },
   { path: '/school-admin/evaluations', redirect: '/school-admin' },
   { path: '/school-admin/models', component: PlaceholderView, meta: { role: 'school_admin', title: '分层分析' } },

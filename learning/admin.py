@@ -3,6 +3,8 @@ from django.contrib import admin
 from .models import (
     LearningEvent,
     QuestionBankItem,
+    QuestionBankItemLifecycleRecord,
+    QuestionBankItemVersion,
     StratificationDecision,
     StudentFeatureSnapshot,
     TestAssessment,
@@ -33,9 +35,78 @@ class StratificationDecisionAdmin(admin.ModelAdmin):
 
 @admin.register(QuestionBankItem)
 class QuestionBankItemAdmin(admin.ModelAdmin):
-    list_display = ("stem", "school", "subject", "question_type", "difficulty", "creator", "status", "usage_count")
-    list_filter = ("school", "subject", "question_type", "difficulty", "status")
+    list_display = (
+        "stem",
+        "school",
+        "subject",
+        "question_type",
+        "difficulty",
+        "creator",
+        "source",
+        "library_scope",
+        "status",
+        "version_no",
+    )
+    list_filter = (
+        "school",
+        "subject",
+        "question_type",
+        "difficulty",
+        "source",
+        "library_scope",
+        "status",
+    )
     search_fields = ("stem", "knowledge_point", "creator__username", "creator__display_name")
+
+
+@admin.register(QuestionBankItemVersion)
+class QuestionBankItemVersionAdmin(admin.ModelAdmin):
+    list_display = (
+        "original_question_id",
+        "version_no",
+        "school",
+        "subject",
+        "creator",
+        "source",
+        "status_snapshot",
+        "created_at",
+    )
+    list_filter = ("school", "subject", "source", "status_snapshot")
+    search_fields = ("stem", "knowledge_point", "creator__username")
+    readonly_fields = [field.name for field in QuestionBankItemVersion._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(QuestionBankItemLifecycleRecord)
+class QuestionBankItemLifecycleRecordAdmin(admin.ModelAdmin):
+    list_display = (
+        "original_question_id",
+        "from_status",
+        "to_status",
+        "action",
+        "actor",
+        "created_at",
+    )
+    list_filter = ("school", "to_status", "action")
+    search_fields = ("original_question_id", "actor__username", "note")
+    readonly_fields = [field.name for field in QuestionBankItemLifecycleRecord._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 class TestAssessmentQuestionInline(admin.TabularInline):
