@@ -166,7 +166,7 @@ def record_attendance_status(
     if recorded_by not in {"student", "teacher"}:
         raise AttendanceEventError("attendance_source_invalid", "签到记录来源不正确。")
     activity = (
-        ClassroomActivity.objects.select_for_update()
+        ClassroomActivity.objects.select_for_update(of=("self",))
         .select_related(
             "session",
             "session__school",

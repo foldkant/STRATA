@@ -125,6 +125,7 @@ from ops.xlsx import export_rows, template_response
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 from .permissions import IsSchoolAdmin, IsStudent, IsSuperAdmin, IsTeacher
+from .protected_files import signed_protected_file_url
 from .responses import fail, ok, page_data
 from .view_utils import current_school as _school
 from .view_utils import paginate as _paginate
@@ -2429,7 +2430,11 @@ def resource_office_config(request, pk):
     mode = "edit" if requested_mode == "edit" and can_edit else "view"
     attachment_name = resource.attachment.name.rsplit("/", 1)[-1]
     attachment_url = request.build_absolute_uri(
-        f"/{resource.attachment.url.lstrip('/')}"
+        signed_protected_file_url(
+            "resource-attachment",
+            resource.id,
+            version=resource.attachment.name,
+        )
     )
     base_url = f"{'https' if request.is_secure() else 'http'}://{request.get_host()}"
     config = {
@@ -5564,7 +5569,13 @@ def classroom_group_office_config(request, group_id):
     requested_mode = request.GET.get("mode", "view").strip().lower()
     mode = "edit" if requested_mode == "edit" and can_edit else "view"
     attachment_url = request.build_absolute_uri(
-        f"/{group.collaboration_document.url.lstrip('/')}"
+        signed_protected_file_url(
+            "group-document",
+            group.id,
+            version=(
+                f"{group.document_version}:{group.collaboration_document.name}"
+            ),
+        )
     )
     base_url = f"{'https' if request.is_secure() else 'http'}://{request.get_host()}"
     document_title = group.document_original_name or f"{group.name}.{file_ext}"
@@ -5660,7 +5671,7 @@ def classroom_group_office_callback(request, group_id):
             file_sha256 = hashlib.sha256(data).hexdigest()
             with transaction.atomic():
                 group = (
-                    ClassroomGroup.objects.select_for_update()
+                    ClassroomGroup.objects.select_for_update(of=("self",))
                     .select_related(
                         "collaboration",
                         "collaboration__session",

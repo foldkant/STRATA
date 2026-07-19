@@ -33,6 +33,8 @@ from learning.models import (
 )
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
+from .protected_files import protected_file_url
+
 KNOWN_RESOURCE_EXTS = {
     "png",
     "jpg",
@@ -204,7 +206,9 @@ def course_row(course: Course, *, include_lessons: bool = False) -> dict:
         "subject": subject_row(course.subject) if course.subject_id else None,
         "title": course.title,
         "introduction": course.introduction,
-        "cover_url": f"/{course.cover.url.lstrip('/')}" if course.cover else "",
+        "cover_url": (
+            protected_file_url("course-cover", course.id) if course.cover else ""
+        ),
         "cover_name": course.cover.name.rsplit("/", 1)[-1] if course.cover else "",
         "teaching_model": course.teaching_model,
         "teaching_model_label": course.get_teaching_model_display(),
@@ -593,7 +597,9 @@ def student_course_row(course: Course, *, pretest_status: dict | None = None) ->
         "subject": subject_row(course.subject) if course.subject_id else None,
         "title": course.title,
         "introduction": course.introduction,
-        "cover_url": f"/{course.cover.url.lstrip('/')}" if course.cover else "",
+        "cover_url": (
+            protected_file_url("course-cover", course.id) if course.cover else ""
+        ),
         "teacher": student_teacher_row(course.teacher),
         "teaching_model": course.teaching_model,
         "teaching_model_label": course.get_teaching_model_display(),
@@ -770,7 +776,11 @@ def teacher_ai_provider_row(provider: TeacherAIProvider) -> dict:
 
 
 def resource_file_row(resource_file) -> dict:
-    file_url = f"/{resource_file.file.url.lstrip('/')}" if resource_file.file else ""
+    file_url = (
+        protected_file_url("resource-extra", resource_file.id)
+        if resource_file.file
+        else ""
+    )
     return {
         "id": resource_file.id,
         "name": resource_file.original_name,
@@ -787,9 +797,11 @@ def resource_row(resource: Resource, *, viewer=None) -> dict:
     attachment_url = ""
     attachment_name = ""
     attachment_size = 0
-    cover_url = f"/{resource.cover.url.lstrip('/')}" if resource.cover else ""
+    cover_url = (
+        protected_file_url("resource-cover", resource.id) if resource.cover else ""
+    )
     if resource.attachment:
-        attachment_url = f"/{resource.attachment.url.lstrip('/')}"
+        attachment_url = protected_file_url("resource-attachment", resource.id)
         attachment_name = resource.attachment.name.rsplit("/", 1)[-1]
         try:
             attachment_size = resource.attachment.size
@@ -849,7 +861,9 @@ def resource_row(resource: Resource, *, viewer=None) -> dict:
 
 def student_work_attachment_row(attachment: StudentWorkAttachment) -> dict:
     attachment_url = (
-        f"/{attachment.attachment.url.lstrip('/')}" if attachment.attachment else ""
+        protected_file_url("student-work", attachment.id)
+        if attachment.attachment
+        else ""
     )
     attachment_name = attachment.original_name or (
         attachment.attachment.name.rsplit("/", 1)[-1] if attachment.attachment else ""
@@ -880,7 +894,9 @@ def student_work_attachment_row(attachment: StudentWorkAttachment) -> dict:
 
 
 def classroom_group_file_row(file: ClassroomGroupFile) -> dict:
-    attachment_url = f"/{file.attachment.url.lstrip('/')}" if file.attachment else ""
+    attachment_url = (
+        protected_file_url("group-file", file.id) if file.attachment else ""
+    )
     uploader = file.uploader
     return {
         "id": file.id,
@@ -947,7 +963,7 @@ def student_classroom_group_member_row(member: ClassroomGroupMember) -> dict:
 
 def classroom_group_row(group: ClassroomGroup, *, include_files: bool = True) -> dict:
     document_url = (
-        f"/{group.collaboration_document.url.lstrip('/')}"
+        protected_file_url("group-document", group.id)
         if group.collaboration_document
         else ""
     )
@@ -1002,7 +1018,7 @@ def student_classroom_group_row(
     group: ClassroomGroup, *, include_files: bool = True
 ) -> dict:
     document_url = (
-        f"/{group.collaboration_document.url.lstrip('/')}"
+        protected_file_url("group-document", group.id)
         if group.collaboration_document
         else ""
     )

@@ -1,9 +1,44 @@
 from django.urls import include, path
 
-from . import assessment_views, chat_views, views
+from . import assessment_views, chat_views, protected_files, views
 
 urlpatterns = [
     path("", include("api.analytics.urls")),
+    path(
+        "files/courses/<int:pk>/cover/",
+        protected_files.course_cover,
+        name="api_protected_course_cover",
+    ),
+    path(
+        "files/resources/<int:pk>/attachment/",
+        protected_files.resource_attachment,
+        name="api_protected_resource_attachment",
+    ),
+    path(
+        "files/resources/<int:pk>/cover/",
+        protected_files.resource_cover,
+        name="api_protected_resource_cover",
+    ),
+    path(
+        "files/resource-files/<int:pk>/",
+        protected_files.resource_extra_file,
+        name="api_protected_resource_extra_file",
+    ),
+    path(
+        "files/student-work/<int:pk>/",
+        protected_files.student_work_file,
+        name="api_protected_student_work",
+    ),
+    path(
+        "files/classroom-group-files/<int:pk>/",
+        protected_files.classroom_group_file,
+        name="api_protected_classroom_group_file",
+    ),
+    path(
+        "files/classroom-groups/<int:pk>/document/",
+        protected_files.classroom_group_document,
+        name="api_protected_classroom_group_document",
+    ),
     path("auth/csrf/", views.csrf_token_view, name="api_csrf"),
     path("auth/login/", views.login_view, name="api_login"),
     path("auth/logout/", views.logout_view, name="api_logout"),

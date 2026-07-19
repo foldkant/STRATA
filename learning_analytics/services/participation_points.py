@@ -89,7 +89,7 @@ def record_participation_points(
         )
 
     profile = (
-        StudentProfile.objects.select_for_update()
+        StudentProfile.objects.select_for_update(of=("self",))
         .select_related("user", "class_group")
         .filter(
             user_id=source_event.target_student_id,

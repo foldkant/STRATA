@@ -66,6 +66,22 @@ API 前缀：
 
 教师接口继续返回其任教班级所需的内容带和分组依据。未来教师分层接口必须接入 `SensitiveInferenceAccessLog`；`api/analytics/` 当前只建立独立路由包，尚未开放公共 analytics 路由。
 
+## 受保护文件访问
+
+DEBUG 模式不再直接发布 `/media/`。课程封面、资源文件、学生作品和课堂小组文件统一通过对象级权限接口读取：
+
+- `GET /api/v1/files/courses/{id}/cover/`
+- `GET /api/v1/files/resources/{id}/attachment/`
+- `GET /api/v1/files/resources/{id}/cover/`
+- `GET /api/v1/files/resource-files/{id}/`
+- `GET /api/v1/files/student-work/{id}/`
+- `GET /api/v1/files/classroom-group-files/{id}/`
+- `GET /api/v1/files/classroom-groups/{id}/document/`
+
+学生只能读取本人课程、目标班级资源、本人作品和本人所在小组文件；教师只能读取本人课程/课堂和授权共享资源；学校管理员只能读取本校对象。无权限对象统一返回 404，避免通过编号枚举判断对象是否存在。
+
+ONLYOFFICE 文档服务器无法使用浏览器 Session Cookie，因此资源附件和小组协作文档的编辑配置使用绑定对象 ID、文件版本和一小时时效的签名 URL。签名不能用于其他对象或其他文件版本；普通前端响应不返回永久媒体地址。
+
 ## 认证
 
 使用 Django Session Cookie。

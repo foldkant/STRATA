@@ -22,6 +22,7 @@
 
 - [学生行为分析与 AI 隐性动态分层设计报告](student_behavior_ai_stratification_design.md)：汇总 30 轮科学审查，规定研究级事件、过程性评价量规、特征、计划结局、教师可见/学生隐性的内容带、班级校准模型、夜间流水线和论文研究设计。
 - [学生行为分析与 AI 隐性动态分层开发路线图](student_behavior_ai_stratification_development_roadmap.md)：把设计报告落实为 M0-M8 工程里程碑、模块边界、迁移顺序、前后端交付、夜间 DAG、阶段闸门和首批开发任务。
+- [学生行为分析工程进度审计](implementation_progress_audit.md)：按 Git、迁移、测试和真实组件运行证据记录已完成、进行中和未开始工作，并固定 DATA-01C、DATA-03、M2、M3 的进入顺序。
 - [学习事件 V1 写入点与 V2 迁移清单](learning_event_write_inventory.md)：盘点测试、课堂、资源、评价、聊天和小组业务的现有事件写入入口、语义问题与双写验收要求。
 - [学生评价、积分与奖章设计](student_evaluation_incentive_design.md)：规定成绩、五星量规、核心素养证据、课堂积分/奖章和 AI 内部建议的隔离、可见性与实施顺序。
 - [行为、特征与量规五轮科学审查](student_behavior_ai_stratification_five_round_review.md)：五轮文献复审发现、方案修正和仍需实证的风险。

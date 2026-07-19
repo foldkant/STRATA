@@ -612,7 +612,7 @@ def teacher_chat_moderate(request, pk, message_id):
     try:
         session = _teacher_session(request, pk)
         message = (
-            ClassroomChatMessage.objects.select_for_update()
+            ClassroomChatMessage.objects.select_for_update(of=("self",))
             .select_related("thread", "thread__student", "thread__group", "sender", "reviewed_by")
             .filter(pk=message_id, thread__session=session, sender__role="student")
             .first()

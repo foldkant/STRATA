@@ -5,6 +5,8 @@ import logging
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
+from learning_analytics.privacy import find_student_privacy_violations
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,15 @@ def publish_chat_event(group_names: list[str], payload: dict) -> None:
     if channel_layer is None:
         return
     for group_name in dict.fromkeys(group_names):
+        if not group_name.startswith("classroom_teacher_"):
+            violations = find_student_privacy_violations(payload)
+            if violations:
+                logger.error(
+                    "Blocked classroom event containing hidden inference fields for %s: %s",
+                    group_name,
+                    ", ".join(violations[:20]),
+                )
+                continue
         try:
             async_to_sync(channel_layer.group_send)(
                 group_name,

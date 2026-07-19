@@ -227,7 +227,7 @@ def record_classroom_point_adjustment(
     if insufficient_policy not in {"clamp", "reject"}:
         raise EventWriteError("point_policy_invalid", "积分余额处理策略不正确。")
     profile = (
-        StudentProfile.objects.select_for_update()
+        StudentProfile.objects.select_for_update(of=("self",))
         .select_related("user", "class_group")
         .get(pk=student_profile.pk)
     )

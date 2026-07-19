@@ -76,6 +76,7 @@ from ops.xlsx import normalize_text, read_table_rows
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 from school_admin.forms import TeacherCreateForm, TeacherUpdateForm
 from ops.forms import TEACHING_PASSWORD_PATTERN
+from .protected_files import protected_file_url
 from .serializers import clean_resource_ext
 
 USERNAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{4,31}$"
@@ -5022,7 +5023,7 @@ def _resource_binding(resource: Resource) -> dict:
     attachment_name = ""
     file_ext = ""
     if resource.attachment:
-        attachment_url = f"/{resource.attachment.url.lstrip('/')}"
+        attachment_url = protected_file_url("resource-attachment", resource.id)
         attachment_name = resource.attachment.name.rsplit("/", 1)[-1]
         file_ext = clean_resource_ext(attachment_name, attachment_url)
     return {

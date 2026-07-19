@@ -160,7 +160,7 @@ def record_quick_answer_response(
     *, activity: ClassroomActivity, student, content: str = "", occurred_at=None
 ) -> bool:
     activity = (
-        ClassroomActivity.objects.select_for_update()
+        ClassroomActivity.objects.select_for_update(of=("self",))
         .select_related(
             "session",
             "session__school",
