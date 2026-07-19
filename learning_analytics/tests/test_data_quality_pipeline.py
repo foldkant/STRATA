@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
+from openpyxl import load_workbook
 
 from accounts.models import User
 from courses.models import Course, CourseClass, Resource, Subject
@@ -245,6 +247,18 @@ class DataQualityPipelineTests(TestCase):
         self.assertIn(
             "direction", response.data["data"]["current"]["metrics"][0]["thresholds"]
         )
+
+        export_response = client.get(
+            "/api/v1/school-admin/analytics/quality/export/"
+        )
+        self.assertEqual(export_response.status_code, 200)
+        workbook = load_workbook(BytesIO(export_response.content), read_only=True)
+        self.assertEqual(
+            workbook.sheetnames,
+            ["质量报告", "质量指标", "质量问题", "流水线运行", "任务阶段"],
+        )
+        self.assertEqual(workbook["质量报告"].max_row, 2)
+        workbook.close()
 
         client.force_authenticate(self.other_admin)
         response = client.get("/api/v1/school-admin/analytics/quality/")

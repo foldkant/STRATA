@@ -1,1 +1,0 @@
-import{m as o,r as s,I as l}from"./index-CvbxqL4j.js";function f(){const u=l(),e=s(!1);o(()=>u.fullPath,()=>{e.value=!1});function t(){e.value=!1}function a(){e.value=!e.value}return{isOpen:e,close:t,toggle:a}}export{f as u};

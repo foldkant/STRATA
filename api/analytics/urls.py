@@ -19,4 +19,9 @@ urlpatterns = [
         school_admin_views.run_school_quality,
         name="school_admin_analytics_quality_run",
     ),
+    path(
+        "school-admin/analytics/quality/export/",
+        school_admin_views.export_school_quality,
+        name="school_admin_analytics_quality_export",
+    ),
 ]

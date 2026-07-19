@@ -1445,3 +1445,43 @@ POST /api/v1/student/resources/{id}/
 ```
 
 学生 `POST` 详情接口表示实际打开资源，会增加浏览量并写入 `LearningEvent.resource_view`。权限规则和跨校同步边界见 `docs/resource_center_design.md`。
+
+## 学校数据质量
+
+所有接口只允许学校管理员访问，学校范围必须来自登录用户，不接受客户端学校 ID。
+
+```text
+GET  /api/v1/school-admin/analytics/quality/
+POST /api/v1/school-admin/analytics/quality/run/
+GET  /api/v1/school-admin/analytics/quality/export/
+```
+
+查询响应：
+
+```json
+{
+  "school": { "id": 1, "name": "示例学校", "code": "001" },
+  "current": {
+    "status": "red",
+    "gate_passed": false,
+    "window_start": "2026-07-12T00:00:00+08:00",
+    "window_end": "2026-07-19T00:00:00+08:00",
+    "metrics": [
+      {
+        "key": "semantic_missing_rate",
+        "label": "语义缺失率",
+        "value": 0.375,
+        "level": "red",
+        "thresholds": { "amber": 0.05, "red": 0.15, "direction": "high" }
+      }
+    ],
+    "issues": []
+  },
+  "history": [],
+  "runs": []
+}
+```
+
+手动运行请求体为 `{ "days": 7 }`，允许 1-365 个完整自然日。成功入队返回 202；同校已有 `pending/running` 任务返回 409；Redis/Celery 不可用返回 503 并把运行记录标为失败。
+
+导出返回本校 XLSX，包含“质量报告、质量指标、质量问题、流水线运行、任务阶段”五张表。完整口径见 `docs/data_quality_pipeline.md`。

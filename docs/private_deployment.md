@@ -192,3 +192,32 @@ REDIS_URL=redis://127.0.0.1:6379/0
 ```
 
 `run_dev.ps1`、`run_lan.ps1` 和 `start_lan_background.ps1` 已统一使用 Uvicorn。Waitress/WSGI 不支持 WebSocket，`run_waitress_lan.ps1` 现会转交 ASGI 启动脚本。
+
+## 数据质量夜间任务
+
+迁移到 `learning_analytics.0009` 后，学校服务器新增数据质量计数、运行、任务和报告表。升级顺序：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py migrate --noinput
+.\.venv\Scripts\python.exe manage.py check
+.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
+```
+
+Celery Beat 默认每天 01:30 调度前一完整自然日的数据质量检查。正式环境必须同时运行：
+
+```powershell
+.\scripts\run_celery_worker.ps1
+.\scripts\run_celery_beat.ps1
+```
+
+Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channel Layer 使用 `/0`、Celery broker 使用 `/1`、结果使用 `/2`。
+
+部署验收：
+
+```powershell
+.\.venv\Scripts\celery.exe -A config inspect ping --timeout=5
+```
+
+再由学校管理员访问 `/app/school-admin/data-quality` 手动检查最近完整 7 日。出现红色报告是数据阻断，不是服务故障；先查看问题和 XLSX，不得直接修改报告为绿色。学校正式启用 M2/M3 前，必须保存一份最新通过报告及对应运行/任务记录。
+
+便携验证实例可使用非默认端口，但 Web、worker 和 beat 的 `REDIS_URL/CELERY_*` 必须一致。当前工程验证使用 PostgreSQL `55432` 和 Redis 兼容服务 `56379`；这不是学校生产默认端口。

@@ -297,3 +297,15 @@
 - `ResourceFile`：一个资源的补充文件。普通资源角色为 `supplement`，学生项目过程材料角色为 `process`。
 
 学生项目的日志、甘特图和阶段成果通过 `ResourceFile(role=process)` 保存，全部为选填。学生浏览资源写入 `LearningEvent.resource_view`，`object_type=resource_center`。
+
+## 数据质量与分析运行
+
+- `EventIngestionDailyCounter`：学校、自然日和来源唯一的摄取计数；记录 accepted、duplicate、rejected、late、offline、schema/context error。迁移来源不计入实时摄取分母。
+- `AnalyticsPipelineRun`：学校级分析运行。当前 `pipeline_type=data_quality`，触发方式为 `scheduled/manual/retry`，状态为 `pending/running/succeeded/failed/blocked`。
+- `AnalyticsPipelineRun.retry_of/attempt_no`：追加式重试链。重试生成新运行，不覆盖失败运行；同校、同窗口的 scheduled 运行具有条件唯一约束。
+- `AnalyticsTaskRun`：流水线阶段事实。`pipeline_run + task_name + attempt_no` 唯一，保存阶段状态、指标、错误和起止时间。
+- `DataQualityReport`：一条流水线最多一份不可变报告。保存七项质量比率、版本化阈值、来源计数、结构化问题、方法版本、配置/来源指纹和 `gate_passed`。
+
+质量报告不可原地修改或直接删除；重新检查必须产生新运行和新报告。质量数据只控制后续分析资格，禁止写入学生能力特征、核心素养得分、积分或奖章。
+
+旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。
