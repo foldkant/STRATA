@@ -12,14 +12,14 @@
 | `ARCH-01` analytics 领域骨架 | 基础完成 | 已创建 `learning_analytics` app、独立 `api/analytics/` 路由包和测试目录；前端教师工作台 feature 在 M4 建立 |
 | `PRIV-01A` 学生字段泄漏审计 | 完成 | 已覆盖学生主要 REST、课堂 WebSocket、分层题、小组、互评、对象下载和原始媒体直链；后续每新增学生接口继续执行字段白名单测试 |
 | `PRIV-01B` 任课权限和访问审计 | 基础完成 | 已建立安全运行状态、任课范围判断和不可变敏感推断访问日志；待 M4 教师分层接口接入 |
-| `DATA-01A` 事件注册表与事件 V2 | 完成 | 已建立 25 个 Pydantic 严格事件模式、不可覆盖的 `EventSchemaDefinition`、不可变 `LearningEventV2`、同步命令、迁移和测试 |
+| `DATA-01A` 事件注册表与事件 V2 | 完成 | 已建立 35 个 Pydantic 严格事件模式、不可覆盖的 `EventSchemaDefinition`、不可变 `LearningEventV2`、同步命令、迁移和测试 |
 | `DATA-01B` 批量接收与幂等 | 完成 | 已建立每批最多 200 条的 API、双重幂等、双时间戳、乱序/迟到标记、加密拒绝隔离、角色与跨校作用域测试 |
 | `DATA-02A` 学习机会与撤回事实 | 完成 | 已建立学生级不可变机会分母、追加式状态事实、分层投放展开、机会归属/版本校验、撤回与离线早到证据测试 |
 | `DATA-02B` 评分成熟状态与积分流水 | 完成 | 已建立不可变评分版本、待评/最终/修订成熟状态、同尝试校验、积分幂等/冲正/非负余额和旧分数缓存对账服务 |
-| `DATA-01C` 统一写入与 V1/V2 双写 | 进行中 | 已建立事务双写、回滚和对账；课堂积分/聊天、测试、课堂题目/附件、AI 学习网页、课堂普通资源、五星评价、小组协作、签到、抢答及随机点名已接入 |
+| `DATA-01C` 统一写入与 V1/V2 双写 | 完成 | 所有生产 V1 写入已收口到统一服务；确定性历史回填、`legacy.unmapped` 隔离、幂等重跑和全库对账通过 |
 | `INCENTIVE-01` 积分奖章边界 | 积分底座完成 | 积分与成绩、量规、核心素养和 AI 建议分离；奖章仍在量规和证据框架完成后开发，不提前进入主模型 |
 | M0 总体 | 工程闸门完成 | SQLite/PostgreSQL 全量测试、Redis/Channels、Celery worker/beat 和实际任务已验证；学校生产部署仍需完成密码、服务账号和备份恢复验收 |
-| M1 总体 | 进行中 | `DATA-01A/01B/02A/02B` 完成，`DATA-01C` 已覆盖课堂积分、测试、题目/附件、AI 网页、课堂资源、五星评价、小组协作、签到、抢答和随机点名；下一步迁移其余课堂控制与普通学习入口 |
+| M1 总体 | 进行中 | `DATA-01A/01B/01C/02A/02B` 完成；下一步只进入 `DATA-03A/B` 数据质量流水线与学校看板 |
 
 ## 0. 路线总则
 
@@ -191,10 +191,10 @@ frontend/src/features/stratification/
 - `DATA-02A` 已完成：迁移 `learning_analytics.0004` 新增 `LearningOpportunity`、`LearningOpportunityTransitionFact` 和事件机会外键；投放、撤回与结果事件在同一事务内维护机会事实。
 - `DATA-02B` 已完成：迁移 `learning_analytics.0005` 新增 `AssessmentResultFact` 和 `ParticipationPointLedger`；`item.graded` 已在同一事务内生成评分版本，待评分不作为最终 0 分，修订必须追加并引用既有成熟版本。
 - 积分服务已统一单次增减上限、非负余额、来源事件幂等、反向冲正和 `StudentProfile.score` 缓存对账；抢答、随机点名和聊天扣分已通过统一服务接入，旧历史分数仍不能直接当作完整研究流水。
-- 代码注册表当前包含设计报告核心载荷、`content.released@1.1/1.2/1.3`、`content.withdrawn@1.0`、`item.submitted@1.1`、AI 学习网页、课堂资源、小组协作、签到和课堂互动事件，共 25 个模式。既有 `content.released@1.0/1.1/1.2` 语义不覆盖，`1.3` 专门扩展非必做 `interaction` 机会类型。
+- 代码注册表当前包含设计报告核心载荷、投放/撤回、题目、AI 学习网页、课堂资源、小组协作、签到、课堂互动、资源中心、课时过程、前测、聊天、干预确认、课堂控制和历史隔离事件，共 35 个模式。既有模式语义不覆盖，新增语义均登记独立事件名或版本。
 - 已新增 `sync_learning_event_schemas`，同一个 `event_name + schema_version` 的语义哈希不一致时禁止覆盖。
 - `DATA-01C` 首批新增迁移 `learning_analytics.0006`，以 `LearningEventV2.legacy_event` 建立一对一追溯。统一服务在同一事务内写入 V1/V2，任一失败整体回滚；`LEARNING_EVENT_WRITE_MODE=v1_only` 仅用于紧急业务回滚。
-- `reconcile_learning_event_writes --check` 可按全平台或学校检查缺失与错误映射。尚未迁移的入口见 [学习事件 V1 写入点与 V2 迁移清单](learning_event_write_inventory.md)。
+- `reconcile_learning_event_writes --check` 可按全平台或学校分别检查实时双写、历史确定映射、历史隔离和未关联 V1。`backfill_learning_event_v2` 支持学校、截止时间、批次、dry-run 和断点恢复。
 - 测试开启按班级和题目生成学生级机会；学生主动交卷使用 `student-web`，超时/教师结束触发的自动交卷使用 `server`。客观题生成 `final` 自动评分，主观题先生成空得分 `pending`，教师批阅及复评追加 `final/revised`。
 - `TestAttempt.analytics_attempt_id` 使用三步数据迁移为已有和新答卷生成唯一 UUID。测试关闭先自动提交在途答卷，再撤回未完成机会；已有答卷的测试不能原地重开，必须复制为新轮次。
 - 迁移 `learning.0008` 新增不可变追加式 `LessonStepAttempt`、`LessonStepAttemptAnswer`，并为 `StudentWorkAttachment` 增加提交 UUID、上传版本和前序版本引用。课堂答案正文和附件留在业务表，V2 不复制原文或文件地址。
@@ -553,7 +553,7 @@ npm.cmd run build
 5. `DATA-01B`：批量接收、幂等、客户端发生/服务端接收时间。**已完成。**
 6. `DATA-02A`：学习机会与撤回事实。**已完成。**
 7. `DATA-02B`：最终评分、主观题成熟状态和课堂积分流水。**已完成。**
-8. `DATA-01C`：统一事件写入服务与 V1/V2 双写。**进行中，统一服务、课堂积分/聊天、测试、课堂题目/附件、AI 学习网页、课堂普通资源、五星评价、小组协作和签到已完成。**
+8. `DATA-01C`：统一事件写入服务与 V1/V2 双写。**已完成；生产直写清零，历史回填与对账通过。**
 9. `DATA-03A`：质量流水线、对账和本校质量 API。
 10. `DATA-03B`：学校管理员质量页面与 Celery 夜间调度。
 11. `MEAS-01A`：一个试点学科的任务蓝图和量规版本。

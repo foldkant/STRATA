@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -19,6 +21,7 @@ from learning_analytics.services.event_ingestion import (
     event_source_for_actor,
     ingest_learning_event,
 )
+from learning_analytics.services.schema_registry import ensure_event_schema_definition
 from learning_analytics.services.participation_points import (
     ParticipationPointError,
     record_participation_points,
@@ -209,6 +212,179 @@ def record_learning_event(
 
 
 @transaction.atomic
+def backfill_existing_learning_event(
+    *,
+    legacy_event: LearningEvent,
+    event_id,
+    event_name: str,
+    payload: dict,
+    target_student=None,
+    class_group=None,
+    subject=None,
+    course=None,
+    lesson=None,
+    classroom_session=None,
+    lesson_step=None,
+    object_type: str = "",
+    object_id: str | int = "",
+    object_version: str = "",
+    duration_ms: int | None = None,
+    schema_version: str = "1.0",
+) -> EventWriteResult:
+    if hasattr(legacy_event, "analytics_event_v2"):
+        return EventWriteResult(
+            legacy_event=legacy_event,
+            analytics_event=legacy_event.analytics_event_v2,
+            write_mode="migration",
+            duplicate=True,
+        )
+    actor = legacy_event.actor
+    if not getattr(actor, "school_id", None):
+        raise EventWriteError(
+            "legacy_actor_school_missing",
+            "历史事件执行人没有学校，无法建立学校级 V2 事实。",
+        )
+    try:
+        normalized_payload = validate_event_payload(event_name, schema_version, payload)
+    except EventPayloadValidationError as exc:
+        raise EventWriteError("schema_invalid", str(exc)) from exc
+    event_id = uuid.UUID(str(event_id))
+    event_data = {
+        "event_id": event_id,
+        "event_name": event_name,
+        "schema_version": schema_version,
+        "source": "migration",
+        "target_student_id": target_student.id if target_student else None,
+        "class_id": class_group.id if class_group else None,
+        "subject_id": subject.id if subject else None,
+        "course_id": course.id if course else None,
+        "lesson_id": lesson.id if lesson else None,
+        "session_id": classroom_session.id if classroom_session else None,
+        "step_id": lesson_step.id if lesson_step else None,
+        "object_type": str(object_type or legacy_event.object_type or ""),
+        "object_id": str(object_id or legacy_event.object_id or ""),
+        "object_version": str(object_version or ""),
+        "client_occurred_at": legacy_event.occurred_at,
+        "duration_ms": (
+            legacy_event.duration_ms if duration_ms is None else max(int(duration_ms), 0)
+        ),
+        "payload": normalized_payload,
+    }
+    try:
+        result = ingest_learning_event(
+            actor=actor,
+            event_data=event_data,
+            received_at=legacy_event.created_at,
+            legacy_event=legacy_event,
+            trusted_source="migration",
+        )
+    except EventIngestionError as exc:
+        raise EventWriteError(exc.code, exc.message) from exc
+    analytics_event = LearningEventV2.objects.get(
+        school=actor.school, event_id=result["event_id"]
+    )
+    if result["status"] == "duplicate" and analytics_event.legacy_event_id not in {
+        None,
+        legacy_event.id,
+    }:
+        raise EventWriteError(
+            "legacy_duplicate_conflict",
+            "确定性事件标识已经映射到另一条历史事件。",
+        )
+    if analytics_event.legacy_event_id != legacy_event.id:
+        raise EventWriteError(
+            "legacy_mapping_missing",
+            "V2 历史事件未建立到原 V1 事件的追溯关系。",
+        )
+    return EventWriteResult(
+        legacy_event=legacy_event,
+        analytics_event=analytics_event,
+        write_mode="migration",
+        duplicate=result["status"] == "duplicate",
+    )
+
+
+@transaction.atomic
+def record_legacy_unmapped_event(
+    *,
+    legacy_event: LearningEvent,
+    event_id,
+    reason_code: str,
+    mapping_version: str,
+) -> EventWriteResult:
+    if hasattr(legacy_event, "analytics_event_v2"):
+        return EventWriteResult(
+            legacy_event=legacy_event,
+            analytics_event=legacy_event.analytics_event_v2,
+            write_mode="migration",
+            duplicate=True,
+        )
+    actor = legacy_event.actor
+    if not getattr(actor, "school_id", None):
+        raise EventWriteError(
+            "legacy_actor_school_missing",
+            "历史事件执行人没有学校，无法保存未映射审计记录。",
+        )
+    payload = validate_event_payload(
+        "legacy.unmapped",
+        "1.0",
+        {
+            "mapping_version": mapping_version,
+            "reason_code": reason_code,
+            "legacy_event_type": legacy_event.event_type,
+            "legacy_object_type": legacy_event.object_type,
+        },
+    )
+    definition = ensure_event_schema_definition("legacy.unmapped", "1.0")
+    event_id = uuid.UUID(str(event_id))
+    identity = f"legacy-unmapped:{actor.school_id}:{legacy_event.id}:{mapping_version}"
+    idempotency_key = hashlib.sha256(identity.encode()).hexdigest()
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "event_id": str(event_id),
+                "legacy_event_id": legacy_event.id,
+                "payload": payload,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    event = LearningEventV2(
+        event_id=event_id,
+        idempotency_key=idempotency_key,
+        event_fingerprint=fingerprint,
+        schema_definition=definition,
+        event_name="legacy.unmapped",
+        schema_version="1.0",
+        source="migration",
+        legacy_event=legacy_event,
+        actor=actor,
+        school=actor.school,
+        object_type=legacy_event.object_type,
+        object_id=legacy_event.object_id,
+        client_occurred_at=legacy_event.occurred_at,
+        server_received_at=legacy_event.created_at,
+        duration_ms=legacy_event.duration_ms,
+        privacy_class=definition.privacy_class,
+        analysis_unit=definition.analysis_unit,
+        payload=payload,
+        quality_status=LearningEventV2.QualityStatus.LEGACY_UNMAPPED,
+        quality_errors=[reason_code],
+    )
+    try:
+        event.save()
+    except EventPayloadValidationError as exc:
+        raise EventWriteError("schema_invalid", str(exc)) from exc
+    return EventWriteResult(
+        legacy_event=legacy_event,
+        analytics_event=event,
+        write_mode="migration",
+    )
+
+
+@transaction.atomic
 def record_classroom_point_adjustment(
     *,
     teacher,
@@ -328,10 +504,18 @@ def record_classroom_point_adjustment(
 
 def reconcile_v1_v2_events(*, school=None, max_examples: int = 50) -> dict:
     legacy = LearningEvent.objects.filter(metadata__analytics_dual_write=True)
-    analytics = LearningEventV2.objects.filter(legacy_event__isnull=False)
+    analytics = LearningEventV2.objects.filter(
+        legacy_event__metadata__analytics_dual_write=True
+    )
+    historical = LearningEventV2.objects.filter(
+        legacy_event__isnull=False
+    ).exclude(legacy_event_id__in=legacy.values_list("id", flat=True))
+    unlinked_legacy = LearningEvent.objects.filter(analytics_event_v2__isnull=True)
     if school is not None:
         legacy = legacy.filter(actor__school=school)
         analytics = analytics.filter(school=school)
+        historical = historical.filter(school=school)
+        unlinked_legacy = unlinked_legacy.filter(actor__school=school)
 
     mapped_legacy_ids = analytics.values_list("legacy_event_id", flat=True)
     missing = legacy.exclude(pk__in=mapped_legacy_ids)
@@ -357,12 +541,22 @@ def reconcile_v1_v2_events(*, school=None, max_examples: int = 50) -> dict:
                 )
     missing_ids = list(missing.values_list("id", flat=True)[:max_examples])
     missing_count = missing.count()
+    unlinked_count = unlinked_legacy.count()
     return {
         "legacy_dual_write_count": legacy.count(),
         "analytics_mapped_count": analytics.count(),
+        "historical_mapped_count": historical.exclude(
+            quality_status=LearningEventV2.QualityStatus.LEGACY_UNMAPPED
+        ).count(),
+        "historical_unmapped_count": historical.filter(
+            quality_status=LearningEventV2.QualityStatus.LEGACY_UNMAPPED
+        ).count(),
+        "unlinked_legacy_count": unlinked_count,
         "missing_v2_count": missing_count,
         "mapping_mismatch_count": mismatch_count,
         "missing_v2_examples": missing_ids,
         "mapping_mismatch_examples": mismatches,
-        "consistent": missing_count == 0 and mismatch_count == 0,
+        "consistent": (
+            missing_count == 0 and mismatch_count == 0 and unlinked_count == 0
+        ),
     }

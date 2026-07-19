@@ -190,9 +190,9 @@
 - `learning_analytics.services.dual_write.reconcile_v1_v2_events`：检查所有标记为双写的 V1 记录是否存在唯一 V2 映射，并验证事件 UUID 和事件名。
 - `LearningEventRejection`：无效或冲突事件的短期隔离审计。原始 JSON 信封使用 Fernet 加密，保存 SHA-256、错误码、可重放状态和保留期限；超过 64KB 时只加密保存摘要并标记不可重放。
 - `learning_analytics.services.access_audit.teacher_has_class_scope`：按学校和有效任课关系判断教师是否可查看班级个体分析，单纯教师角色不足以授权。
-- `sync_learning_event_schemas`：将代码中 25 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
+- `sync_learning_event_schemas`：将代码中 35 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
 - `purge_expired_event_rejections`：删除超过本地保留期限的加密拒绝记录；正式环境后续由 Celery beat 定时调用。
-- 当前 app 已完成 M0 首批安全基线和 `DATA-01A/01B/02A/02B`，`DATA-01C` 已覆盖课堂积分、测试、课堂题目/附件、AI 学习网页、课堂普通资源、五星量规、小组协作、签到、抢答和随机点名。其余课堂控制/普通学习入口、质量流水线、特征生成和模型训练尚未完成。
+- 当前 app 已完成 M0 和 `DATA-01A/01B/01C/02A/02B`。所有生产 V1 写入已通过统一服务双写；历史 V1 使用确定性 UUID 回填，无法证明语义或机会的记录以 `legacy.unmapped` 隔离。质量流水线、特征生成和模型训练尚未完成。
 
 机会状态当前只支持立即投放：`content.released` 的发生时间即实际开放时间。未来定时任务必须先增加 `content.assigned`，到点后再追加 `released`；不能把未来计划时间提前记成已开放。
 

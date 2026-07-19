@@ -14,6 +14,10 @@ from learning_analytics.services.dual_write import (
     record_classroom_point_adjustment,
     record_learning_event,
 )
+from learning_analytics.services.operational_events import (
+    record_chat_message_sent,
+    record_intervention_acknowledged,
+)
 from realtime.events import publish_chat_event, session_group, teacher_group, user_group
 from realtime.models import ClassroomChatConfig, ClassroomChatMessage, ClassroomChatReadState, ClassroomChatThread
 from realtime.moderation import DEFAULT_DEDUCTION, SEVERITY_RANK, moderate_content
@@ -451,25 +455,10 @@ def _create_message(session: ClassroomSession, sender, room_type: str, target_id
         matched_rules=matched_rules if flagged else [],
     )
     thread.save(update_fields=["updated_at"])
-    LearningEvent.objects.create(
-        actor=sender,
-        class_group=session.class_group,
-        course=session.course,
-        lesson=session.lesson,
-        event_type=LearningEvent.EventType.CHAT_MESSAGE,
-        object_type="classroom_chat_message",
-        object_id=str(message.id),
-        metadata={
-            "action": "classroom_chat_message",
-            "classroom_session": session.id,
-            "thread": thread.id,
-            "room_type": room_type,
-            "moderation_status": message.moderation_status,
-            "severity": message.severity,
-            "content_length": len(message.content),
-        },
-        occurred_at=message.created_at,
-    )
+    try:
+        record_chat_message_sent(message=message, session=session)
+    except EventWriteError as exc:
+        raise ChatError(exc.message, status=500) from exc
     _push_changed(
         message,
         event_type="chat.moderation.pending" if flagged else "chat.message.created",
@@ -765,9 +754,10 @@ def student_chat_read(request, pk):
 
 @api_view(["POST"])
 @permission_classes([IsStudent])
+@transaction.atomic
 def student_chat_moderation_feedback_ack(request, pk, message_id):
     try:
-        session, _ = _student_session(request, pk)
+        session, profile = _student_session(request, pk)
         message = ClassroomChatMessage.objects.filter(
             pk=message_id,
             thread__session=session,
@@ -788,22 +778,25 @@ def student_chat_moderation_feedback_ack(request, pk, message_id):
             metadata__action="classroom_chat_moderation_feedback_ack",
         ).exists()
         if not exists:
-            LearningEvent.objects.create(
-                actor=request.user,
-                class_group=session.class_group,
-                course=session.course,
-                lesson=session.lesson,
-                event_type=LearningEvent.EventType.PAGE_VIEW,
-                object_type="classroom_chat_message",
-                object_id=str(message.id),
-                metadata={
-                    "action": "classroom_chat_moderation_feedback_ack",
-                    "classroom_session": session.id,
-                    "moderation_action": message.review_action,
-                    "deduction_points": message.deduction_points,
-                },
-                occurred_at=timezone.now(),
-            )
+            try:
+                record_intervention_acknowledged(
+                    student=request.user,
+                    profile=profile,
+                    session=session,
+                    object_type="classroom_chat_message",
+                    object_id=message.id,
+                    intervention_type="chat_moderation",
+                    action=message.review_action,
+                    points=message.deduction_points,
+                    legacy_metadata={
+                        "action": "classroom_chat_moderation_feedback_ack",
+                        "classroom_session": session.id,
+                        "moderation_action": message.review_action,
+                        "deduction_points": message.deduction_points,
+                    },
+                )
+            except EventWriteError as exc:
+                raise ChatError(exc.message, status=500) from exc
         return ok({"message_id": message.id, "acknowledged": True}, "处理反馈已确认。")
     except ChatError as exc:
         return _chat_fail(exc)

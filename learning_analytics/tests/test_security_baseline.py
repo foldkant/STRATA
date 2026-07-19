@@ -30,6 +30,7 @@ from learning_analytics.models import (
     SensitiveInferenceAccessLog,
 )
 from learning_analytics.schemas.registry import (
+    EVENT_SCHEMA_REGISTRY,
     EventPayloadValidationError,
     validate_event_payload,
 )
@@ -223,8 +224,10 @@ class LearningEventV2SchemaTests(TestCase):
 
     def test_registry_sync_and_strict_payload_validation(self):
         result = sync_event_schema_definitions()
-        self.assertEqual(result["created"], 23)
-        self.assertEqual(EventSchemaDefinition.objects.count(), 25)
+        self.assertEqual(result["created"], len(EVENT_SCHEMA_REGISTRY) - 2)
+        self.assertEqual(
+            EventSchemaDefinition.objects.count(), len(EVENT_SCHEMA_REGISTRY)
+        )
         checked = sync_event_schema_definitions(check_only=True)
         self.assertEqual(checked["missing"], 0)
         self.assertEqual(checked["mismatched"], 0)

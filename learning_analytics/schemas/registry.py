@@ -116,6 +116,68 @@ class ResourceOpenedPayload(StrictPayloadModel):
     presentation: Literal["embedded", "popout", "external", "download", "unknown"]
 
 
+class ResourceCenterOpenedPayload(StrictPayloadModel):
+    resource_type: Literal["file", "article", "link", "student_project"]
+    visibility: Literal["private", "classes", "school", "external"]
+    origin_scope: Literal["same_school", "external_school", "unknown"]
+
+
+class PretestSubmittedPayload(StrictPayloadModel):
+    paper_kind: Literal["literacy", "attitude"]
+    paper_version: Annotated[int, Field(ge=1, le=100_000)]
+    submission_id: Annotated[int, Field(gt=0)]
+    answer_count: Annotated[int, Field(ge=0, le=1000)]
+    score_raw: Annotated[float, Field(ge=0)]
+
+
+class LessonEnteredPayload(StrictPayloadModel):
+    entrypoint: Literal["student_workspace", "classroom", "migration"]
+
+
+class LessonStepEnteredPayload(StrictPayloadModel):
+    step_type: Annotated[str, Field(min_length=1, max_length=32)]
+
+
+class LessonStepCompletedPayload(StrictPayloadModel):
+    step_type: Annotated[str, Field(min_length=1, max_length=32)]
+    completion_source: Literal["student", "teacher", "server", "migration"]
+
+
+class ClassroomInteractionRespondedPayload(StrictPayloadModel):
+    response_type: Annotated[str, Field(min_length=1, max_length=64)]
+    command: Annotated[str, Field(min_length=1, max_length=64)]
+    content_length: Annotated[int, Field(ge=0, le=1000)]
+
+
+class ChatMessageSentPayload(StrictPayloadModel):
+    room_type: Literal["whole_class", "teacher_private", "group"]
+    moderation_status: Literal["visible", "pending", "removed"]
+    severity: Literal["none", "mild", "moderate", "severe"]
+    content_length: Annotated[int, Field(ge=1, le=500)]
+
+
+class InterventionAcknowledgedPayload(StrictPayloadModel):
+    intervention_type: Annotated[str, Field(min_length=1, max_length=64)]
+    action: Annotated[str, Field(min_length=1, max_length=64)]
+    points: Annotated[float, Field(ge=0, le=100)] = 0
+
+
+class ClassroomControlExecutedPayload(StrictPayloadModel):
+    action: Annotated[str, Field(min_length=1, max_length=64)]
+    object_kind: Literal["classroom_session", "classroom_activity", "lesson_step"]
+    activity_type: Annotated[str, Field(max_length=32)] = ""
+    step_status: Annotated[str, Field(max_length=16)] = ""
+    submission_locked: bool = False
+    has_layered_questions: bool = False
+
+
+class LegacyUnmappedPayload(StrictPayloadModel):
+    mapping_version: Annotated[str, Field(min_length=1, max_length=32)]
+    reason_code: Annotated[str, Field(min_length=1, max_length=64)]
+    legacy_event_type: Annotated[str, Field(min_length=1, max_length=64)]
+    legacy_object_type: Annotated[str, Field(max_length=64)] = ""
+
+
 class VideoProgressPayload(StrictPayloadModel):
     position_seconds: Annotated[float, Field(ge=0)]
     media_seconds: Annotated[float, Field(gt=0)]
@@ -415,6 +477,98 @@ _EVENT_SPECS = (
         requires_opportunity=True,
     ),
     EventSchemaSpec(
+        "resource.center.opened",
+        "1.0",
+        "学生主动打开资源中心内容；该自由浏览事实不生成课堂机会分母。",
+        ResourceCenterOpenedPayload,
+        "behavioral",
+        "student",
+        ("class_group", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "pretest.submitted",
+        "1.0",
+        "学生提交学科前测；答案正文保留在前测业务表。",
+        PretestSubmittedPayload,
+        "assessment",
+        "student",
+        ("class_group", "subject", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "lesson.entered",
+        "1.0",
+        "学生主动进入一个已授权课时。",
+        LessonEnteredPayload,
+        "behavioral",
+        "student",
+        ("class_group", "course", "lesson", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "lesson.step.entered",
+        "1.0",
+        "学生主动进入当前已投放课时环节。",
+        LessonStepEnteredPayload,
+        "behavioral",
+        "student",
+        ("class_group", "course", "lesson", "lesson_step", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "lesson.step.completed",
+        "1.0",
+        "学生声明完成当前课时环节；时长保留为独立事件字段。",
+        LessonStepCompletedPayload,
+        "behavioral",
+        "student",
+        ("class_group", "course", "lesson", "lesson_step", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "classroom.interaction.responded",
+        "1.0",
+        "学生响应未建立专用机会模型的普通课堂互动；不复制回答正文。",
+        ClassroomInteractionRespondedPayload,
+        "behavioral",
+        "student",
+        ("class_group", "course", "classroom_session", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "chat.message.sent",
+        "1.0",
+        "课堂参与者发送实名聊天消息；只记录房间、审核状态和长度，不复制正文。",
+        ChatMessageSentPayload,
+        "behavioral",
+        "class",
+        ("class_group", "course", "classroom_session", "object_id"),
+        ("student-web", "teacher-web", "server", "migration"),
+        requires_target_student=False,
+    ),
+    EventSchemaSpec(
+        "intervention.acknowledged",
+        "1.0",
+        "学生确认已收到课堂积分或聊天审核干预反馈。",
+        InterventionAcknowledgedPayload,
+        "intervention",
+        "student",
+        ("class_group", "course", "classroom_session", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "classroom.control.executed",
+        "1.0",
+        "教师执行课堂、环节或活动控制动作的班级级审计事实。",
+        ClassroomControlExecutedPayload,
+        "intervention",
+        "class",
+        ("class_group", "course", "classroom_session", "object_id"),
+        TEACHER_SOURCES,
+        requires_target_student=False,
+    ),
+    EventSchemaSpec(
         "video.progress",
         "1.0",
         "学生观看已投放视频的进度。",
@@ -608,6 +762,17 @@ _EVENT_SPECS = (
         "student",
         ("class_group", "subject"),
         STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "legacy.unmapped",
+        "1.0",
+        "无法在不伪造上下文或学习机会的前提下确定映射语义的 V1 历史事件。",
+        LegacyUnmappedPayload,
+        "system_quality",
+        "system",
+        (),
+        ("migration",),
+        requires_target_student=False,
     ),
 )
 

@@ -1156,6 +1156,7 @@ POST /api/v1/learning-events/batch/
 - `content.withdrawn@1.0` 必须引用原 `release_event_id` 和结构化 `reason_code`；已提交或已评分的机会保留，其余机会追加 `withdrawn` 事实。
 - `resource.opened`、`video.progress`、`document.progress`、`group.document.opened`、`group.file.shared`、`attendance.recorded`、`quick_answer.responded`、`item.submitted`、`item.graded`、`task.submitted` 和 `rubric.rating.submitted` 必须提交真实 `opportunity_id`。随机 UUID、跨学生引用、内容版本不一致或机会终止后的事件按条拒绝。
 - `quick_answer.responded` 只允许服务端写入，载荷仅保存首次响应排名和相对活动开启时间的延迟；学生回答正文不复制进 V2。`random_call.selected` 也只允许服务端写入，记录教师选择事实，不要求机会、不生成提交状态。
+- `resource.center.opened`、`lesson.entered`、`lesson.step.entered/completed`、`pretest.submitted`、`chat.message.sent`、`intervention.acknowledged`、`classroom.interaction.responded` 和 `classroom.control.executed` 由对应业务接口通过统一服务写入。资源中心自由浏览和班级级课堂控制不生成学习机会。
 - `item.graded` 必须与同一机会、同一 `attempt_id` 的既有 `item.submitted` 对应。`pending` 只表示尚未形成成熟评分；首个成熟结果使用 `final`，后续修改必须使用 `revised` 并追加新版本。
 - `AssessmentResultFact` 不通过该接口直接提交，由服务端在接受 `item.graded` 时同事务生成。重复 `final`、无提交先评分或修订缺少成熟前序版本会整条拒绝，事件和机会状态不会留下半成品。
 - 当前仅支持立即开放。`content.released.available_from` 不能晚于事件发生时间；预定开放需等待后续 `content.assigned` 契约实现。
@@ -1181,7 +1182,17 @@ POST /api/v1/student/classroom/{session_id}/resources/{resource_id}/document-pro
 - `opened` 请求体为 `{ "presentation": "embedded|popout|external|download|unknown" }`，写入 `resource.opened@1.0`。该事件只证明资源已呈现，不等同于完成、掌握或有效投入。
 - `video-progress` 请求体包含 `position_seconds/media_seconds/playback_rate/duration_ms`。学生端约每 10 秒及暂停、结束时节流提交；服务端校验位置不超过媒体总时长。
 - `document-progress` 请求体包含真实 `page/page_count/visible_seconds`。只有本地查看器能可靠返回这些值时才调用；浏览器 PDF iframe 和当前 ONLYOFFICE 接入无法可靠返回页码时只写 `resource.opened`，禁止用固定 `1/1` 伪造进度。
-- 资源中心 `POST /student/resources/{id}/` 仍表示课堂外自主浏览，不复用课堂机会。后续建立推荐或教师指派事实前，不将其放入必做完成率分母。
+- 资源中心 `POST /student/resources/{id}/` 写入 `resource.center.opened`，表示课堂外自主浏览，不复用课堂机会。未来若建立推荐或教师指派，必须另建指派事实；当前不将自由浏览放入必做完成率分母。
+
+历史 V1 回填命令：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py backfill_learning_event_v2 --dry-run --batch-size 500
+.\.venv\Scripts\python.exe manage.py backfill_learning_event_v2 --batch-size 500
+.\.venv\Scripts\python.exe manage.py reconcile_learning_event_writes --check
+```
+
+命令支持 `--school`、`--before`、`--batch-size`、`--resume` 和 `--dry-run`。事件 UUID 由 V1 主键和映射版本确定生成；无法证明语义、上下文或机会的旧记录写为 `legacy.unmapped`，不创建学习机会、不进入后续能力证据。
 
 响应包含批次计数和逐条结果：
 

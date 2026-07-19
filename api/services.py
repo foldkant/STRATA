@@ -63,6 +63,8 @@ from learning_analytics.services.group_collaboration_events import (
     GroupCollaborationEventError,
     withdraw_group_collaboration_opportunities,
 )
+from learning_analytics.services.dual_write import EventWriteError
+from learning_analytics.services.operational_events import record_classroom_control_executed
 from ops.forms import PASSWORD_PATTERN, _matches
 from ops.forms import (
     PERSON_NAME_PATTERN,
@@ -5515,45 +5517,16 @@ def _write_classroom_event(
     activity: ClassroomActivity | None = None,
     step: LessonStep | None = None,
 ) -> None:
-    object_type = "classroom_session"
-    object_id = str(session.id)
-    if activity:
-        object_type = "classroom_activity"
-        object_id = str(activity.id)
-    elif step:
-        object_type = "lesson_step"
-        object_id = str(step.id)
-    LearningEvent.objects.create(
-        actor=request.user,
-        class_group=session.class_group,
-        course=session.course,
-        lesson=session.lesson,
-        event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
-        object_type=object_type,
-        object_id=object_id,
-        metadata={
-            "action": action,
-            "session": session.id,
-            "activity": activity.id if activity else None,
-            "activity_type": activity.activity_type if activity else "",
-            "step": step.id if step else None,
-            "step_status": session.current_step_status,
-            "submission_locked": session.submission_locked,
-            "has_layered_questions": bool(
-                step
-                and isinstance(step.question_items, list)
-                and any(
-                    isinstance(item, dict)
-                    and (
-                        str(item.get("target_layer") or "all") not in {"", "all"}
-                        or bool(item.get("use_layer_scores"))
-                    )
-                    for item in step.question_items
-                )
-            ),
-        },
-        occurred_at=timezone.now(),
-    )
+    try:
+        record_classroom_control_executed(
+            teacher=request.user,
+            session=session,
+            action=action,
+            activity=activity,
+            step=step,
+        )
+    except EventWriteError as exc:
+        raise ServiceError(exc.message, status=500) from exc
 
 
 def _classroom_session_step(session: ClassroomSession, step_id) -> LessonStep:
@@ -5628,6 +5601,7 @@ def set_classroom_current_step(
     return session
 
 
+@transaction.atomic
 def lock_classroom_current_step(request, session: ClassroomSession) -> ClassroomSession:
     if session.status != ClassroomSession.Status.RUNNING:
         raise ServiceError("只有进行中的课堂可以锁定提交。", status=400)
@@ -5933,6 +5907,7 @@ def save_classroom_session(
     return session
 
 
+@transaction.atomic
 def start_classroom_session(request, session: ClassroomSession) -> ClassroomSession:
     if session.status == ClassroomSession.Status.FINISHED:
         raise ServiceError("已结束课堂不能重新开始。", status=400)
@@ -5970,6 +5945,7 @@ def start_classroom_session(request, session: ClassroomSession) -> ClassroomSess
     return session
 
 
+@transaction.atomic
 def restart_classroom_session(request, session: ClassroomSession) -> ClassroomSession:
     if session.status != ClassroomSession.Status.FINISHED:
         return start_classroom_session(request, session)

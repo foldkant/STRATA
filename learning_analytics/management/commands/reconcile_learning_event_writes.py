@@ -43,7 +43,8 @@ class Command(BaseCommand):
             raise CommandError(
                 "V1/V2 学习事件对账失败："
                 f"缺失 {result['missing_v2_count']} 条，"
-                f"映射不一致 {result['mapping_mismatch_count']} 条。"
+                f"映射不一致 {result['mapping_mismatch_count']} 条，"
+                f"未关联历史 {result['unlinked_legacy_count']} 条。"
             )
         if result["consistent"]:
             self.stdout.write(self.style.SUCCESS("V1/V2 学习事件对账通过。"))

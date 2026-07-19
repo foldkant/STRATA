@@ -120,6 +120,15 @@ from learning_analytics.services.group_collaboration_events import (
     release_group_collaboration_opportunities,
     withdraw_group_collaboration_opportunities,
 )
+from learning_analytics.services.operational_events import (
+    record_classroom_interaction_response,
+    record_intervention_acknowledged,
+    record_lesson_entered,
+    record_lesson_step_completed,
+    record_lesson_step_entered,
+    record_pretest_submitted,
+    record_resource_center_opened,
+)
 from ops.models import AuditLog, ExportBatch, ImportBatch
 from ops.xlsx import export_rows, template_response
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
@@ -2771,23 +2780,18 @@ def student_resource_detail(request, pk):
     if resource is None:
         return fail("资源不存在或暂未向你开放。", status=404)
     if request.method == "POST":
-        Resource.objects.filter(pk=resource.pk).update(view_count=F("view_count") + 1)
-        LearningEvent.objects.create(
-            actor=request.user,
-            class_group=profile.class_group,
-            event_type=LearningEvent.EventType.RESOURCE_VIEW,
-            object_type="resource_center",
-            object_id=str(resource.id),
-            metadata={
-                "title": resource.title,
-                "resource_type": resource.resource_type,
-                "visibility": resource.visibility,
-                "source_school": (
-                    resource.owner.school.name if resource.owner.school_id else ""
-                ),
-            },
-            occurred_at=timezone.now(),
-        )
+        try:
+            with transaction.atomic():
+                Resource.objects.filter(pk=resource.pk).update(
+                    view_count=F("view_count") + 1
+                )
+                record_resource_center_opened(
+                    resource=resource,
+                    student=request.user,
+                    profile=profile,
+                )
+        except EventWriteError as exc:
+            return fail(exc.message, status=500)
         resource.view_count += 1
     return ok(resource_row(resource, viewer=request.user))
 
@@ -7218,34 +7222,6 @@ def _student_lesson_step(profile: StudentProfile, step_id) -> LessonStep:
     return step
 
 
-def _write_student_event(
-    request,
-    profile: StudentProfile,
-    event_type: str,
-    *,
-    course: Course | None = None,
-    lesson: Lesson | None = None,
-    object_type: str = "",
-    object_id: str | int = "",
-    duration_ms: int = 0,
-    score=None,
-    metadata: dict | None = None,
-) -> LearningEvent:
-    return LearningEvent.objects.create(
-        actor=request.user,
-        class_group=profile.class_group,
-        course=course,
-        lesson=lesson,
-        event_type=event_type,
-        object_type=object_type,
-        object_id=str(object_id) if object_id else "",
-        duration_ms=max(int(duration_ms or 0), 0),
-        score=score,
-        metadata=metadata or {},
-        occurred_at=timezone.now(),
-    )
-
-
 def _lesson_step_contains_learning_web_page(
     step: LessonStep | None, page_id: int
 ) -> bool:
@@ -8145,6 +8121,7 @@ def student_pretests_for_subject(request, subject_id):
 
 @api_view(["GET", "POST"])
 @permission_classes([IsStudent])
+@transaction.atomic
 def student_pretest_paper(request, paper_id):
     paper = (
         PretestPaper.objects.select_related("subject")
@@ -8218,19 +8195,14 @@ def student_pretest_paper(request, paper_id):
             )
     except ServiceError:
         profile = None
-    _write_student_event(
-        request,
-        profile or StudentProfile(user=request.user),
-        LearningEvent.EventType.ANSWER_SUBMIT,
-        object_type="pretest_paper",
-        object_id=paper.id,
-        score=score,
-        metadata={
-            "subject": paper.subject_id,
-            "kind": paper.kind,
-            "submission": submission.id,
-        },
-    )
+    if profile is None:
+        transaction.set_rollback(True)
+        return fail("学生档案不存在，前测提交未保存。", status=500)
+    try:
+        record_pretest_submitted(submission=submission, profile=profile)
+    except EventWriteError as exc:
+        transaction.set_rollback(True)
+        return fail(exc.message, status=500)
     return ok(
         {
             "id": submission.id,
@@ -8385,15 +8357,10 @@ def student_lesson_enter(request, lesson_id):
         _ensure_student_lesson_workspace_allowed(profile, lesson)
     except ServiceError as exc:
         return _service_fail(exc)
-    _write_student_event(
-        request,
-        profile,
-        LearningEvent.EventType.LESSON_ENTER,
-        course=lesson.course,
-        lesson=lesson,
-        object_type="lesson",
-        object_id=lesson.id,
-    )
+    try:
+        record_lesson_entered(student=request.user, profile=profile, lesson=lesson)
+    except EventWriteError as exc:
+        return fail(exc.message, status=500)
     return ok({}, "已记录进入课时。")
 
 
@@ -8405,16 +8372,12 @@ def student_lesson_step_enter(request, step_id):
         step = _student_lesson_step(profile, step_id)
     except ServiceError as exc:
         return _service_fail(exc)
-    _write_student_event(
-        request,
-        profile,
-        LearningEvent.EventType.PAGE_VIEW,
-        course=step.lesson.course,
-        lesson=step.lesson,
-        object_type="lesson_step",
-        object_id=step.id,
-        metadata={"action": "step_enter", "step_type": step.step_type},
-    )
+    try:
+        record_lesson_step_entered(
+            student=request.user, profile=profile, step=step
+        )
+    except EventWriteError as exc:
+        return fail(exc.message, status=500)
     return ok({}, "已记录进入环节。")
 
 
@@ -8427,17 +8390,15 @@ def student_lesson_step_complete(request, step_id):
     except ServiceError as exc:
         return _service_fail(exc)
     duration_ms = request.data.get("duration_ms", 0)
-    _write_student_event(
-        request,
-        profile,
-        LearningEvent.EventType.PAGE_VIEW,
-        course=step.lesson.course,
-        lesson=step.lesson,
-        object_type="lesson_step",
-        object_id=step.id,
-        duration_ms=duration_ms,
-        metadata={"action": "step_complete", "step_type": step.step_type},
-    )
+    try:
+        record_lesson_step_completed(
+            student=request.user,
+            profile=profile,
+            step=step,
+            duration_ms=duration_ms,
+        )
+    except EventWriteError as exc:
+        return fail(exc.message, status=500)
     return ok({}, "已记录完成环节。")
 
 
@@ -9046,26 +9007,18 @@ def student_classroom_activity_response(request, pk, activity_id):
             return fail(exc.message, status=400)
         return ok(classroom_activity_row(activity), "课堂响应已记录。")
 
-    _write_student_event(
-        request,
-        profile,
-        LearningEvent.EventType.PAGE_VIEW,
-        course=session.course,
-        lesson=session.lesson,
-        object_type="classroom_activity",
-        object_id=activity.id,
-        metadata={
-            "action": "classroom_activity_response",
-            "response_type": response_type,
-            "command": command,
-            "attendance_status": "signed" if command == "sign_in" else "",
-            "attendance_status_label": "已签到" if command == "sign_in" else "",
-            "source": "student" if command == "sign_in" else "",
-            "quick_answer": command == "quick_answer",
-            "activity_title": activity.title,
-            "content": content,
-        },
-    )
+    try:
+        record_classroom_interaction_response(
+            student=request.user,
+            profile=profile,
+            session=session,
+            activity=activity,
+            response_type=response_type,
+            command=command,
+            content=content,
+        )
+    except EventWriteError as exc:
+        return fail(exc.message, status=500)
     return ok(classroom_activity_row(activity), "课堂响应已记录。")
 
 
@@ -9118,24 +9071,28 @@ def student_classroom_score_feedback_ack(request, pk, activity_id):
         score_metadata = (
             score_event.metadata if isinstance(score_event.metadata, dict) else {}
         )
-        _write_student_event(
-            request,
-            profile,
-            LearningEvent.EventType.PAGE_VIEW,
-            course=session.course,
-            lesson=session.lesson,
-            object_type="classroom_activity",
-            object_id=activity.id,
-            score=score_event.score,
-            metadata={
-                "action": "classroom_score_feedback_ack",
-                "command": score_metadata.get("command", ""),
-                "score_event_id": score_event.id,
-                "score": score_event.score,
-                "score_action": score_metadata.get("score_action", ""),
-                "activity_title": activity.title,
-            },
-        )
+        try:
+            record_intervention_acknowledged(
+                student=request.user,
+                profile=profile,
+                session=session,
+                object_type="classroom_activity",
+                object_id=activity.id,
+                intervention_type="score_feedback",
+                action=str(score_metadata.get("command") or "score_feedback"),
+                points=score_event.score,
+                legacy_score=score_event.score,
+                legacy_metadata={
+                    "action": "classroom_score_feedback_ack",
+                    "command": score_metadata.get("command", ""),
+                    "score_event_id": score_event.id,
+                    "score": score_event.score,
+                    "score_action": score_metadata.get("score_action", ""),
+                    "activity_title": activity.title,
+                },
+            )
+        except EventWriteError as exc:
+            return fail(exc.message, status=500)
     return ok({"score_event_id": score_event.id}, "评分反馈已确认。")
 
 

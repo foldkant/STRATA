@@ -140,6 +140,16 @@ PostgreSQL 环境缺失或配置错误时，`manage.py check` 会阻断启动。
 .\.venv\Scripts\python.exe manage.py sync_learning_event_schemas
 ```
 
+从旧版事件表升级时，先备份数据库并执行 dry-run，再正式回填和对账：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py backfill_learning_event_v2 --dry-run --batch-size 500
+.\.venv\Scripts\python.exe manage.py backfill_learning_event_v2 --batch-size 500
+.\.venv\Scripts\python.exe manage.py reconcile_learning_event_writes --check
+```
+
+`legacy.unmapped` 是明确的数据质量隔离状态，不得手工改成已接受事件，也不得据此补造学习机会。
+
 清理超过保留期限的隔离事件：
 
 ```powershell
