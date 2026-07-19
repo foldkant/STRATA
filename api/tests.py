@@ -274,6 +274,8 @@ class AssessmentWorkflowTests(TestCase):
         self.assertEqual(submitted_event.schema_version, "1.1")
         self.assertEqual(submitted_event.attempt_id, attempt.analytics_attempt_id)
         self.assertNotIn("answer", submitted_event.payload)
+        graded_event = LearningEventV2.objects.get(event_name="item.graded")
+        self.assertEqual(graded_event.schema_version, "1.1")
         result_fact = AssessmentResultFact.objects.get(grading_state="final")
         self.assertEqual(float(result_fact.score_raw), 5)
         self.assertEqual(result_fact.grader_type, "automatic")

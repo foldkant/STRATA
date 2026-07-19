@@ -264,7 +264,7 @@ class ItemGradedPayload(StrictPayloadModel):
     score_raw: float | None = None
     score_max: Annotated[float, Field(gt=0)]
     is_correct: bool | None = None
-    grader_type: Literal["automatic", "teacher", "evaluation"]
+    grader_type: Literal["automatic", "teacher", "rubric"]
 
     @model_validator(mode="after")
     def validate_score(self):
@@ -273,6 +273,10 @@ class ItemGradedPayload(StrictPayloadModel):
         if self.score_raw is not None and not 0 <= self.score_raw <= self.score_max:
             raise ValueError("score_raw 必须位于 0 到 score_max 之间")
         return self
+
+
+class ItemGradedPayloadV11(ItemGradedPayload):
+    grader_type: Literal["automatic", "teacher", "evaluation"]
 
 
 class TaskSubmittedPayload(StrictPayloadModel):
@@ -321,12 +325,48 @@ class CriterionRatingPayload(StrictPayloadModel):
     rating: Annotated[int, Field(ge=1, le=5)]
 
 
-class EvaluationRatingSubmittedPayload(StrictPayloadModel):
-    evaluation_version: Annotated[str, Field(min_length=1, max_length=128)]
+class RubricRatingSubmittedPayload(StrictPayloadModel):
+    rubric_version: Annotated[str, Field(min_length=1, max_length=128)]
     criterion_ratings: list[CriterionRatingPayload] = Field(
         min_length=1, max_length=100
     )
     rater_role: Literal["self", "peer", "teacher"]
+
+
+class CriterionNotAssessedPayload(StrictPayloadModel):
+    criterion_id: Annotated[str, Field(min_length=1, max_length=128)]
+    reason_code: Literal[
+        "no_evidence",
+        "not_observed",
+        "not_applicable",
+        "technical_issue",
+        "other",
+    ]
+
+
+class EvaluationRatingSubmittedPayloadV11(StrictPayloadModel):
+    evaluation_version: Annotated[str, Field(min_length=1, max_length=128)]
+    criterion_ratings: list[CriterionRatingPayload] = Field(
+        default_factory=list, max_length=100
+    )
+    not_assessed_criteria: list[CriterionNotAssessedPayload] = Field(
+        default_factory=list, max_length=100
+    )
+    rater_role: Literal["self", "peer", "teacher"]
+
+    @model_validator(mode="after")
+    def validate_criterion_states(self):
+        rated_ids = [item.criterion_id for item in self.criterion_ratings]
+        skipped_ids = [item.criterion_id for item in self.not_assessed_criteria]
+        if not rated_ids and not skipped_ids:
+            raise ValueError("至少需要一个已评分或暂不评价的指标")
+        if len(rated_ids) != len(set(rated_ids)):
+            raise ValueError("已评分指标不能重复")
+        if len(skipped_ids) != len(set(skipped_ids)):
+            raise ValueError("暂不评价指标不能重复")
+        if set(rated_ids) & set(skipped_ids):
+            raise ValueError("同一指标不能同时评分和暂不评价")
+        return self
 
 
 class InterventionCreatedPayload(StrictPayloadModel):
@@ -689,6 +729,17 @@ _EVENT_SPECS = (
         requires_opportunity=True,
     ),
     EventSchemaSpec(
+        "item.graded",
+        "1.1",
+        "题目作答形成评分版本，并使用统一的评价评分来源名称。",
+        ItemGradedPayloadV11,
+        "assessment",
+        "student",
+        ("class_group", "subject", "object_id", "attempt_id"),
+        TEACHER_SOURCES,
+        requires_opportunity=True,
+    ),
+    EventSchemaSpec(
         "task.submitted",
         "1.0",
         "学生提交任务版本；附件明细保留在业务表。",
@@ -736,7 +787,18 @@ _EVENT_SPECS = (
         "evaluation.rating.submitted",
         "1.0",
         "学生或教师按已发布评价标准提交逐项五星评价。",
-        EvaluationRatingSubmittedPayload,
+        RubricRatingSubmittedPayload,
+        "assessment",
+        "student",
+        ("class_group", "subject", "object_id"),
+        ("student-web", "teacher-web", "server", "migration"),
+        requires_opportunity=True,
+    ),
+    EventSchemaSpec(
+        "evaluation.rating.submitted",
+        "1.1",
+        "学生或教师按已发布评价标准提交逐项五星评价或暂不评价原因。",
+        EvaluationRatingSubmittedPayloadV11,
         "assessment",
         "student",
         ("class_group", "subject", "object_id"),

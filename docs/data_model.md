@@ -104,7 +104,7 @@
 - `LessonStepAttemptAnswer`：课堂提交的逐题业务答案，保存题目版本、题型、响应正文、自动评分和可选附件版本引用；分析事件只引用该业务记录，不复制答案正文。
 - `ClassroomEvaluationConfig`：课程评价设置。与 `Course` 一对一，记录教师当前使用的自评、互评、师评三类 5 星评价项；保存后按内容生成评价版本。
 - `ClassroomEvaluationConfigVersion`：不可修改的课程评价版本。保存课程内递增版本号、内容摘要、三类开关和评价项快照；相同内容不重复发布。课堂首次开启评价时把版本固定到 `ClassroomSession.evaluation_config_version`。
-- `ClassroomEvaluationSubmission`：不可修改的评价提交版本。记录课程、可选课堂、班级、评价者、被评价者、小组、评价版本、逐项星级和备注；修订生成新版本，不能覆盖或删除旧记录。
+- `ClassroomEvaluationSubmission`：不可修改的评价提交版本。记录课程、可选课堂、班级、评价者、被评价者、小组、评价版本、逐项星级、逐项暂不评价原因和备注；修订生成新版本，不能覆盖或删除旧记录。同一指标不能同时评分和暂不评价。
 - `TeacherNote`：建议新增，教师对任教班级学生的教学备注和干预记录。
 - `StudentLearningLog`：建议新增，学生学习日志。由系统根据 `LearningEvent` 自动生成，也可由学生反思或教师补充。
 - `ClassLearningLog`：建议新增，班级学习日志。记录课堂运行、任务推进、项目阶段、共性问题、教师干预和课后复盘。
@@ -121,14 +121,15 @@
 
 - 环节投放按题目和适用带创建 `LearningOpportunity`；文件题使用 `task` 机会，其他题使用 `question` 机会。
 - 学生每次提交追加 `LessonStepAttempt` 和逐题 `LessonStepAttemptAnswer`，不会覆盖上一版；教师完成情况读取当前课堂下最新尝试。
-- 非文件题逐题写 `item.submitted@1.1`。客观题同时形成 `item.graded final/automatic`，简答题先形成无分数 `pending`。
+- 非文件题逐题写 `item.submitted@1.1`。客观题同时形成 `item.graded@1.1 final/automatic`，简答题先形成无分数 `pending`。
 - 附件每次上传追加 `StudentWorkAttachment` 并写 `task.submitted`；教师首次批阅形成 `final`，复评形成 `revised`，评分事实通过 `supersedes` 保留历史。
 - `LearningEventV2` 仅保存对象版本、机会 UUID、尝试 UUID 和统计契约，不保存答案正文、聊天原文或文件地址。
 - 小组文档和共享区分别生成非必做 `document/task` 学习机会，并通过 `content.released@1.1.target_student_ids` 只投放给当前组员。
 - 学生打开小组协作文档时通过统一服务兼容写入 `group.document.opened`；学生上传共享文件时按同一方式写入 `group.file.shared`。
 - ONLYOFFICE 保存回调通过 JWT、文档 key、下载来源和大小校验后追加文档版本及 `group.document.saved`。该事件分析单位是 `group`，不能据此推断某位学生完成了多少内容。
 - 协作关闭和课堂结束撤回未完成机会；有打开、保存或上传证据后禁止重新分组，防止删除成员关系和文件证据。
-- 自评、互评、课堂师评和课程师评统一记录为 `evaluation.rating.submitted`；兼容记录只保留动作和星级，新版分析事件不复制评价备注。
+- 自评、互评、课堂师评和课程师评统一记录为 `evaluation.rating.submitted@1.1`；事件保存实际星级和结构化暂不评价原因代码，不复制评价备注正文。历史 `1.0` 定义继续保留，不覆盖原版本。
+- 平均星级只使用实际评分项。汇总同时返回已评分、暂不评价、未回答和总指标数；提交人数与指标覆盖数分开显示。
 - 自评事件的评价者和归属学生相同；师评及互评分别保留真实评价者，证据归属被评价学生。互评跨学生归属只能由已校验同组关系的服务端入口写入。
 - 课堂评价星级、评价完成时间、评价者和被评价者关系可作为过程性评价和后续 AI 分层/分组特征；星级本身不直接作为分层 label。
 - 课堂历史提交和附件版本底座已经建立；后续批量批阅与导出应读取业务提交表和成熟评分事实，不从事件 JSON 反解析答案。
@@ -335,7 +336,8 @@
 - `LessonStepEvaluationBinding`：一个课时环节选择一个已发布评价标准版本，并设置自评、互评和教师评价。绑定一旦被课堂使用即不可原地修改或删除。
 - `ClassroomEvaluationStandardUse`：某次课堂首次开启评价时冻结环节、标准版本、评价方式和完整指标快照，后续切换环节或编辑工作稿不改变历史记录。
 - `EvaluationSubmissionEvidence`：把课堂评价提交关联到同一课堂、同一环节、同一被评价学生的最新 `LessonStepAttempt` 和最新 `StudentWorkAttachment`。没有匹配材料时允许为空，不以低星代替缺失材料。
+- `ClassroomEvaluationSubmission.not_assessed`：按评价指标 ID 保存原因代码和最多 200 字说明；原因是“其他”时说明必填。该字段与 `ratings` 互斥，平均值不读取暂不评价项。
 
-实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录，迁移 `0019` 新增课时评价绑定和课堂证据链。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
+实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录，迁移 `0019` 新增课时评价绑定和课堂证据链，`courses.0025` 新增暂不评价结构，`learning_analytics.0020` 修复旧事件登记哈希。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
 
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

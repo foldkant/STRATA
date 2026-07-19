@@ -1299,10 +1299,31 @@ POST /api/v1/student/classroom/{id}/evaluation/submit/
 - 互评项可以先在课程中设计；学生端只有在课堂开启小组分组合作并生成小组后才显示互评，且只允许评价同组成员，不能评价自己。
 - 师评可在课程中按班级填写，也可在课堂控制台填写。课程师评不绑定具体课堂，课堂师评绑定当前 `ClassroomSession`。
 - 自评、互评、师评每次修改都追加新的 `ClassroomEvaluationSubmission`，响应默认展示最新版本；历史版本通过 `submission_version/supersedes` 保留。
-- 三类评价统一写入新版 `evaluation.rating.submitted@1.0`，并保留旧业务兼容记录。载荷只包含评价版本、评价项 ID、1-5 星和评价者角色；备注只保留在业务提交表。
+- 每个评价项必须二选一：在 `ratings` 中提交 1-5 星，或在 `not_assessed` 中提交原因。两者不能同时包含同一指标；原因 `other` 必须填写最多 200 字说明。
+- 三类评价统一写入 `evaluation.rating.submitted@1.1`，并保留旧业务兼容记录。载荷只包含评价版本、评价项 ID、1-5 星、暂不评价原因代码和评价者角色；备注及暂不评价补充说明只保留在业务提交表。
+- 历史 `evaluation.rating.submitted@1.0` 保持原字段和哈希，禁止覆盖。当前 `item.graded` 写入同样使用 `1.1`，历史评分事件继续保留在 `1.0`。
+- 汇总中的平均星级排除暂不评价项，并返回 `rated_item_count`、`not_assessed_item_count`、`unanswered_item_count` 和 `total_item_count`。页面必须同时展示提交人数，不能只显示平均值。
 - 自评机会归本人；师评和互评机会归被评价学生。互评 API 先校验同组关系，再由服务端可信来源写入；`POST /learning-events/batch/` 仍禁止学生直接指定其他目标学生。
 - 开启评价生成非必做机会；关闭评价或结束课堂撤回未提交机会，已经提交的评价及版本链保留。
 - `ai-generate` 使用教师自己的 DeepSeek 配置生成评价项草稿；草稿必须由教师确认保存后才对学生生效。课程端生成基于课程上下文，课堂端生成会额外参考当前课堂环节。
+
+提交示例：
+
+```json
+{
+  "evaluation_type": "self",
+  "ratings": {
+    "task_quality": 4
+  },
+  "not_assessed": {
+    "collaboration": {
+      "reason": "not_observed",
+      "note": "本节课未安排小组活动。"
+    }
+  },
+  "comment": "按本节课实际材料填写。"
+}
+```
 
 ## AI 学习网页 API
 

@@ -531,6 +531,135 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(changed.status_code, 409, changed.data)
         self.assertEqual(self.client.delete(binding_url).status_code, 409)
 
+    def test_not_assessed_criterion_is_excluded_from_average_and_keeps_reason(self):
+        self.config.self_criteria = [
+            *self.config.self_criteria,
+            {
+                "id": "self-collaboration",
+                "title": "协作表现",
+                "description": "根据本节课实际协作材料评价",
+                "sort_order": 20,
+            },
+        ]
+        self.config.save(update_fields=["self_criteria", "updated_at"])
+        enabled = self.enable_evaluation()
+        self.assertEqual(enabled.status_code, 200, enabled.data)
+
+        self.client.force_authenticate(self.students[0])
+        response = self.client.post(
+            f"/api/v1/student/classroom/{self.session.id}/evaluation/submit/",
+            {
+                "evaluation_type": "self",
+                "ratings": {"self-process": 4},
+                "not_assessed": {
+                    "self-collaboration": {
+                        "reason": "not_observed",
+                        "note": "本节课没有安排小组活动。",
+                    }
+                },
+                "comment": "按本节课实际材料填写。",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        submission = ClassroomEvaluationSubmission.objects.get(
+            evaluation_type="self", evaluator=self.students[0]
+        )
+        self.assertEqual(submission.ratings, {"self-process": 4})
+        self.assertEqual(
+            submission.not_assessed["self-collaboration"]["reason"],
+            "not_observed",
+        )
+        serialized = response.data["data"]["self_submission"]
+        self.assertEqual(
+            serialized["not_assessed"]["self-collaboration"]["reason_label"],
+            "本节未安排或未观察到",
+        )
+
+        event = LearningEventV2.objects.get(
+            event_name="evaluation.rating.submitted"
+        )
+        self.assertEqual(event.schema_version, "1.1")
+        self.assertEqual(
+            event.payload["criterion_ratings"],
+            [{"criterion_id": "self-process", "rating": 4}],
+        )
+        self.assertEqual(
+            event.payload["not_assessed_criteria"],
+            [
+                {
+                    "criterion_id": "self-collaboration",
+                    "reason_code": "not_observed",
+                }
+            ],
+        )
+
+        self.client.force_authenticate(self.teacher)
+        summary_response = self.client.get(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/evaluation/"
+        )
+        self.assertEqual(summary_response.status_code, 200, summary_response.data)
+        summary = summary_response.data["data"]["summary"]["self"]
+        self.assertEqual(summary["average"], 4.0)
+        self.assertEqual(summary["rated_item_count"], 1)
+        self.assertEqual(summary["not_assessed_item_count"], 1)
+        self.assertEqual(summary["total_item_count"], 2)
+
+    def test_evaluation_requires_rating_or_valid_not_assessed_reason_per_criterion(self):
+        enabled = self.enable_evaluation()
+        self.assertEqual(enabled.status_code, 200, enabled.data)
+        url = f"/api/v1/student/classroom/{self.session.id}/evaluation/submit/"
+        self.client.force_authenticate(self.students[0])
+
+        missing = self.client.post(
+            url,
+            {"evaluation_type": "self", "ratings": {}},
+            format="json",
+        )
+        self.assertEqual(missing.status_code, 400, missing.data)
+
+        both = self.client.post(
+            url,
+            {
+                "evaluation_type": "self",
+                "ratings": {"self-process": 3},
+                "not_assessed": {
+                    "self-process": {"reason": "no_evidence", "note": ""}
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(both.status_code, 400, both.data)
+
+        other_without_note = self.client.post(
+            url,
+            {
+                "evaluation_type": "self",
+                "ratings": {},
+                "not_assessed": {
+                    "self-process": {"reason": "other", "note": ""}
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(other_without_note.status_code, 400, other_without_note.data)
+
+        valid_skip = self.client.post(
+            url,
+            {
+                "evaluation_type": "self",
+                "ratings": {},
+                "not_assessed": {
+                    "self-process": {
+                        "reason": "no_evidence",
+                        "note": "本节未形成可评价作品。",
+                    }
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(valid_skip.status_code, 200, valid_skip.data)
+
     def test_student_batch_cannot_forge_peer_rating_for_another_student(self):
         enabled = self.enable_evaluation()
         self.assertEqual(enabled.status_code, 200, enabled.data)
@@ -548,7 +677,7 @@ class EvaluationFactTests(TestCase):
                     {
                         "event_id": str(uuid.uuid4()),
                         "event_name": "evaluation.rating.submitted",
-                        "schema_version": "1.0",
+                        "schema_version": "1.1",
                         "target_student_id": self.students[1].id,
                         "class_id": self.class_group.id,
                         "subject_id": self.subject.id,

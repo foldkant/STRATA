@@ -258,6 +258,7 @@ def record_assessment_item_grade(
             actor=actor,
             target_student=attempt.student,
             event_name="item.graded",
+            schema_version="1.1",
             source_override=source_override,
             payload={
                 "grading_state": grading_state,

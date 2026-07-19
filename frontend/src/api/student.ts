@@ -2,6 +2,7 @@ import { apiRequest, queryString, toJsonBody, uploadRequest } from './client'
 import type { CurrentUser } from './auth'
 import type { ClassGroupRow, PageQuery, PageResult, SubjectRow } from './management'
 import type { ResourceRow } from './teacher'
+import type { EvaluationNotAssessedEntry } from '@/domain/evaluation'
 
 export type StudentProfile = {
   id: number
@@ -256,6 +257,8 @@ export type StudentEvaluationCriterion = {
   title: string
   description: string
   sort_order: number
+  level_descriptions?: string[]
+  skip_condition?: string
 }
 
 export type StudentEvaluationSubmission = {
@@ -277,6 +280,7 @@ export type StudentEvaluationSubmission = {
   }
   group: number | null
   ratings: Record<string, number>
+  not_assessed: Record<string, EvaluationNotAssessedEntry>
   comment: string
   created_at: string
   updated_at: string
@@ -318,6 +322,7 @@ export type StudentEvaluationSubmitPayload = {
   evaluation_type: StudentEvaluationType
   target?: number
   ratings: Record<string, number>
+  not_assessed?: Record<string, EvaluationNotAssessedEntry>
   comment?: string
 }
 

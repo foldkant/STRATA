@@ -4594,36 +4594,76 @@ def _evaluation_student_row(profile: StudentProfile) -> dict:
     }
 
 
-def _validate_evaluation_ratings(
+def _validate_evaluation_response(
     config: ClassroomEvaluationConfig | ClassroomEvaluationConfigVersion,
     evaluation_type: str,
     ratings,
-) -> dict[str, int]:
+    not_assessed,
+) -> tuple[dict[str, int], dict[str, dict[str, str]]]:
     field = _evaluation_criteria_field(evaluation_type)
     criteria = classroom_evaluation_config_row(config).get(field, [])
     criterion_ids = {item["id"] for item in criteria}
     if not isinstance(ratings, dict):
         ratings = {}
+    if not isinstance(not_assessed, dict):
+        not_assessed = {}
+    ratings = {str(key): value for key, value in ratings.items()}
+    not_assessed = {str(key): value for key, value in not_assessed.items()}
     cleaned: dict[str, int] = {}
+    cleaned_not_assessed: dict[str, dict[str, str]] = {}
     errors: list[str] = []
+    reason_labels = dict(ClassroomEvaluationSubmission.NotAssessedReason.choices)
     for criterion in criteria:
         criterion_id = criterion["id"]
-        raw_value = ratings.get(criterion_id)
-        try:
-            value = int(raw_value)
-        except (TypeError, ValueError):
-            errors.append(f"{criterion['title']}需要选择 1-5 星。")
+        has_rating = criterion_id in ratings
+        has_not_assessed = criterion_id in not_assessed
+        if has_rating and has_not_assessed:
+            errors.append(f"{criterion['title']}不能同时评分和暂不评价。")
             continue
-        if value < 1 or value > 5:
-            errors.append(f"{criterion['title']}只能选择 1-5 星。")
+        if has_rating:
+            try:
+                value = int(ratings[criterion_id])
+            except (TypeError, ValueError):
+                errors.append(f"{criterion['title']}需要选择 1-5 星。")
+                continue
+            if value < 1 or value > 5:
+                errors.append(f"{criterion['title']}只能选择 1-5 星。")
+                continue
+            cleaned[criterion_id] = value
             continue
-        cleaned[criterion_id] = value
-    extra = [key for key in ratings.keys() if str(key) not in criterion_ids]
+        if has_not_assessed:
+            raw_reason = not_assessed[criterion_id]
+            if isinstance(raw_reason, str):
+                reason = raw_reason.strip()
+                note = ""
+            elif isinstance(raw_reason, dict):
+                reason = str(raw_reason.get("reason") or "").strip()
+                note = str(raw_reason.get("note") or "").strip()
+            else:
+                reason = ""
+                note = ""
+            if reason not in reason_labels:
+                errors.append(f"{criterion['title']}需要选择暂不评价原因。")
+                continue
+            if len(note) > 200:
+                errors.append(f"{criterion['title']}的暂不评价说明不能超过 200 个字符。")
+                continue
+            if reason == ClassroomEvaluationSubmission.NotAssessedReason.OTHER and not note:
+                errors.append(f"{criterion['title']}选择其他原因时需要填写说明。")
+                continue
+            cleaned_not_assessed[criterion_id] = {"reason": reason, "note": note}
+            continue
+        errors.append(f"{criterion['title']}需要选择 1-5 星或暂不评价。")
+    extra = [
+        key
+        for key in set(ratings) | set(not_assessed)
+        if str(key) not in criterion_ids
+    ]
     if extra:
         errors.append("评价结果包含无效评价项。")
     if errors:
-        raise ServiceError("评价星级校验失败。", errors={"ratings": errors}, status=400)
-    return cleaned
+        raise ServiceError("评价内容校验失败。", errors={"ratings": errors}, status=400)
+    return cleaned, cleaned_not_assessed
 
 
 def _evaluation_submission_average(
@@ -4631,10 +4671,20 @@ def _evaluation_submission_average(
 ) -> dict:
     criterion_rows = []
     values = []
+    not_assessed_total = 0
     for criterion in criteria:
         criterion_values = []
+        criterion_not_assessed = 0
         for submission in submissions:
             ratings = submission.ratings if isinstance(submission.ratings, dict) else {}
+            not_assessed = (
+                submission.not_assessed
+                if isinstance(submission.not_assessed, dict)
+                else {}
+            )
+            if criterion["id"] in not_assessed:
+                criterion_not_assessed += 1
+                not_assessed_total += 1
             value = ratings.get(criterion["id"])
             try:
                 number = int(value)
@@ -4653,10 +4703,19 @@ def _evaluation_submission_average(
                     else None
                 ),
                 "count": len(criterion_values),
+                "not_assessed_count": criterion_not_assessed,
             }
         )
+    total_items = len(criteria) * len(submissions)
+    rated_items = len(values)
     return {
         "average": round(sum(values) / len(values), 2) if values else None,
+        "rated_item_count": rated_items,
+        "not_assessed_item_count": not_assessed_total,
+        "unanswered_item_count": max(
+            total_items - rated_items - not_assessed_total, 0
+        ),
+        "total_item_count": total_items,
         "criteria": criterion_rows,
     }
 
@@ -5108,10 +5167,11 @@ def teacher_classroom_evaluation_submit(request, pk):
         )
         if profile is None:
             raise ServiceError("学生不属于当前课堂班级。", status=404)
-        ratings = _validate_evaluation_ratings(
+        ratings, not_assessed = _validate_evaluation_response(
             version,
             ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             request.data.get("ratings"),
+            request.data.get("not_assessed"),
         )
         comment = str(request.data.get("comment") or "").strip()
         if len(comment) > 1000:
@@ -5129,6 +5189,7 @@ def teacher_classroom_evaluation_submit(request, pk):
             target=profile.user,
             evaluation_version=version,
             ratings=ratings,
+            not_assessed=not_assessed,
             comment=comment,
             group=None,
         )
@@ -5210,10 +5271,11 @@ def teacher_course_evaluation_submit(request, pk):
         if profile is None:
             raise ServiceError("学生不属于当前课程班级。", status=404)
         version = publish_evaluation_config_version(config=config, actor=request.user)
-        ratings = _validate_evaluation_ratings(
+        ratings, not_assessed = _validate_evaluation_response(
             version,
             ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             request.data.get("ratings"),
+            request.data.get("not_assessed"),
         )
         comment = str(request.data.get("comment") or "").strip()
         if len(comment) > 1000:
@@ -5231,6 +5293,7 @@ def teacher_course_evaluation_submit(request, pk):
             target=profile.user,
             evaluation_version=version,
             ratings=ratings,
+            not_assessed=not_assessed,
             comment=comment,
             group=None,
         )
@@ -5450,8 +5513,11 @@ def student_classroom_evaluation_submit(request, pk):
                 raise ServiceError("互评对象必须是同组成员。", status=403)
             target = member.student
             target_group = group
-        ratings = _validate_evaluation_ratings(
-            config, evaluation_type, request.data.get("ratings")
+        ratings, not_assessed = _validate_evaluation_response(
+            config,
+            evaluation_type,
+            request.data.get("ratings"),
+            request.data.get("not_assessed"),
         )
         comment = str(request.data.get("comment") or "").strip()
         if len(comment) > 1000:
@@ -5469,6 +5535,7 @@ def student_classroom_evaluation_submit(request, pk):
             target=target,
             evaluation_version=config,
             ratings=ratings,
+            not_assessed=not_assessed,
             comment=comment,
             group=target_group,
         )

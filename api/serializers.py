@@ -1238,6 +1238,10 @@ def classroom_evaluation_submission_row(
     if submission is None:
         return None
     ratings = submission.ratings if isinstance(submission.ratings, dict) else {}
+    not_assessed = (
+        submission.not_assessed if isinstance(submission.not_assessed, dict) else {}
+    )
+    reason_labels = dict(ClassroomEvaluationSubmission.NotAssessedReason.choices)
     return {
         "id": submission.id,
         "course": submission.course_id,
@@ -1257,6 +1261,17 @@ def classroom_evaluation_submission_row(
             str(key): int(value)
             for key, value in ratings.items()
             if str(value).isdigit()
+        },
+        "not_assessed": {
+            str(key): {
+                "reason": str(value.get("reason") or ""),
+                "reason_label": reason_labels.get(
+                    str(value.get("reason") or ""), "其他"
+                ),
+                "note": str(value.get("note") or ""),
+            }
+            for key, value in not_assessed.items()
+            if isinstance(value, dict)
         },
         "comment": submission.comment,
         "created_at": submission.created_at,

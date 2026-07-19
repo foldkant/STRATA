@@ -934,6 +934,13 @@ class ClassroomEvaluationSubmission(models.Model):
         PEER = "peer", "互评"
         TEACHER = "teacher", "师评"
 
+    class NotAssessedReason(models.TextChoices):
+        NO_EVIDENCE = "no_evidence", "缺少作品或答案"
+        NOT_OBSERVED = "not_observed", "本节未安排或未观察到"
+        NOT_APPLICABLE = "not_applicable", "不适用于当前任务"
+        TECHNICAL_ISSUE = "technical_issue", "技术或数据问题"
+        OTHER = "other", "其他"
+
     course = models.ForeignKey(
         Course, on_delete=models.CASCADE, related_name="evaluation_submissions"
     )
@@ -986,7 +993,8 @@ class ClassroomEvaluationSubmission(models.Model):
         blank=True,
         related_name="revisions",
     )
-    ratings = models.JSONField(default=dict)
+    ratings = models.JSONField(default=dict, blank=True)
+    not_assessed = models.JSONField(default=dict, blank=True)
     comment = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -1032,7 +1040,21 @@ class ClassroomEvaluationSubmission(models.Model):
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
             raise ValidationError("评价提交版本不可修改，请追加修订版本。")
+        self.full_clean()
         return super().save(*args, **kwargs)
+
+    def clean(self):
+        errors = {}
+        if not isinstance(self.ratings, dict):
+            errors["ratings"] = "评价星级必须是 JSON 对象。"
+        if not isinstance(self.not_assessed, dict):
+            errors["not_assessed"] = "暂不评价原因必须是 JSON 对象。"
+        if isinstance(self.ratings, dict) and isinstance(self.not_assessed, dict):
+            overlap = set(map(str, self.ratings)) & set(map(str, self.not_assessed))
+            if overlap:
+                errors["not_assessed"] = "同一评价指标不能同时评分和暂不评价。"
+        if errors:
+            raise ValidationError(errors)
 
     def delete(self, *args, **kwargs):
         raise ValidationError("评价提交版本不可直接删除。")

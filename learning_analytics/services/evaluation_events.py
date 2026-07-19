@@ -522,6 +522,7 @@ def append_evaluation_submission(
     target,
     evaluation_version: ClassroomEvaluationConfigVersion,
     ratings: dict,
+    not_assessed: dict,
     comment: str,
     session=None,
     group=None,
@@ -548,6 +549,7 @@ def append_evaluation_submission(
         submission_version=(previous.submission_version + 1 if previous else 1),
         supersedes=previous,
         ratings=ratings,
+        not_assessed=not_assessed,
         comment=comment,
     )
     evidence = capture_evaluation_submission_evidence(submission)
@@ -589,6 +591,17 @@ def append_evaluation_submission(
             ratings.items(), key=lambda item: criterion_order.get(str(item[0]), 1000)
         )
     ]
+    not_assessed_criteria = [
+        {
+            "criterion_id": criterion_id,
+            "reason_code": str(value.get("reason") or ""),
+        }
+        for criterion_id, value in sorted(
+            not_assessed.items(),
+            key=lambda item: criterion_order.get(str(item[0]), 1000),
+        )
+        if isinstance(value, dict)
+    ]
     try:
         record_learning_event(
             actor=evaluator,
@@ -601,6 +614,7 @@ def append_evaluation_submission(
                     else evaluation_version_label(evaluation_version)
                 ),
                 "criterion_ratings": criterion_ratings,
+                "not_assessed_criteria": not_assessed_criteria,
                 "rater_role": evaluation_type,
             },
             legacy_event_type=(
@@ -628,8 +642,10 @@ def append_evaluation_submission(
                 "group_id": group.id if group else None,
                 "evaluation_version": evaluation_version_label(evaluation_version),
                 "ratings": ratings,
+                "not_assessed": not_assessed,
             },
             occurred_at=timezone.now(),
+            schema_version="1.1",
             source_override=(
                 "server"
                 if evaluation_type == ClassroomEvaluationSubmission.EvaluationType.PEER

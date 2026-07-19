@@ -12441,6 +12441,7 @@ th {
 .student-evaluation-list {
   display: grid;
   gap: 10px;
+  container-type: inline-size;
 }
 
 .evaluation-star-list article,
@@ -12667,8 +12668,12 @@ th {
 }
 
 @media (max-width: 980px) {
+  .classroom-evaluation-backdrop {
+    padding: 10px;
+  }
+
   .classroom-evaluation-modal {
-    width: calc(100vw - 20px);
+    width: 100%;
     height: calc(100dvh - 20px);
   }
 
@@ -12686,6 +12691,10 @@ th {
 }
 
 @media (max-width: 640px) {
+  .evaluation-modal-actions span {
+    display: none;
+  }
+
   .evaluation-criteria-list article,
   .evaluation-star-list article,
   .student-evaluation-list article {

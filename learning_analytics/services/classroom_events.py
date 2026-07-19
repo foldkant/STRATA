@@ -1136,6 +1136,7 @@ def record_classroom_item_grade(
             actor=actor,
             target_student=student,
             event_name="item.graded",
+            schema_version="1.1",
             payload={
                 "grading_state": grading_state,
                 "score_raw": score_raw,

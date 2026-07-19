@@ -64,6 +64,8 @@ import NoticeLine from '@/components/NoticeLine.vue'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
 import ClassroomChatDock from '@/components/ClassroomChatDock.vue'
+import EvaluationRatingInput from '@/components/evaluation/EvaluationRatingInput.vue'
+import type { EvaluationNotAssessedEntry } from '@/domain/evaluation'
 
 const EChartPanel = defineAsyncComponent(() => import('@/components/EChartPanel.vue'))
 const LearningPageStatsModal = defineAsyncComponent(() => import('@/components/teacher/LearningPageStatsModal.vue'))
@@ -152,6 +154,7 @@ const evaluationForm = ref<ClassroomEvaluationConfigPayload>({
 })
 const selectedTeacherEvalStudentId = ref<number | null>(null)
 const teacherEvaluationRatings = ref<Record<string, number>>({})
+const teacherEvaluationNotAssessed = ref<Record<string, EvaluationNotAssessedEntry>>({})
 const teacherEvaluationComment = ref('')
 
 const selectedStep = computed(() => steps.value.find((item) => item.id === selectedStepId.value) || steps.value[0] || null)
@@ -798,6 +801,7 @@ async function setRuntimeEvaluationEnabled(enabled: boolean) {
 function syncTeacherEvaluationDraft(row: ClassroomEvaluationStudentRow | null = selectedTeacherEvalStudent.value) {
   const submission = row?.teacher_submission
   teacherEvaluationRatings.value = submission?.ratings ? { ...submission.ratings } : {}
+  teacherEvaluationNotAssessed.value = submission?.not_assessed ? { ...submission.not_assessed } : {}
   teacherEvaluationComment.value = submission?.comment || ''
 }
 
@@ -808,10 +812,26 @@ function selectTeacherEvaluationStudent(studentId: number) {
 }
 
 function setTeacherEvaluationRating(criterionId: string, value: number) {
+  const notAssessed = { ...teacherEvaluationNotAssessed.value }
+  delete notAssessed[criterionId]
+  teacherEvaluationNotAssessed.value = notAssessed
   teacherEvaluationRatings.value = {
     ...teacherEvaluationRatings.value,
     [criterionId]: value
   }
+}
+
+function setTeacherEvaluationNotAssessed(criterionId: string, value: EvaluationNotAssessedEntry | null) {
+  const ratings = { ...teacherEvaluationRatings.value }
+  const notAssessed = { ...teacherEvaluationNotAssessed.value }
+  if (value) {
+    delete ratings[criterionId]
+    notAssessed[criterionId] = value
+  } else {
+    delete notAssessed[criterionId]
+  }
+  teacherEvaluationRatings.value = ratings
+  teacherEvaluationNotAssessed.value = notAssessed
 }
 
 function ratingAverageText(value: number | null | undefined) {
@@ -825,8 +845,13 @@ async function submitTeacherEvaluation() {
     return
   }
   for (const criterion of teacherEvaluationCriteria.value) {
-    if (!teacherEvaluationRatings.value[criterion.id]) {
-      notice.value = `请完成师评项：${criterion.title}`
+    if (!teacherEvaluationRatings.value[criterion.id] && !teacherEvaluationNotAssessed.value[criterion.id]) {
+      notice.value = `请为“${criterion.title}”选择星级或暂不评价。`
+      return
+    }
+    const skipped = teacherEvaluationNotAssessed.value[criterion.id]
+    if (skipped?.reason === 'other' && !skipped.note.trim()) {
+      notice.value = `请填写“${criterion.title}”暂不评价的具体说明。`
       return
     }
   }
@@ -836,6 +861,7 @@ async function submitTeacherEvaluation() {
     const row = await submitClassroomTeacherEvaluation(session.value.id, {
       target: selectedTeacherEvalStudent.value.student.id,
       ratings: teacherEvaluationRatings.value,
+      not_assessed: teacherEvaluationNotAssessed.value,
       comment: teacherEvaluationComment.value.trim()
     })
     evaluationData.value = row
@@ -1998,7 +2024,7 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <div v-if="evaluationOpen" class="modal-backdrop" role="presentation" @click.self="evaluationOpen = false">
+      <div v-if="evaluationOpen" class="modal-backdrop classroom-evaluation-backdrop" role="presentation" @click.self="evaluationOpen = false">
         <section class="entity-modal classroom-evaluation-modal runtime-evaluation-modal" role="dialog" aria-modal="true" aria-labelledby="classroom-evaluation-title">
           <header class="modal-header">
             <div>
@@ -2036,7 +2062,11 @@ onUnmounted(() => {
                 <article v-for="item in evaluationSummaryItems" :key="item.type">
                   <span>{{ item.label }}{{ item.summary?.enabled ? ' · 已配置' : ' · 未配置' }}</span>
                   <strong>{{ item.summary?.submitted || 0 }}/{{ item.summary?.total || 0 }}</strong>
-                  <small>平均 {{ ratingAverageText(item.summary?.average) }}</small>
+                  <small>
+                    已评分 {{ item.summary?.rated_item_count || 0 }}/{{ item.summary?.total_item_count || 0 }} 项
+                    <template v-if="item.summary?.not_assessed_item_count"> · 暂不评价 {{ item.summary.not_assessed_item_count }} 项</template>
+                    · 平均 {{ ratingAverageText(item.summary?.average) }}
+                  </small>
                 </article>
               </div>
 
@@ -2059,7 +2089,7 @@ onUnmounted(() => {
               <header class="evaluation-section-head">
                 <div>
                   <span>师评</span>
-                  <strong>选择学生后填写 5 星评价</strong>
+                  <strong>选择学生后填写星级或暂不评价</strong>
                 </div>
               </header>
               <div class="teacher-evaluation-layout">
@@ -2092,24 +2122,16 @@ onUnmounted(() => {
                       </span>
                     </div>
                     <div class="evaluation-star-list">
-                      <article v-for="criterion in teacherEvaluationCriteria" :key="criterion.id">
-                        <div>
-                          <strong>{{ criterion.title }}</strong>
-                          <span>{{ criterion.description || '请选择 1-5 星。' }}</span>
-                        </div>
-                        <div class="star-rating-control" role="radiogroup" :aria-label="criterion.title">
-                          <button
-                            v-for="value in 5"
-                            :key="`${criterion.id}-${value}`"
-                            type="button"
-                            :class="{ active: (teacherEvaluationRatings[criterion.id] || 0) >= value }"
-                            :aria-label="`${value} 星`"
-                            @click="setTeacherEvaluationRating(criterion.id, value)"
-                          >
-                            ★
-                          </button>
-                        </div>
-                      </article>
+                      <EvaluationRatingInput
+                        v-for="criterion in teacherEvaluationCriteria"
+                        :key="criterion.id"
+                        :criterion="criterion"
+                        :rating="teacherEvaluationRatings[criterion.id] || 0"
+                        :not-assessed="teacherEvaluationNotAssessed[criterion.id] || null"
+                        :disabled="evaluationLoading"
+                        @rating="setTeacherEvaluationRating"
+                        @not-assessed="setTeacherEvaluationNotAssessed"
+                      />
                       <p v-if="!teacherEvaluationCriteria.length" class="empty">请先回到课时设计设置师评评价项。</p>
                     </div>
                     <label class="evaluation-comment-box">
@@ -2123,7 +2145,7 @@ onUnmounted(() => {
           </div>
 
           <footer class="modal-actions evaluation-modal-actions">
-            <span>评价内容在课时设计中维护；课堂只查看结果和填写师评。</span>
+            <span>评价内容在课时设计中维护；没有足够材料时选择暂不评价。</span>
             <button class="secondary-button" type="button" :disabled="evaluationLoading" @click="evaluationOpen = false">关闭</button>
             <button class="primary-button" type="button" :disabled="evaluationLoading || !selectedTeacherEvalStudent || !evaluationForm.enable_teacher" @click="submitTeacherEvaluation">
               保存师评

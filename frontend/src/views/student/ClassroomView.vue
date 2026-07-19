@@ -32,6 +32,8 @@ import NoticeLine from '@/components/NoticeLine.vue'
 import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
 import ClassroomChatDock from '@/components/ClassroomChatDock.vue'
+import EvaluationRatingInput from '@/components/evaluation/EvaluationRatingInput.vue'
+import type { EvaluationNotAssessedEntry } from '@/domain/evaluation'
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -68,6 +70,12 @@ const evaluationSubmitting = ref(false)
 const activeEvaluationType = ref<StudentEvaluationType>('self')
 const selectedPeerTargetId = ref<number | null>(null)
 const evaluationRatingDrafts = ref<Record<StudentEvaluationType, Record<string, number>>>({
+  self: {},
+  peer: {}
+})
+const evaluationNotAssessedDrafts = ref<
+  Record<StudentEvaluationType, Record<string, EvaluationNotAssessedEntry>>
+>({
   self: {},
   peer: {}
 })
@@ -350,6 +358,10 @@ function syncEvaluationDraft(type: StudentEvaluationType) {
     ...evaluationRatingDrafts.value,
     [type]: submission?.ratings ? { ...submission.ratings } : {}
   }
+  evaluationNotAssessedDrafts.value = {
+    ...evaluationNotAssessedDrafts.value,
+    [type]: submission?.not_assessed ? { ...submission.not_assessed } : {}
+  }
   evaluationCommentDrafts.value = {
     ...evaluationCommentDrafts.value,
     [type]: submission?.comment || ''
@@ -380,12 +392,38 @@ function selectPeerEvaluationTarget(studentId: number) {
 }
 
 function setEvaluationRating(criterionId: string, value: number) {
+  const notAssessed = { ...evaluationNotAssessedDrafts.value[activeEvaluationType.value] }
+  delete notAssessed[criterionId]
+  evaluationNotAssessedDrafts.value = {
+    ...evaluationNotAssessedDrafts.value,
+    [activeEvaluationType.value]: notAssessed
+  }
   evaluationRatingDrafts.value = {
     ...evaluationRatingDrafts.value,
     [activeEvaluationType.value]: {
       ...evaluationRatingDrafts.value[activeEvaluationType.value],
       [criterionId]: value
     }
+  }
+}
+
+function setEvaluationNotAssessed(criterionId: string, value: EvaluationNotAssessedEntry | null) {
+  const type = activeEvaluationType.value
+  const ratings = { ...evaluationRatingDrafts.value[type] }
+  const notAssessed = { ...evaluationNotAssessedDrafts.value[type] }
+  if (value) {
+    delete ratings[criterionId]
+    notAssessed[criterionId] = value
+  } else {
+    delete notAssessed[criterionId]
+  }
+  evaluationRatingDrafts.value = {
+    ...evaluationRatingDrafts.value,
+    [type]: ratings
+  }
+  evaluationNotAssessedDrafts.value = {
+    ...evaluationNotAssessedDrafts.value,
+    [type]: notAssessed
   }
 }
 
@@ -411,9 +449,15 @@ async function submitEvaluation() {
     return
   }
   const ratings = evaluationRatingDrafts.value[activeEvaluationType.value]
+  const notAssessed = evaluationNotAssessedDrafts.value[activeEvaluationType.value]
   for (const criterion of activeEvaluationCriteria.value) {
-    if (!ratings[criterion.id]) {
-      notice.value = `请完成评价项：${criterion.title}`
+    if (!ratings[criterion.id] && !notAssessed[criterion.id]) {
+      notice.value = `请为“${criterion.title}”选择星级或暂不评价。`
+      return
+    }
+    const skipped = notAssessed[criterion.id]
+    if (skipped?.reason === 'other' && !skipped.note.trim()) {
+      notice.value = `请填写“${criterion.title}”暂不评价的具体说明。`
       return
     }
   }
@@ -424,6 +468,7 @@ async function submitEvaluation() {
       evaluation_type: activeEvaluationType.value,
       target: activeEvaluationType.value === 'peer' ? activePeerEvaluationTarget.value?.student_id : undefined,
       ratings,
+      not_assessed: notAssessed,
       comment: evaluationComment(activeEvaluationType.value).trim()
     })
     evaluationContext.value = row
@@ -1208,24 +1253,16 @@ onUnmounted(() => {
           </div>
 
           <div class="student-evaluation-list">
-            <article v-for="criterion in activeEvaluationCriteria" :key="criterion.id">
-              <div>
-                <strong>{{ criterion.title }}</strong>
-                <span>{{ criterion.description || '请根据本节课实际表现选择 1-5 星。' }}</span>
-              </div>
-              <div class="star-rating-control student-star-rating" role="radiogroup" :aria-label="criterion.title">
-                <button
-                  v-for="value in 5"
-                  :key="`${activeEvaluationType}-${criterion.id}-${value}`"
-                  type="button"
-                  :class="{ active: (evaluationRatingDrafts[activeEvaluationType][criterion.id] || 0) >= value }"
-                  :aria-label="`${value} 星`"
-                  @click="setEvaluationRating(criterion.id, value)"
-                >
-                  ★
-                </button>
-              </div>
-            </article>
+            <EvaluationRatingInput
+              v-for="criterion in activeEvaluationCriteria"
+              :key="`${activeEvaluationType}-${criterion.id}`"
+              :criterion="criterion"
+              :rating="evaluationRatingDrafts[activeEvaluationType][criterion.id] || 0"
+              :not-assessed="evaluationNotAssessedDrafts[activeEvaluationType][criterion.id] || null"
+              :disabled="evaluationSubmitting"
+              @rating="setEvaluationRating"
+              @not-assessed="setEvaluationNotAssessed"
+            />
             <p v-if="!activeEvaluationCriteria.length" class="empty">当前暂无评价项。</p>
           </div>
 
@@ -1241,7 +1278,7 @@ onUnmounted(() => {
           </label>
 
           <footer class="student-classroom-answer-actions student-evaluation-actions">
-            <span>{{ activeEvaluationSubmitted ? '已提交，可根据教师要求修改。' : '评价只记录星级，不计分。' }}</span>
+            <span>{{ activeEvaluationSubmitted ? '已提交，可根据教师要求修改。' : '按实际材料选择星级；没有材料时选择暂不评价。' }}</span>
             <button
               class="student-primary-action"
               type="button"

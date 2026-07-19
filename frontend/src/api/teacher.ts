@@ -1,6 +1,7 @@
 import { apiRequest, queryString, toJsonBody, uploadRequest } from './client'
 import type { CountSlice, Metric, SeriesPoint } from './dashboards'
 import type { AccountRow, ClassGroupRow, PageQuery, PageResult, StudentRow, SubjectRow } from './management'
+import type { EvaluationNotAssessedEntry } from '@/domain/evaluation'
 
 export type TeacherDashboard = {
   school: { id: number; name: string; code: string }
@@ -591,6 +592,8 @@ export type ClassroomEvaluationCriterion = {
   title: string
   description: string
   sort_order: number
+  level_descriptions?: string[]
+  skip_condition?: string
 }
 
 export type ClassroomEvaluationConfig = {
@@ -619,6 +622,7 @@ export type ClassroomEvaluationSubmission = {
   target: AccountRow
   group: number | null
   ratings: Record<string, number>
+  not_assessed: Record<string, EvaluationNotAssessedEntry>
   comment: string
   created_at: string
   updated_at: string
@@ -630,11 +634,16 @@ export type ClassroomEvaluationSummaryItem = {
   submitted: number
   total: number
   average: number | null
+  rated_item_count: number
+  not_assessed_item_count: number
+  unanswered_item_count: number
+  total_item_count: number
   criteria: Array<{
     id: string
     title: string
     average: number | null
     count: number
+    not_assessed_count: number
   }>
 }
 
@@ -681,6 +690,7 @@ export type ClassroomEvaluationAiResult = Partial<Record<ClassroomEvaluationType
 export type ClassroomTeacherEvaluationSubmitPayload = {
   target: number
   ratings: Record<string, number>
+  not_assessed?: Record<string, EvaluationNotAssessedEntry>
   comment?: string
 }
 
