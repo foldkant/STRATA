@@ -3,7 +3,11 @@ from django.contrib import admin
 from .models import (
     AssessmentResultFact,
     AnalyticsOperatingMode,
+    AnalyticsPipelineRun,
+    AnalyticsTaskRun,
+    DataQualityReport,
     EventSchemaDefinition,
+    EventIngestionDailyCounter,
     LearningEventRejection,
     LearningEventV2,
     LearningOpportunity,
@@ -292,3 +296,74 @@ class SensitiveInferenceAccessLogAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None) -> bool:
         return False
+
+
+class ReadOnlyAnalyticsAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+    def has_delete_permission(self, request, obj=None) -> bool:
+        return False
+
+
+@admin.register(EventIngestionDailyCounter)
+class EventIngestionDailyCounterAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "school",
+        "counter_date",
+        "source",
+        "accepted_count",
+        "duplicate_count",
+        "rejected_count",
+        "late_count",
+    )
+    list_filter = ("source", "counter_date", "school")
+    readonly_fields = tuple(
+        field.name for field in EventIngestionDailyCounter._meta.fields
+    )
+
+
+@admin.register(AnalyticsPipelineRun)
+class AnalyticsPipelineRunAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "run_id",
+        "school",
+        "pipeline_type",
+        "trigger",
+        "status",
+        "attempt_no",
+        "created_at",
+    )
+    list_filter = ("pipeline_type", "trigger", "status", "school")
+    readonly_fields = tuple(field.name for field in AnalyticsPipelineRun._meta.fields)
+
+
+@admin.register(AnalyticsTaskRun)
+class AnalyticsTaskRunAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "task_id",
+        "pipeline_run",
+        "task_name",
+        "status",
+        "attempt_no",
+        "created_at",
+    )
+    list_filter = ("task_name", "status")
+    readonly_fields = tuple(field.name for field in AnalyticsTaskRun._meta.fields)
+
+
+@admin.register(DataQualityReport)
+class DataQualityReportAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "report_id",
+        "school",
+        "status",
+        "gate_passed",
+        "event_count",
+        "window_end",
+    )
+    list_filter = ("status", "gate_passed", "school")
+    readonly_fields = tuple(field.name for field in DataQualityReport._meta.fields)

@@ -10,6 +10,7 @@ from learning_analytics.services.event_ingestion import (
     ingest_learning_event,
     record_rejected_learning_event,
 )
+from learning_analytics.services.ingestion_counters import record_ingestion_outcome
 
 from .permissions import IsLearningEventClient
 from .serializers import LearningEventBatchSerializer, LearningEventEnvelopeSerializer
@@ -89,6 +90,14 @@ def learning_event_batch(request):
                     errors=errors,
                 )
             )
+            record_ingestion_outcome(
+                school=request.user.school,
+                source=source,
+                status="rejected",
+                received_at=received_at,
+                error_code="schema_invalid",
+                event_name=str(raw_event.get("event_name") or ""),
+            )
             continue
 
         try:
@@ -117,10 +126,26 @@ def learning_event_batch(request):
                     errors=errors,
                 )
             )
+            record_ingestion_outcome(
+                school=request.user.school,
+                source=source,
+                status="rejected",
+                received_at=received_at,
+                error_code=exc.code,
+                event_name=str(raw_event.get("event_name") or ""),
+            )
             continue
 
         result["index"] = index
         results.append(result)
+        record_ingestion_outcome(
+            school=request.user.school,
+            source=source,
+            status=result["status"],
+            received_at=received_at,
+            quality_errors=result.get("quality_errors") or [],
+            event_name=serializer.validated_data["event_name"],
+        )
 
     counts = {
         status: sum(1 for item in results if item["status"] == status)

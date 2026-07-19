@@ -26,6 +26,7 @@ from learning_analytics.services.participation_points import (
     ParticipationPointError,
     record_participation_points,
 )
+from learning_analytics.services.ingestion_counters import record_ingestion_outcome
 from school.models import StudentProfile
 
 
@@ -149,6 +150,13 @@ def record_learning_event(
         occurred_at=occurred_at,
     )
     if mode == "v1_only":
+        record_ingestion_outcome(
+            school=actor.school,
+            source=source_override or event_source_for_actor(actor),
+            status="accepted",
+            received_at=received_at,
+            event_name=event_name,
+        )
         return EventWriteResult(
             legacy_event=legacy_event,
             analytics_event=None,
@@ -186,6 +194,15 @@ def record_learning_event(
         )
     except EventIngestionError as exc:
         raise EventWriteError(exc.code, exc.message) from exc
+
+    record_ingestion_outcome(
+        school=actor.school,
+        source=source_override or event_source_for_actor(actor),
+        status=result["status"],
+        received_at=received_at,
+        quality_errors=result.get("quality_errors") or [],
+        event_name=event_name,
+    )
 
     analytics_event = LearningEventV2.objects.get(
         school=actor.school,

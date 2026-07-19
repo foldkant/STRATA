@@ -1339,3 +1339,264 @@ class SensitiveInferenceAccessLog(models.Model):
     def __str__(self) -> str:
         outcome = "允许" if self.access_granted else "拒绝"
         return f"{self.actor_role}:{self.purpose}:{outcome}"
+
+
+class EventIngestionDailyCounter(models.Model):
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="event_ingestion_daily_counters",
+    )
+    counter_date = models.DateField()
+    source = models.CharField(max_length=64)
+    accepted_count = models.PositiveBigIntegerField(default=0)
+    duplicate_count = models.PositiveBigIntegerField(default=0)
+    rejected_count = models.PositiveBigIntegerField(default=0)
+    late_count = models.PositiveBigIntegerField(default=0)
+    offline_count = models.PositiveBigIntegerField(default=0)
+    schema_error_count = models.PositiveBigIntegerField(default=0)
+    context_error_count = models.PositiveBigIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "counter_date", "source"],
+                name="uniq_event_ingestion_counter_school_date_source",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["school", "counter_date"]),
+            models.Index(fields=["source", "counter_date"]),
+        ]
+        ordering = ["-counter_date", "school_id", "source"]
+
+    @property
+    def attempt_count(self) -> int:
+        return self.accepted_count + self.duplicate_count + self.rejected_count
+
+    def __str__(self) -> str:
+        return f"{self.school_id}:{self.counter_date}:{self.source}"
+
+
+class AnalyticsPipelineRun(models.Model):
+    class PipelineType(models.TextChoices):
+        DATA_QUALITY = "data_quality", "数据质量"
+
+    class Trigger(models.TextChoices):
+        SCHEDULED = "scheduled", "定时"
+        MANUAL = "manual", "手动"
+        RETRY = "retry", "重试"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "等待"
+        RUNNING = "running", "运行中"
+        SUCCEEDED = "succeeded", "成功"
+        FAILED = "failed", "失败"
+        BLOCKED = "blocked", "质量阻断"
+
+    run_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="analytics_pipeline_runs",
+    )
+    pipeline_type = models.CharField(
+        max_length=32,
+        choices=PipelineType.choices,
+        default=PipelineType.DATA_QUALITY,
+    )
+    trigger = models.CharField(
+        max_length=16, choices=Trigger.choices, default=Trigger.SCHEDULED
+    )
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    methodology_version = models.CharField(max_length=32)
+    code_version = models.CharField(max_length=64, blank=True)
+    config_hash = models.CharField(max_length=64)
+    attempt_no = models.PositiveSmallIntegerField(default=1)
+    retry_of = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="retries",
+    )
+    summary = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=64, blank=True)
+    error_message = models.CharField(max_length=1000, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "pipeline_type", "window_start", "window_end"],
+                condition=models.Q(trigger="scheduled"),
+                name="uniq_scheduled_pipeline_school_window",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["school", "pipeline_type", "created_at"]),
+            models.Index(fields=["status", "created_at"]),
+            models.Index(fields=["window_end", "pipeline_type"]),
+        ]
+        ordering = ["-created_at", "-id"]
+
+    def clean(self) -> None:
+        if self.window_end <= self.window_start:
+            raise ValidationError({"window_end": "流水线窗口结束时间必须晚于开始时间。"})
+        if self.retry_of_id:
+            if self.retry_of.school_id != self.school_id:
+                raise ValidationError({"retry_of": "重试任务必须属于同一学校。"})
+            if self.retry_of.pipeline_type != self.pipeline_type:
+                raise ValidationError({"retry_of": "重试任务类型不一致。"})
+
+    def __str__(self) -> str:
+        return f"{self.school_id}:{self.pipeline_type}:{self.run_id}"
+
+
+class AnalyticsTaskRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "等待"
+        RUNNING = "running", "运行中"
+        SUCCEEDED = "succeeded", "成功"
+        FAILED = "failed", "失败"
+        SKIPPED = "skipped", "跳过"
+
+    task_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    pipeline_run = models.ForeignKey(
+        AnalyticsPipelineRun,
+        on_delete=models.PROTECT,
+        related_name="task_runs",
+    )
+    task_name = models.CharField(max_length=64)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.PENDING
+    )
+    attempt_no = models.PositiveSmallIntegerField(default=1)
+    metrics = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=64, blank=True)
+    error_message = models.CharField(max_length=1000, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["pipeline_run", "task_name", "attempt_no"],
+                name="uniq_analytics_task_run_attempt",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["pipeline_run", "status"]),
+            models.Index(fields=["task_name", "created_at"]),
+        ]
+        ordering = ["pipeline_run_id", "created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"{self.pipeline_run_id}:{self.task_name}:{self.status}"
+
+
+class DataQualityReport(models.Model):
+    class Status(models.TextChoices):
+        GREEN = "green", "正常"
+        AMBER = "amber", "关注"
+        RED = "red", "阻断"
+
+    report_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="data_quality_reports",
+    )
+    pipeline_run = models.OneToOneField(
+        AnalyticsPipelineRun,
+        on_delete=models.PROTECT,
+        related_name="quality_report",
+    )
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    methodology_version = models.CharField(max_length=32)
+    source_fingerprint = models.CharField(max_length=64)
+    status = models.CharField(max_length=16, choices=Status.choices)
+    gate_passed = models.BooleanField(default=False)
+    event_count = models.PositiveBigIntegerField(default=0)
+    ingestion_attempt_count = models.PositiveBigIntegerField(default=0)
+    rejection_count = models.PositiveBigIntegerField(default=0)
+    legacy_unmapped_count = models.PositiveBigIntegerField(default=0)
+    unlinked_legacy_count = models.PositiveBigIntegerField(default=0)
+    duplicate_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    invalid_event_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    late_event_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    semantic_missing_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    opportunity_coverage_rate = models.DecimalField(
+        max_digits=7, decimal_places=6, default=0
+    )
+    client_offline_rate = models.DecimalField(
+        max_digits=7, decimal_places=6, default=0
+    )
+    v1_v2_difference_rate = models.DecimalField(
+        max_digits=7, decimal_places=6, default=0
+    )
+    thresholds = models.JSONField(default=dict)
+    counts = models.JSONField(default=dict)
+    issues = models.JSONField(default=list, blank=True)
+    generated_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["school", "window_end", "status"]),
+            models.Index(fields=["gate_passed", "window_end"]),
+        ]
+        ordering = ["-window_end", "-created_at", "-id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.pipeline_run_id:
+            if self.pipeline_run.school_id != self.school_id:
+                errors["pipeline_run"] = "质量报告与流水线学校不一致。"
+            if (
+                self.pipeline_run.window_start != self.window_start
+                or self.pipeline_run.window_end != self.window_end
+            ):
+                errors["pipeline_run"] = "质量报告与流水线时间窗口不一致。"
+        if self.window_end <= self.window_start:
+            errors["window_end"] = "质量窗口结束时间必须晚于开始时间。"
+        if not isinstance(self.thresholds, dict) or not isinstance(self.counts, dict):
+            errors["counts"] = "阈值和计数必须是 JSON 对象。"
+        if not isinstance(self.issues, list):
+            errors["issues"] = "质量问题必须是列表。"
+        rates = (
+            "duplicate_rate",
+            "invalid_event_rate",
+            "late_event_rate",
+            "semantic_missing_rate",
+            "opportunity_coverage_rate",
+            "client_offline_rate",
+            "v1_v2_difference_rate",
+        )
+        for field_name in rates:
+            value = getattr(self, field_name)
+            if value < 0 or value > 1:
+                errors[field_name] = "质量比率必须位于 0 到 1 之间。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("数据质量报告不可原地修改；重新运行应生成新报告。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("数据质量报告不可直接删除。")
+
+    def __str__(self) -> str:
+        return f"{self.school_id}:{self.window_end:%Y-%m-%d}:{self.status}"

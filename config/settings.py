@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from celery.schedules import crontab
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -182,6 +183,13 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/2")
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 60 * 60
+ANALYTICS_CODE_VERSION = env("ANALYTICS_CODE_VERSION", "")
+CELERY_BEAT_SCHEDULE = {
+    "strata-nightly-data-quality": {
+        "task": "learning_analytics.tasks.run_nightly_data_quality",
+        "schedule": crontab(hour=1, minute=30),
+    },
+}
 
 MLFLOW_TRACKING_URI = env("MLFLOW_TRACKING_URI", f"file:{BASE_DIR / 'storage/mlruns'}")
 MODEL_ARTIFACT_ROOT = BASE_DIR / env("MODEL_ARTIFACT_ROOT", "storage/models")
