@@ -383,7 +383,7 @@ function removeRow(row: ClassGroupRow) {
     notice.value = '请先将班级停用或归档，再执行删除。'
     return
   }
-  ask('删除班级', `确认删除 ${row.name}？已有学生、学习行为或模型数据时系统会拒绝物理删除。`, async () => {
+  ask('删除班级', `确认删除 ${row.name}？已有学生、学习记录或分析结果时系统会保留班级。`, async () => {
     await deleteClass(row.id)
     notice.value = '班级已删除。'
   }, true)
@@ -420,7 +420,7 @@ function bulkDeleteSelected() {
     )
     return
   }
-  ask('批量删除班级', `确认删除已选 ${selectedCount.value} 个非启用班级？已有学生、学习行为或模型数据时系统会保留当前状态。`, async () => {
+  ask('批量删除班级', `确认删除已选 ${selectedCount.value} 个非启用班级？已有学生、学习记录或分析结果时系统会保留当前状态。`, async () => {
     const result = await bulkDeleteClasses(selectedIds.value)
     notice.value = result.message || `已删除 ${result.deleted_count || 0} 个班级。`
     clearSelection()

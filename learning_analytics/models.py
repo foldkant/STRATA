@@ -18,16 +18,16 @@ from learning_analytics.schemas.registry import (
     validate_event_payload,
 )
 
-from .measurement_models import (  # noqa: F401
-    AssessmentBlueprint,
-    AssessmentBlueprintVersion,
-    MeasurementUse,
-    MeasurementValidationStatus,
-    RubricAnchorExample,
-    RubricCriterionVersion,
-    RubricDefinition,
-    RubricDefinitionVersion,
-    RubricModule,
+from .evaluation_models import (  # noqa: F401
+    EvaluationPlan,
+    EvaluationPlanVersion,
+    EvaluationScope,
+    EvaluationReviewStatus,
+    EvaluationScoringExample,
+    EvaluationCriterionVersion,
+    EvaluationStandard,
+    EvaluationStandardVersion,
+    EvaluationDimension,
 )
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
@@ -298,7 +298,7 @@ class LearningEventV2(models.Model):
     score_raw = models.FloatField(null=True, blank=True)
     score_max = models.FloatField(null=True, blank=True)
     delivered_band = models.CharField(max_length=8, blank=True)
-    rubric_version = models.CharField(max_length=64, blank=True)
+    evaluation_version = models.CharField(max_length=64, blank=True)
     model_version = models.CharField(max_length=128, blank=True)
     privacy_class = models.CharField(
         max_length=24, choices=EventSchemaDefinition.PrivacyClass.choices
@@ -774,7 +774,7 @@ class AssessmentResultFact(models.Model):
     class GraderType(models.TextChoices):
         AUTOMATIC = "automatic", "自动评分"
         TEACHER = "teacher", "教师评分"
-        RUBRIC = "rubric", "量规评分"
+        EVALUATION = "evaluation", "评价标准评分"
 
     result_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     opportunity = models.ForeignKey(
@@ -1576,7 +1576,7 @@ class EventIngestionDailyCounter(models.Model):
 
 class AnalyticsPipelineRun(models.Model):
     class PipelineType(models.TextChoices):
-        DATA_QUALITY = "data_quality", "数据质量"
+        DATA_QUALITY = "data_quality", "数据检查"
 
     class Trigger(models.TextChoices):
         SCHEDULED = "scheduled", "定时"
@@ -1588,7 +1588,7 @@ class AnalyticsPipelineRun(models.Model):
         RUNNING = "running", "运行中"
         SUCCEEDED = "succeeded", "成功"
         FAILED = "failed", "失败"
-        BLOCKED = "blocked", "质量阻断"
+        BLOCKED = "blocked", "检查未通过"
 
     run_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     school = models.ForeignKey(
@@ -1616,7 +1616,7 @@ class AnalyticsPipelineRun(models.Model):
     )
     window_start = models.DateTimeField()
     window_end = models.DateTimeField()
-    methodology_version = models.CharField(max_length=32)
+    check_version = models.CharField(max_length=32)
     code_version = models.CharField(max_length=64, blank=True)
     config_hash = models.CharField(max_length=64)
     attempt_no = models.PositiveSmallIntegerField(default=1)
@@ -1651,10 +1651,10 @@ class AnalyticsPipelineRun(models.Model):
 
     def clean(self) -> None:
         if self.synthetic_run_id and self.synthetic_run.school_id != self.school_id:
-            raise ValidationError({"synthetic_run": "合成批次与分析流水线学校不一致。"})
+            raise ValidationError({"synthetic_run": "合成批次与分析自动流程学校不一致。"})
         if self.window_end <= self.window_start:
             raise ValidationError(
-                {"window_end": "流水线窗口结束时间必须晚于开始时间。"}
+                {"window_end": "自动流程窗口结束时间必须晚于开始时间。"}
             )
         if self.retry_of_id:
             if self.retry_of.school_id != self.school_id:
@@ -1712,8 +1712,8 @@ class AnalyticsTaskRun(models.Model):
 class DataQualityReport(models.Model):
     class Status(models.TextChoices):
         GREEN = "green", "正常"
-        AMBER = "amber", "关注"
-        RED = "red", "阻断"
+        AMBER = "amber", "需关注"
+        RED = "red", "未通过"
 
     report_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     school = models.ForeignKey(
@@ -1735,26 +1735,26 @@ class DataQualityReport(models.Model):
     )
     window_start = models.DateTimeField()
     window_end = models.DateTimeField()
-    methodology_version = models.CharField(max_length=32)
-    source_fingerprint = models.CharField(max_length=64)
+    check_version = models.CharField(max_length=32)
+    source_checksum = models.CharField(max_length=64)
     status = models.CharField(max_length=16, choices=Status.choices)
-    gate_passed = models.BooleanField(default=False)
+    checks_passed = models.BooleanField(default=False)
     event_count = models.PositiveBigIntegerField(default=0)
-    ingestion_attempt_count = models.PositiveBigIntegerField(default=0)
-    rejection_count = models.PositiveBigIntegerField(default=0)
-    legacy_unmapped_count = models.PositiveBigIntegerField(default=0)
-    unlinked_legacy_count = models.PositiveBigIntegerField(default=0)
+    receive_attempt_count = models.PositiveBigIntegerField(default=0)
+    rejected_event_count = models.PositiveBigIntegerField(default=0)
+    unconverted_old_event_count = models.PositiveBigIntegerField(default=0)
+    unlinked_old_event_count = models.PositiveBigIntegerField(default=0)
     duplicate_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
     invalid_event_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
     late_event_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
-    semantic_missing_rate = models.DecimalField(
+    unconverted_old_event_rate = models.DecimalField(
         max_digits=7, decimal_places=6, default=0
     )
-    opportunity_coverage_rate = models.DecimalField(
+    learning_task_link_rate = models.DecimalField(
         max_digits=7, decimal_places=6, default=0
     )
     client_offline_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
-    v1_v2_difference_rate = models.DecimalField(
+    old_new_event_difference_rate = models.DecimalField(
         max_digits=7, decimal_places=6, default=0
     )
     thresholds = models.JSONField(default=dict)
@@ -1766,7 +1766,7 @@ class DataQualityReport(models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["school", "window_end", "status"]),
-            models.Index(fields=["gate_passed", "window_end"]),
+            models.Index(fields=["checks_passed", "window_end"]),
         ]
         ordering = ["-window_end", "-created_at", "-id"]
 
@@ -1774,44 +1774,44 @@ class DataQualityReport(models.Model):
         errors = {}
         if self.pipeline_run_id:
             if self.pipeline_run.school_id != self.school_id:
-                errors["pipeline_run"] = "质量报告与流水线学校不一致。"
+                errors["pipeline_run"] = "检查报告与自动检查学校不一致。"
             if (
                 self.pipeline_run.window_start != self.window_start
                 or self.pipeline_run.window_end != self.window_end
             ):
-                errors["pipeline_run"] = "质量报告与流水线时间窗口不一致。"
+                errors["pipeline_run"] = "检查报告与自动检查时间范围不一致。"
             if self.pipeline_run.synthetic_run_id != self.synthetic_run_id:
-                errors["synthetic_run"] = "质量报告与流水线合成范围不一致。"
+                errors["synthetic_run"] = "检查报告与自动检查测试数据范围不一致。"
         if self.window_end <= self.window_start:
-            errors["window_end"] = "质量窗口结束时间必须晚于开始时间。"
+            errors["window_end"] = "检查结束时间必须晚于开始时间。"
         if not isinstance(self.thresholds, dict) or not isinstance(self.counts, dict):
-            errors["counts"] = "阈值和计数必须是 JSON 对象。"
+            errors["counts"] = "判断标准和数量必须是 JSON 对象。"
         if not isinstance(self.issues, list):
-            errors["issues"] = "质量问题必须是列表。"
+            errors["issues"] = "待处理问题必须是列表。"
         rates = (
             "duplicate_rate",
             "invalid_event_rate",
             "late_event_rate",
-            "semantic_missing_rate",
-            "opportunity_coverage_rate",
+            "unconverted_old_event_rate",
+            "learning_task_link_rate",
             "client_offline_rate",
-            "v1_v2_difference_rate",
+            "old_new_event_difference_rate",
         )
         for field_name in rates:
             value = getattr(self, field_name)
             if value < 0 or value > 1:
-                errors[field_name] = "质量比率必须位于 0 到 1 之间。"
+                errors[field_name] = "检查比例必须位于 0 到 1 之间。"
         if errors:
             raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
-            raise ValidationError("数据质量报告不可原地修改；重新运行应生成新报告。")
+            raise ValidationError("检查报告不可直接修改；重新检查应生成新报告。")
         self.full_clean()
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise ValidationError("数据质量报告不可直接删除。")
+        raise ValidationError("检查报告不可直接删除。")
 
     def __str__(self) -> str:
         return f"{self.school_id}:{self.window_end:%Y-%m-%d}:{self.status}"

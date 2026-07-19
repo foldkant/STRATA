@@ -24,10 +24,10 @@ from learning_analytics.services.ingestion_counters import record_ingestion_outc
 from learning_analytics.services.legacy_backfill import backfill_legacy_event
 from learning_analytics.services.operational_events import record_resource_center_opened
 from learning_analytics.services.quality import (
-    QualityGateError,
+    QualityCheckError,
     create_quality_pipeline_run,
     execute_quality_pipeline,
-    require_quality_gate,
+    require_quality_checks,
     trailing_window,
 )
 from learning_analytics.services.schema_registry import sync_event_schema_definitions
@@ -138,14 +138,14 @@ class DataQualityPipelineTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, AnalyticsPipelineRun.Status.SUCCEEDED)
         self.assertEqual(report.status, DataQualityReport.Status.GREEN)
-        self.assertTrue(report.gate_passed)
+        self.assertTrue(report.checks_passed)
         self.assertEqual(report.event_count, 1)
-        self.assertEqual(float(report.opportunity_coverage_rate), 1)
+        self.assertEqual(float(report.learning_task_link_rate), 1)
         self.assertEqual(run.task_runs.count(), 3)
         self.assertFalse(
             run.task_runs.exclude(status=AnalyticsTaskRun.Status.SUCCEEDED).exists()
         )
-        self.assertEqual(require_quality_gate(school=self.school), report)
+        self.assertEqual(require_quality_checks(school=self.school), report)
 
         report.status = DataQualityReport.Status.RED
         with self.assertRaises(ValidationError):
@@ -163,14 +163,14 @@ class DataQualityPipelineTests(TestCase):
 
         run.refresh_from_db()
         self.assertEqual(report.status, DataQualityReport.Status.RED)
-        self.assertFalse(report.gate_passed)
+        self.assertFalse(report.checks_passed)
         self.assertEqual(run.status, AnalyticsPipelineRun.Status.BLOCKED)
-        self.assertGreater(float(report.semantic_missing_rate), 0.15)
-        with self.assertRaises(QualityGateError) as blocked:
-            require_quality_gate(school=self.school)
-        self.assertEqual(blocked.exception.code, "quality_gate_blocked")
+        self.assertGreater(float(report.unconverted_old_event_rate), 0.15)
+        with self.assertRaises(QualityCheckError) as blocked:
+            require_quality_checks(school=self.school)
+        self.assertEqual(blocked.exception.code, "quality_checks_failed")
 
-    def test_ingestion_attempt_counters_drive_duplicate_and_invalid_rates(self):
+    def test_receive_attempt_counters_drive_duplicate_and_invalid_rates(self):
         record_resource_center_opened(
             resource=self.resource,
             student=self.student,
@@ -217,7 +217,7 @@ class DataQualityPipelineTests(TestCase):
         run.refresh_from_db()
         self.assertEqual(run.status, AnalyticsPipelineRun.Status.FAILED)
         self.assertFalse(DataQualityReport.objects.filter(pipeline_run=run).exists())
-        task = run.task_runs.get(task_name="collect_event_quality")
+        task = run.task_runs.get(task_name="collect_learning_data")
         self.assertEqual(task.status, AnalyticsTaskRun.Status.FAILED)
 
         retry = create_quality_pipeline_run(
@@ -243,6 +243,17 @@ class DataQualityPipelineTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["data"]["school"]["id"], self.school.id)
         self.assertEqual(response.data["data"]["current"]["status"], "green")
+        self.assertEqual(
+            response.data["data"]["current"]["check_version"], "data-check-v2"
+        )
+        self.assertIn(
+            "old_new_event_difference_count",
+            response.data["data"]["current"]["counts"],
+        )
+        self.assertNotIn(
+            "v1_v2_difference_count",
+            response.data["data"]["current"]["counts"],
+        )
         self.assertEqual(len(response.data["data"]["current"]["metrics"]), 7)
         self.assertIn(
             "direction", response.data["data"]["current"]["metrics"][0]["thresholds"]
@@ -255,9 +266,9 @@ class DataQualityPipelineTests(TestCase):
         workbook = load_workbook(BytesIO(export_response.content), read_only=True)
         self.assertEqual(
             workbook.sheetnames,
-            ["质量报告", "质量指标", "质量问题", "流水线运行", "任务阶段"],
+            ["检查报告", "检查指标", "待处理问题", "自动检查记录", "执行阶段"],
         )
-        self.assertEqual(workbook["质量报告"].max_row, 2)
+        self.assertEqual(workbook["检查报告"].max_row, 2)
         workbook.close()
 
         client.force_authenticate(self.other_admin)

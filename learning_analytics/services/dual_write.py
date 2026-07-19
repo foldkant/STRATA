@@ -594,7 +594,7 @@ def reconcile_v1_v2_events(
         "historical_unmapped_count": historical.filter(
             quality_status=LearningEventV2.QualityStatus.LEGACY_UNMAPPED
         ).count(),
-        "unlinked_legacy_count": unlinked_count,
+        "unlinked_old_event_count": unlinked_count,
         "missing_v2_count": missing_count,
         "mapping_mismatch_count": mismatch_count,
         "missing_v2_examples": missing_ids,

@@ -8,6 +8,7 @@
 - [教师端与学生端 UI/UX 四轮审查](ui_ux_audit.md)：多视口页面、弹窗、性能和可访问性审查结果。
 - [API 契约](api_contract.md)：认证、管理端、教师端、学生端和实时课堂接口。
 - [数据模型](data_model.md)：核心实体、关系、状态约束和学习事件。
+- [术语规范](terminology.md)：统一界面、API、数据库、代码和文档用语。
 - [私有化部署](private_deployment.md)：PostgreSQL、Redis、ASGI、Celery、离线依赖和服务启动。
 - [安装与离线同步规划](setup_and_offline_sync_plan.md)：后续 setup 安装器、端口检测和学校数据同步方向。
 
@@ -20,14 +21,14 @@
 
 ## 教学核心能力
 
-- [学生行为分析与 AI 隐性动态分层设计报告](student_behavior_ai_stratification_design.md)：汇总 30 轮科学审查，规定研究级事件、过程性评价量规、特征、计划结局、教师可见/学生隐性的内容带、班级校准模型、夜间流水线和论文研究设计。
-- [学生行为分析与 AI 隐性动态分层开发路线图](student_behavior_ai_stratification_development_roadmap.md)：把设计报告落实为 M0-M8 工程里程碑、模块边界、迁移顺序、前后端交付、夜间 DAG、阶段闸门和首批开发任务。
+- [学生行为分析与 AI 隐性动态分层设计报告](student_behavior_ai_stratification_design.md)：汇总 30 轮科学审查，规定研究级事件、过程性评价标准、特征、计划结局、教师可见/学生隐性的内容带、班级校准模型、夜间自动流程和论文研究设计。
+- [学生行为分析与 AI 隐性动态分层开发路线图](student_behavior_ai_stratification_development_roadmap.md)：把设计报告落实为 M0-M8 工程里程碑、模块边界、迁移顺序、前后端交付、夜间 DAG、阶段检查和首批开发任务。
 - [学生行为分析工程进度审计](implementation_progress_audit.md)：按 Git、迁移、测试和真实组件运行证据记录已完成、进行中和未开始工作，并固定 DATA-01C、DATA-03、M2、M3 的进入顺序。
-- [任务蓝图与量规版本](measurement_design.md)：记录 MEAS-01A 的证据链、用途隔离、不可变版本、五星锚点、试点工程数据和验证边界。
-- [数据质量流水线与闸门](data_quality_pipeline.md)：定义七项质量指标、完整日窗口、流水线/重试状态、本校 API、夜间任务、学校看板和 M2 进入条件。
+- [学校评价管理](evaluation_management.md)：记录评价方案、评价标准、评价指标、评分示例、版本管理和权限边界。
+- [学习数据自动检查](data_quality_pipeline.md)：定义七项检查指标、完整日窗口、重试状态、本校 API、夜间任务和学校看板。
 - [学习事件 V1 写入点与 V2 迁移清单](learning_event_write_inventory.md)：盘点测试、课堂、资源、评价、聊天和小组业务的现有事件写入入口、语义问题与双写验收要求。
-- [学生评价、积分与奖章设计](student_evaluation_incentive_design.md)：规定成绩、五星量规、核心素养证据、课堂积分/奖章和 AI 内部建议的隔离、可见性与实施顺序。
-- [行为、特征与量规五轮科学审查](student_behavior_ai_stratification_five_round_review.md)：五轮文献复审发现、方案修正和仍需实证的风险。
+- [学生评价、积分与奖章设计](student_evaluation_incentive_design.md)：规定成绩、五星评价标准、核心素养证据、课堂积分/奖章和 AI 内部建议的隔离、可见性与实施顺序。
+- [行为、特征与评价标准五轮科学审查](student_behavior_ai_stratification_five_round_review.md)：五轮文献复审发现、方案修正和仍需实证的风险。
 - [动态分层第 6-10 轮科学审查](student_behavior_ai_stratification_review_rounds_06_10.md)：预测估计量、抽样、证据中心测量、特征迁移和决策效用。
 - [动态分层第 11-15 轮科学审查](student_behavior_ai_stratification_review_rounds_11_15.md)：因果干预、人机协同、隐私安全、可复现性和反证停用。
 - [动态分层第 16-20 轮科学审查](student_behavior_ai_stratification_review_rounds_16_20.md)：科学主张、纵向测量、观察过程、结局契约、AI 题目效度和预测偏倚。
@@ -53,14 +54,14 @@
 - 教师课程、课时设计、课堂控制、资源中心、公告、反馈、共享题库和测试。
 - 学生课程、资源中心、实时课堂、作答、测试和学习档案。
 - ONLYOFFICE、AI 学习网页、小组协作、课堂评价和课堂实名聊天第一版。
-- 学习事件 V2、确定性历史回填、数据质量闸门、夜间质量任务和学校管理员数据质量看板。
-- 教师任务蓝图与研究级五星量规的合成工程版本；真实效度验证尚未开始。
+- 学习事件 V2、确定性历史转换、夜间数据检查和学校管理员看板。
+- 学校管理员评价方案、评价标准、评价指标和版本管理；正式试用与评分一致性检查尚未开始。
 
 仍需继续开发或生产化：
 
 - 跨学校数据包采集、校验和统一分析。
 - 全局基础模型、班级校准模型和夜间训练闭环。
-- M2 其余工作：内容专家审查、反应过程、评分一致性、题目生命周期和共同锚测；真实验证仍受学校数据质量红色闸门阻断。
+- 下一阶段工作：内容审核、正式试用、评分一致性、题目生命周期和跨版本比较；当前数据检查已通过，但正式学生数据量仍不足。
 - PostgreSQL/Redis 正式安装器、HTTPS、本地证书和自动端口选择。
 - 备份恢复、监控告警、审计导出和学校版本升级工具。
 - 大型前端包的路由级拆包和性能优化。

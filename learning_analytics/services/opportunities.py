@@ -40,7 +40,7 @@ EVENT_CONTENT_TYPES = {
     "learning_page.opened": {LearningOpportunity.ContentType.LEARNING_PAGE},
     "learning_page.block_viewed": {LearningOpportunity.ContentType.LEARNING_PAGE},
     "learning_page.form_submitted": {LearningOpportunity.ContentType.LEARNING_PAGE},
-    "rubric.rating.submitted": {
+    "evaluation.rating.submitted": {
         LearningOpportunity.ContentType.TASK,
         LearningOpportunity.ContentType.PROJECT,
     },
@@ -372,7 +372,7 @@ def apply_event_to_opportunity(
         "attendance.recorded",
         "quick_answer.responded",
         "learning_page.form_submitted",
-        "rubric.rating.submitted",
+        "evaluation.rating.submitted",
     }:
         states.append(LearningOpportunityTransitionFact.State.SUBMITTED)
     elif event.event_name == "item.graded" and event.payload.get("grading_state") in {

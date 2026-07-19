@@ -169,7 +169,7 @@ class EvaluationFactTests(TestCase):
             format="json",
         )
 
-    def test_classroom_rubric_is_frozen_and_submissions_are_versioned(self):
+    def test_classroom_evaluation_is_frozen_and_submissions_are_versioned(self):
         enabled = self.enable_evaluation()
         self.assertEqual(enabled.status_code, 200, enabled.data)
         self.session.refresh_from_db()
@@ -179,7 +179,7 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(
             LearningEventV2.objects.filter(
                 event_name="content.released",
-                legacy_event__metadata__action="classroom_rubric_released",
+                legacy_event__metadata__action="classroom_evaluation_released",
             ).count(),
             3,
         )
@@ -215,13 +215,13 @@ class EvaluationFactTests(TestCase):
         )
         self.assertEqual([item.submission_version for item in self_submissions], [1, 2])
         self.assertEqual(self_submissions[1].supersedes, self_submissions[0])
-        self.assertEqual(self_submissions[0].rubric_version, frozen_version)
+        self.assertEqual(self_submissions[0].evaluation_version, frozen_version)
         self.assertNotEqual(
             self_submissions[0].analytics_attempt_id,
             self_submissions[1].analytics_attempt_id,
         )
 
-        events = LearningEventV2.objects.filter(event_name="rubric.rating.submitted")
+        events = LearningEventV2.objects.filter(event_name="evaluation.rating.submitted")
         self.assertEqual(events.count(), 4)
         self.assertFalse(events.filter(payload__has_key="comment").exists())
         peer_event = events.get(payload__rater_role="peer")
@@ -285,7 +285,7 @@ class EvaluationFactTests(TestCase):
         version = self.session.evaluation_config_version
         opportunity = LearningOpportunity.objects.get(
             student=self.students[1],
-            object_id=f"classroom-rubric:{self.session.id}:peer",
+            object_id=f"classroom-evaluation:{self.session.id}:peer",
         )
         self.client.force_authenticate(self.students[0])
         response = self.client.post(
@@ -294,20 +294,20 @@ class EvaluationFactTests(TestCase):
                 "events": [
                     {
                         "event_id": str(uuid.uuid4()),
-                        "event_name": "rubric.rating.submitted",
+                        "event_name": "evaluation.rating.submitted",
                         "schema_version": "1.0",
                         "target_student_id": self.students[1].id,
                         "class_id": self.class_group.id,
                         "subject_id": self.subject.id,
                         "course_id": self.course.id,
                         "session_id": self.session.id,
-                        "object_type": "evaluation_rubric",
-                        "object_id": f"classroom-rubric:{self.session.id}:peer",
+                        "object_type": "evaluation_standard",
+                        "object_id": f"classroom-evaluation:{self.session.id}:peer",
                         "object_version": version.config_hash,
                         "opportunity_id": str(opportunity.opportunity_id),
                         "client_occurred_at": timezone.now().isoformat(),
                         "payload": {
-                            "rubric_version": (
+                            "evaluation_version": (
                                 f"course:{self.course.id}:v{version.version_no}:"
                                 f"{version.config_hash[:12]}"
                             ),
@@ -330,6 +330,6 @@ class EvaluationFactTests(TestCase):
         self.assertEqual(result["error_code"], "target_forbidden")
         self.assertFalse(
             LearningEventV2.objects.filter(
-                event_name="rubric.rating.submitted"
+                event_name="evaluation.rating.submitted"
             ).exists()
         )

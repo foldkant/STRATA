@@ -20,24 +20,24 @@ from learning_analytics.models import (
 )
 from learning_analytics.services.dual_write import reconcile_v1_v2_events
 
-METHODOLOGY_VERSION = "data-quality-v1"
+CHECK_VERSION = "data-check-v2"
 RATE_QUANTUM = Decimal("0.000001")
 QUALITY_THRESHOLDS = {
     "duplicate_rate": {"amber": 0.05, "red": 0.10, "direction": "high"},
     "invalid_event_rate": {"amber": 0.02, "red": 0.05, "direction": "high"},
     "late_event_rate": {"amber": 0.10, "red": 0.25, "direction": "high"},
-    "semantic_missing_rate": {"amber": 0.05, "red": 0.15, "direction": "high"},
-    "opportunity_coverage_rate": {
+    "unconverted_old_event_rate": {"amber": 0.05, "red": 0.15, "direction": "high"},
+    "learning_task_link_rate": {
         "amber": 0.98,
         "red": 0.90,
         "direction": "low",
     },
     "client_offline_rate": {"amber": 0.10, "red": 0.25, "direction": "high"},
-    "v1_v2_difference_rate": {"amber": 0.0, "red": 0.0, "direction": "high"},
+    "old_new_event_difference_rate": {"amber": 0.0, "red": 0.0, "direction": "high"},
 }
 
 
-class QualityGateError(Exception):
+class QualityCheckError(Exception):
     def __init__(self, code: str, message: str):
         self.code = code
         self.message = message
@@ -76,7 +76,7 @@ def _config_hash() -> str:
     return hashlib.sha256(
         json.dumps(
             {
-                "methodology_version": METHODOLOGY_VERSION,
+                "check_version": CHECK_VERSION,
                 "thresholds": QUALITY_THRESHOLDS,
             },
             sort_keys=True,
@@ -103,7 +103,7 @@ def create_quality_pipeline_run(
         status=AnalyticsPipelineRun.Status.PENDING,
         window_start=window_start,
         window_end=window_end,
-        methodology_version=METHODOLOGY_VERSION,
+        check_version=CHECK_VERSION,
         code_version=str(getattr(settings, "ANALYTICS_CODE_VERSION", "") or "")[:64],
         config_hash=_config_hash(),
         attempt_no=attempt_no,
@@ -187,8 +187,8 @@ def collect_event_quality_metrics(
     counter_accepted = int(counter_totals["accepted"] or 0)
     duplicate_count = int(counter_totals["duplicate"] or 0)
     counter_rejected = int(counter_totals["rejected"] or 0)
-    rejection_count = max(rejection_fact_count, counter_rejected)
-    attempt_count = operational_event_count + duplicate_count + rejection_count
+    rejected_event_count = max(rejection_fact_count, counter_rejected)
+    attempt_count = operational_event_count + duplicate_count + rejected_event_count
 
     late_count = 0
     explicit_offline_count = 0
@@ -220,37 +220,49 @@ def collect_event_quality_metrics(
             if opportunity_id:
                 opportunity_linked_count += 1
 
-    legacy_unmapped_count = events.filter(
+    unconverted_old_event_count = events.filter(
         quality_status=LearningEventV2.QualityStatus.LEGACY_UNMAPPED
     ).count()
     last_received = events.aggregate(value=Max("server_received_at"))["value"]
-    telemetry_complete = counter_accepted >= operational_event_count
+    receive_counts_complete = counter_accepted >= operational_event_count
     return {
         "event_count": event_count,
-        "operational_event_count": operational_event_count,
-        "ingestion_attempt_count": attempt_count,
-        "counter_accepted_count": counter_accepted,
+        "non_migration_event_count": operational_event_count,
+        "receive_attempt_count": attempt_count,
+        "recorded_accepted_event_count": counter_accepted,
         "duplicate_count": duplicate_count,
-        "rejection_count": rejection_count,
-        "rejection_fact_count": rejection_fact_count,
-        "counter_rejected_count": counter_rejected,
+        "rejected_event_count": rejected_event_count,
+        "stored_rejection_count": rejection_fact_count,
+        "recorded_rejection_count": counter_rejected,
         "late_count": late_count,
-        "legacy_unmapped_count": legacy_unmapped_count,
-        "opportunity_expected_count": opportunity_expected_count,
-        "opportunity_linked_count": opportunity_linked_count,
-        "student_web_count": student_web_count,
-        "explicit_offline_count": explicit_offline_count,
-        "telemetry_complete": telemetry_complete,
+        "unconverted_old_event_count": unconverted_old_event_count,
+        "learning_task_expected_count": opportunity_expected_count,
+        "learning_task_linked_count": opportunity_linked_count,
+        "student_web_event_count": student_web_count,
+        "reported_offline_count": explicit_offline_count,
+        "receive_counts_complete": receive_counts_complete,
         "last_received_at": last_received.isoformat() if last_received else None,
     }
 
 
 def collect_reconciliation_metrics(*, school, synthetic_run=None) -> dict:
-    return reconcile_v1_v2_events(
+    result = reconcile_v1_v2_events(
         school=school,
         synthetic_run=synthetic_run,
         exclude_synthetic=synthetic_run is None,
     )
+    return {
+        "old_event_live_write_count": result["legacy_dual_write_count"],
+        "new_event_linked_count": result["analytics_mapped_count"],
+        "converted_old_event_count": result["historical_mapped_count"],
+        "unconverted_old_event_count": result["historical_unmapped_count"],
+        "unlinked_old_event_count": result["unlinked_old_event_count"],
+        "missing_new_event_count": result["missing_v2_count"],
+        "conversion_mismatch_count": result["mapping_mismatch_count"],
+        "missing_new_event_examples": result["missing_v2_examples"],
+        "conversion_mismatch_examples": result["mapping_mismatch_examples"],
+        "records_match": result["consistent"],
+    }
 
 
 def _metric_issue(metric: str, value: Decimal) -> dict | None:
@@ -287,33 +299,33 @@ def publish_quality_report(
     *, pipeline_run: AnalyticsPipelineRun, event_metrics: dict, reconciliation: dict
 ) -> DataQualityReport:
     event_count = int(event_metrics["event_count"])
-    attempt_count = int(event_metrics["ingestion_attempt_count"])
-    required_count = int(event_metrics["opportunity_expected_count"])
-    linked_count = int(event_metrics["opportunity_linked_count"])
-    student_web_count = int(event_metrics["student_web_count"])
-    v1_total = (
-        int(reconciliation["legacy_dual_write_count"])
-        + int(reconciliation["historical_mapped_count"])
-        + int(reconciliation["historical_unmapped_count"])
-        + int(reconciliation["unlinked_legacy_count"])
+    attempt_count = int(event_metrics["receive_attempt_count"])
+    required_count = int(event_metrics["learning_task_expected_count"])
+    linked_count = int(event_metrics["learning_task_linked_count"])
+    student_web_count = int(event_metrics["student_web_event_count"])
+    old_event_total = (
+        int(reconciliation["old_event_live_write_count"])
+        + int(reconciliation["converted_old_event_count"])
+        + int(reconciliation["unconverted_old_event_count"])
+        + int(reconciliation["unlinked_old_event_count"])
     )
     difference_count = (
-        int(reconciliation["missing_v2_count"])
-        + int(reconciliation["mapping_mismatch_count"])
-        + int(reconciliation["unlinked_legacy_count"])
+        int(reconciliation["missing_new_event_count"])
+        + int(reconciliation["conversion_mismatch_count"])
+        + int(reconciliation["unlinked_old_event_count"])
     )
     rates = {
         "duplicate_rate": _ratio(event_metrics["duplicate_count"], attempt_count),
-        "invalid_event_rate": _ratio(event_metrics["rejection_count"], attempt_count),
+        "invalid_event_rate": _ratio(event_metrics["rejected_event_count"], attempt_count),
         "late_event_rate": _ratio(event_metrics["late_count"], event_count),
-        "semantic_missing_rate": _ratio(
-            event_metrics["legacy_unmapped_count"], event_count
+        "unconverted_old_event_rate": _ratio(
+            event_metrics["unconverted_old_event_count"], event_count
         ),
-        "opportunity_coverage_rate": _ratio(linked_count, required_count, empty=1),
+        "learning_task_link_rate": _ratio(linked_count, required_count, empty=1),
         "client_offline_rate": _ratio(
-            event_metrics["explicit_offline_count"], student_web_count
+            event_metrics["reported_offline_count"], student_web_count
         ),
-        "v1_v2_difference_rate": _ratio(difference_count, v1_total),
+        "old_new_event_difference_rate": _ratio(difference_count, old_event_total),
     }
     issues = []
     if event_count == 0:
@@ -327,16 +339,16 @@ def publish_quality_report(
             }
         )
     if (
-        not event_metrics["telemetry_complete"]
-        and event_metrics["operational_event_count"]
+        not event_metrics["receive_counts_complete"]
+        and event_metrics["non_migration_event_count"]
     ):
         issues.append(
             {
-                "code": "ingestion_telemetry_incomplete",
+                "code": "receive_counts_incomplete",
                 "level": "amber",
-                "metric": "counter_accepted_count",
-                "value": event_metrics["counter_accepted_count"],
-                "threshold": event_metrics["operational_event_count"],
+                "metric": "recorded_accepted_event_count",
+                "value": event_metrics["recorded_accepted_event_count"],
+                "threshold": event_metrics["non_migration_event_count"],
             }
         )
     for metric, value in rates.items():
@@ -353,14 +365,14 @@ def publish_quality_report(
         "window_end": pipeline_run.window_end.isoformat(),
         "event_metrics": event_metrics,
         "reconciliation": reconciliation,
-        "methodology_version": METHODOLOGY_VERSION,
+        "check_version": CHECK_VERSION,
         "synthetic_run_id": (
             str(pipeline_run.synthetic_run.run_id)
             if pipeline_run.synthetic_run_id
             else None
         ),
     }
-    source_fingerprint = hashlib.sha256(
+    source_checksum = hashlib.sha256(
         json.dumps(source_values, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return DataQualityReport.objects.create(
@@ -369,20 +381,20 @@ def publish_quality_report(
         pipeline_run=pipeline_run,
         window_start=pipeline_run.window_start,
         window_end=pipeline_run.window_end,
-        methodology_version=METHODOLOGY_VERSION,
-        source_fingerprint=source_fingerprint,
+        check_version=CHECK_VERSION,
+        source_checksum=source_checksum,
         status=status,
-        gate_passed=status != DataQualityReport.Status.RED,
+        checks_passed=status != DataQualityReport.Status.RED,
         event_count=event_count,
-        ingestion_attempt_count=attempt_count,
-        rejection_count=event_metrics["rejection_count"],
-        legacy_unmapped_count=event_metrics["legacy_unmapped_count"],
-        unlinked_legacy_count=reconciliation["unlinked_legacy_count"],
+        receive_attempt_count=attempt_count,
+        rejected_event_count=event_metrics["rejected_event_count"],
+        unconverted_old_event_count=event_metrics["unconverted_old_event_count"],
+        unlinked_old_event_count=reconciliation["unlinked_old_event_count"],
         thresholds=QUALITY_THRESHOLDS,
         counts={
             **event_metrics,
-            "v1_total_count": v1_total,
-            "v1_v2_difference_count": difference_count,
+            "old_event_total_count": old_event_total,
+            "old_new_event_difference_count": difference_count,
         },
         issues=issues,
         **rates,
@@ -398,8 +410,8 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
         }:
             if hasattr(run, "quality_report"):
                 return run.quality_report
-            raise QualityGateError(
-                "pipeline_state_invalid", "数据质量流水线状态不可执行。"
+            raise QualityCheckError(
+                "check_run_state_invalid", "当前数据检查记录不能再次执行。"
             )
         run.status = AnalyticsPipelineRun.Status.RUNNING
         run.started_at = timezone.now()
@@ -409,7 +421,7 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
     try:
         event_metrics = _task(
             run,
-            "collect_event_quality",
+            "collect_learning_data",
             lambda: collect_event_quality_metrics(
                 school=run.school,
                 window_start=run.window_start,
@@ -419,7 +431,7 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
         )
         reconciliation = _task(
             run,
-            "reconcile_v1_v2",
+            "compare_old_new_records",
             lambda: collect_reconciliation_metrics(
                 school=run.school,
                 synthetic_run=run.synthetic_run,
@@ -435,14 +447,14 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
                 )
                 run.status = (
                     AnalyticsPipelineRun.Status.SUCCEEDED
-                    if report.gate_passed
+                    if report.checks_passed
                     else AnalyticsPipelineRun.Status.BLOCKED
                 )
                 run.summary = {
                     "report_id": str(report.report_id),
-                    "quality_status": report.status,
-                    "gate_passed": report.gate_passed,
-                    "issue_count": len(report.issues),
+                    "check_status": report.status,
+                    "checks_passed": report.checks_passed,
+                    "problem_count": len(report.issues),
                 }
                 run.finished_at = timezone.now()
                 run.save(update_fields=["status", "summary", "finished_at"])
@@ -450,7 +462,7 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
 
         report = _task(
             run,
-            "publish_quality_report",
+            "save_data_check_report",
             publish_and_finalize,
         )
     except Exception as exc:
@@ -481,7 +493,7 @@ def latest_quality_report(*, school, as_of=None, synthetic_run=None):
     return query.select_related("pipeline_run").first()
 
 
-def require_quality_gate(
+def require_quality_checks(
     *, school, as_of=None, synthetic_run=None
 ) -> DataQualityReport:
     report = latest_quality_report(
@@ -490,7 +502,7 @@ def require_quality_gate(
         synthetic_run=synthetic_run,
     )
     if report is None:
-        raise QualityGateError("quality_report_missing", "本校尚无数据质量报告。")
-    if not report.gate_passed:
-        raise QualityGateError("quality_gate_blocked", "本校数据质量闸门未通过。")
+        raise QualityCheckError("quality_report_missing", "本校尚无学习数据检查报告。")
+    if not report.checks_passed:
+        raise QualityCheckError("quality_checks_failed", "本校学习数据检查未通过。")
     return report

@@ -23,7 +23,7 @@ from learning_analytics.services.quality import (
     create_quality_pipeline_run,
     execute_quality_pipeline,
     latest_quality_report,
-    require_quality_gate,
+    require_quality_checks,
 )
 from learning_analytics.tasks import run_nightly_data_quality
 from school.models import School, StudentProfile
@@ -68,9 +68,9 @@ class SyntheticDataGenerationTests(TestCase):
             .exists()
         )
         self.assertEqual(report.status, DataQualityReport.Status.GREEN)
-        self.assertTrue(report.gate_passed)
-        self.assertEqual(float(report.semantic_missing_rate), 0)
-        self.assertEqual(float(report.v1_v2_difference_rate), 0)
+        self.assertTrue(report.checks_passed)
+        self.assertEqual(float(report.unconverted_old_event_rate), 0)
+        self.assertEqual(float(report.old_new_event_difference_rate), 0)
         self.assertEqual(report.event_count, events.count())
 
         before = {
@@ -144,13 +144,13 @@ class SyntheticDataGenerationTests(TestCase):
 
         self.assertFalse(school.is_synthetic)
         self.assertEqual(run.mode, SyntheticDatasetRun.Mode.SCHOOL_OVERLAY)
-        self.assertTrue(synthetic_report.gate_passed)
+        self.assertTrue(synthetic_report.checks_passed)
         self.assertEqual(synthetic_report.event_count, result["counts"]["events"])
-        self.assertFalse(formal_report.gate_passed)
+        self.assertFalse(formal_report.checks_passed)
         self.assertEqual(formal_report.event_count, 0)
         self.assertEqual(latest_quality_report(school=school), formal_report)
         self.assertEqual(
-            require_quality_gate(school=school, synthetic_run=run),
+            require_quality_checks(school=school, synthetic_run=run),
             synthetic_report,
         )
         students = User.objects.filter(synthetic_truth_records__synthetic_run=run)

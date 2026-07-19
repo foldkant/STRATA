@@ -7,7 +7,7 @@ from school.models import School
 
 
 class Command(BaseCommand):
-    help = "检查统一写入服务产生的 V1/V2 学习事件是否一一对应。"
+    help = "检查统一写入服务产生的新旧学习记录是否一一对应。"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -41,10 +41,10 @@ class Command(BaseCommand):
         self.stdout.write(json.dumps(result, ensure_ascii=False, default=str))
         if options["check"] and not result["consistent"]:
             raise CommandError(
-                "V1/V2 学习事件对账失败："
+                "新旧学习记录核对失败："
                 f"缺失 {result['missing_v2_count']} 条，"
                 f"映射不一致 {result['mapping_mismatch_count']} 条，"
-                f"未关联历史 {result['unlinked_legacy_count']} 条。"
+                f"未关联历史 {result['unlinked_old_event_count']} 条。"
             )
         if result["consistent"]:
-            self.stdout.write(self.style.SUCCESS("V1/V2 学习事件对账通过。"))
+            self.stdout.write(self.style.SUCCESS("新旧学习记录核对通过。"))

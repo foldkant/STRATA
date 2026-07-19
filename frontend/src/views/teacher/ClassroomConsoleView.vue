@@ -2154,7 +2154,7 @@ onUnmounted(() => {
                   <option value="balanced_layer">同层优先，未分层均衡补齐</option>
                   <option value="same_layer">严格同层级分组</option>
                   <option value="random">随机分组</option>
-                  <option value="ai_layer">AI 分层分组（当前按同层优先执行）</option>
+                  <option value="ai_layer">按学习情况分组（当前按同层优先）</option>
                 </select>
               </label>
               <label>

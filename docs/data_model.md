@@ -62,7 +62,7 @@
 - `ProjectMilestone`：项目阶段和里程碑，用于项目式学习的进度管理。
 - `ProjectGanttItem`：项目甘特图条目，记录阶段起止时间、负责人、依赖关系和完成状态。
 - `ProjectLog`：项目日志，支持学生个人日志、小组日志和教师过程记录。
-- `ProjectSubmission`：项目提交、自评、互评、师评和量规评分。
+- `ProjectSubmission`：项目提交、自评、互评、师评和评价结果。
 - `Notice`：教师发布给任教班级的公告。
 
 课程规则：
@@ -102,9 +102,9 @@
 - `StudentWorkAttachment`：学生课堂附件提交版本。除教学上下文、文件和批阅缓存外，包含唯一 `submission_id`、`upload_version` 和 `supersedes`；重新上传追加记录，不删除旧文件。
 - `LessonStepAttempt`：学生一次课堂环节提交。使用唯一 `attempt_id` 和递增 `attempt_no`，保存课堂/环节上下文、正文、题目计数和客观题汇总。
 - `LessonStepAttemptAnswer`：课堂提交的逐题业务答案，保存题目版本、题型、响应正文、自动评分和可选附件版本引用；分析事件只引用该业务记录，不复制答案正文。
-- `ClassroomEvaluationConfig`：课程评价配置草案。与 `Course` 一对一，记录教师当前编辑的自评、互评、师评三类 5 星评价项；保存后按内容哈希发布量规版本。
-- `ClassroomEvaluationConfigVersion`：不可变课程量规版本。保存课程内递增版本号、SHA-256、三类开关和评价项快照；相同内容不重复发布。课堂首次开启评价时把版本外键冻结到 `ClassroomSession.evaluation_config_version`。
-- `ClassroomEvaluationSubmission`：不可变评价提交版本。记录课程、可选课堂、班级、评价者、被评价者、小组、量规版本、逐项星级和备注；修订使用新的 `submission_id/analytics_attempt_id`、递增 `submission_version` 和 `supersedes`，不能修改或删除旧行。
+- `ClassroomEvaluationConfig`：课程评价设置。与 `Course` 一对一，记录教师当前使用的自评、互评、师评三类 5 星评价项；保存后按内容生成评价版本。
+- `ClassroomEvaluationConfigVersion`：不可修改的课程评价版本。保存课程内递增版本号、内容摘要、三类开关和评价项快照；相同内容不重复发布。课堂首次开启评价时把版本固定到 `ClassroomSession.evaluation_config_version`。
+- `ClassroomEvaluationSubmission`：不可修改的评价提交版本。记录课程、可选课堂、班级、评价者、被评价者、小组、评价版本、逐项星级和备注；修订生成新版本，不能覆盖或删除旧记录。
 - `TeacherNote`：建议新增，教师对任教班级学生的教学备注和干预记录。
 - `StudentLearningLog`：建议新增，学生学习日志。由系统根据 `LearningEvent` 自动生成，也可由学生反思或教师补充。
 - `ClassLearningLog`：建议新增，班级学习日志。记录课堂运行、任务推进、项目阶段、共性问题、教师干预和课后复盘。
@@ -128,7 +128,7 @@
 - 学生打开小组协作文档时统一双写 `group.document.opened`；学生上传共享文件时统一双写 `group.file.shared`。
 - ONLYOFFICE 保存回调通过 JWT、文档 key、下载来源和大小校验后追加文档版本及 `group.document.saved`。该事件分析单位是 `group`，不能据此推断某位学生完成了多少内容。
 - 协作关闭和课堂结束撤回未完成机会；有打开、保存或上传证据后禁止重新分组，防止删除成员关系和文件证据。
-- 自评、互评、课堂师评和课程师评统一双写 `rubric.rating.submitted`；V1 仅保留兼容动作和星级，V2 不复制评价备注。
+- 自评、互评、课堂师评和课程师评统一记录为 `evaluation.rating.submitted`；兼容记录只保留动作和星级，新版分析事件不复制评价备注。
 - 自评事件的评价者和归属学生相同；师评及互评分别保留真实评价者，证据归属被评价学生。互评跨学生归属只能由已校验同组关系的服务端入口写入。
 - 课堂评价星级、评价完成时间、评价者和被评价者关系可作为过程性评价和后续 AI 分层/分组特征；星级本身不直接作为分层 label。
 - 课堂历史提交和附件版本底座已经建立；后续批量批阅与导出应读取业务提交表和成熟评分事实，不从事件 JSON 反解析答案。
@@ -185,14 +185,14 @@
 - `ParticipationPointLedger`：课堂激励积分不可变流水。保存来源事件、学生、班级/课程/课堂、结构化原因、执行教师、增量、记账前后余额和冲正引用；同一来源事件只能生成一条，原流水不能编辑或删除。
 - `ParticipationPointLedger` 单次增减绝对值不超过 100，普通扣分和冲正后余额不能低于 0；冲正值必须与原流水方向相反且绝对值相同，同一原流水只能冲正一次。
 - `learning_analytics.services.participation_points.reconcile_participation_point_cache`：以第一笔流水的迁移期起始余额和全部增量重算 `StudentProfile.score`。旧字段只是显示缓存，不是学业成绩、核心素养或 AI 主模型特征。
-- `learning_analytics.services.dual_write.record_learning_event`：统一服务端写入入口。`dual_required` 模式下 V1/V2 在同一数据库事务中创建并互相追溯，V2 模式/权限/上下文失败时 V1 同步回滚；`v1_only` 只保留旧业务写入，用于紧急回退。
+- `learning_analytics.services.dual_write.record_learning_event`：统一服务端写入入口。`dual_required` 模式下新旧记录在同一数据库事务中创建并互相追溯，新版记录校验失败时旧记录同步回滚；`v1_only` 只保留旧业务写入，用于紧急回退。
 - `learning_analytics.services.dual_write.record_classroom_point_adjustment`：统一计算“旧评分替换为新评分”产生的实际积分增量，锁定学生缓存后写 V1、V2 和积分流水；重复相同评分不重复记账。
 - `learning_analytics.services.dual_write.reconcile_v1_v2_events`：检查所有标记为双写的 V1 记录是否存在唯一 V2 映射，并验证事件 UUID 和事件名。
 - `LearningEventRejection`：无效或冲突事件的短期隔离审计。原始 JSON 信封使用 Fernet 加密，保存 SHA-256、错误码、可重放状态和保留期限；超过 64KB 时只加密保存摘要并标记不可重放。
 - `learning_analytics.services.access_audit.teacher_has_class_scope`：按学校和有效任课关系判断教师是否可查看班级个体分析，单纯教师角色不足以授权。
 - `sync_learning_event_schemas`：将代码中 35 个事件模式同步到本地数据库；生产启动检查使用 `--check`，发现同版本模式哈希不一致时阻断运行。
 - `purge_expired_event_rejections`：删除超过本地保留期限的加密拒绝记录；正式环境后续由 Celery beat 定时调用。
-- 当前 app 已完成 M0 和 `DATA-01A/01B/01C/02A/02B`。所有生产 V1 写入已通过统一服务双写；历史 V1 使用确定性 UUID 回填，无法证明语义或机会的记录以 `legacy.unmapped` 隔离。质量流水线、特征生成和模型训练尚未完成。
+- 当前 app 已完成 M0 和 `DATA-01A/01B/01C/02A/02B`。所有生产 V1 写入已通过统一服务双写；历史 V1 使用确定性 UUID 回填，无法证明语义或机会的记录以 `legacy.unmapped` 隔离。质量自动流程、特征生成和模型训练尚未完成。
 
 机会状态当前只支持立即投放：`content.released` 的发生时间即实际开放时间。未来定时任务必须先增加 `content.assigned`，到点后再追加 `released`；不能把未来计划时间提前记成已开放。
 
@@ -221,7 +221,7 @@
 - `learning_page.opened`
 - `learning_page.block_viewed`
 - `learning_page.form_submitted`
-- `rubric.rating.submitted`
+- `evaluation.rating.submitted`
 - `intervention.created`
 - `client.offline`
 
@@ -252,7 +252,7 @@
 
 测试事实补充：
 
-- `TestAttempt.analytics_attempt_id`：跨 V1/V2 事实使用的稳定 UUID；迁移时逐行生成后再添加唯一约束。
+- `TestAttempt.analytics_attempt_id`：新旧测试记录共同使用的稳定 UUID；迁移时逐行生成后再添加唯一约束。
 - 测试开启后，每个目标班级和试题快照生成 `content.released`，题目版本为题干、选项、答案、解析、知识点和分值快照的 SHA-256。
 - 每道题先写 `item.submitted`，再写 `item.graded`。客观题使用 `final/automatic`；主观题提交时使用无实际得分的 `pending`，教师完整批阅后写 `final/teacher`，复评分写 `revised/teacher`。
 - 测试结束先提交仍在作答的答卷，再对尚未完成的机会追加 `withdrawn`；已经提交或评分的机会保留原事实。
@@ -298,15 +298,20 @@
 
 学生项目的日志、甘特图和阶段成果通过 `ResourceFile(role=process)` 保存，全部为选填。学生浏览资源写入 `LearningEvent.resource_view`，`object_type=resource_center`。
 
-## 数据质量与分析运行
+## 学习数据检查
 
-- `EventIngestionDailyCounter`：学校、自然日和来源唯一的摄取计数；记录 accepted、duplicate、rejected、late、offline、schema/context error。迁移来源不计入实时摄取分母。
-- `AnalyticsPipelineRun`：学校级分析运行。当前 `pipeline_type=data_quality`，触发方式为 `scheduled/manual/retry`，状态为 `pending/running/succeeded/failed/blocked`。
+- `EventIngestionDailyCounter`：按学校、自然日和来源记录学习事件的接收、重复、拒绝、延迟与离线数量。历史转换记录不计入实时接收数量。
+- `AnalyticsPipelineRun`：学校级自动检查任务。当前 `pipeline_type=data_quality`，触发方式为定时、手动或重试。
 - `AnalyticsPipelineRun.retry_of/attempt_no`：追加式重试链。重试生成新运行，不覆盖失败运行；同校、同窗口的 scheduled 运行具有条件唯一约束。
-- `AnalyticsTaskRun`：流水线阶段事实。`pipeline_run + task_name + attempt_no` 唯一，保存阶段状态、指标、错误和起止时间。
-- `DataQualityReport`：一条流水线最多一份不可变报告。保存七项质量比率、版本化阈值、来源计数、结构化问题、方法版本、配置/来源指纹和 `gate_passed`。
+- `AnalyticsTaskRun`：自动检查的执行阶段，保存状态、指标、错误和起止时间。
+- `DataQualityReport`：一次检查最多生成一份不可修改的报告，保存七项检查指标、判断标准、来源数量和待处理问题。
+- `DataQualityReport.checks_passed`：本次检查是否通过。
+- `DataQualityReport.receive_attempt_count/rejected_event_count`：接收尝试数和拒绝记录数。
+- `DataQualityReport.unconverted_old_event_count/unlinked_old_event_count`：未转换和未关联的旧记录数量。
+- `DataQualityReport.unconverted_old_event_rate/learning_task_link_rate/old_new_event_difference_rate`：旧记录转换、学习任务关联和新旧记录核对结果。
+- `DataQualityReport.check_version/source_checksum`：检查规则版本和来源校验码。
 
-质量报告不可原地修改或直接删除；重新检查必须产生新运行和新报告。质量数据只控制后续分析资格，禁止写入学生能力特征、核心素养得分、积分或奖章。
+检查报告不可原地修改或直接删除；重新检查必须产生新运行和新报告。检查结果只控制后续分析是否继续，禁止写入学生能力特征、核心素养得分、积分或奖章。
 
 ## 合成数据研究轨道
 
@@ -314,19 +319,19 @@
 - `SyntheticDatasetRun`：保存 `isolated_school/school_overlay` 模式、生成器版本、数据集指纹、随机种子、窗口、配置、计数、状态、清理摘要和清单 SHA-256。
 - `SyntheticStudentTruth`：保存模拟生成所需的连续隐藏潜变量；不进入正式特征、API 或学生档案。
 - `LearningEventV2.synthetic_run`：模拟事件到生成批次的不可变来源关联。
-- `AnalyticsPipelineRun.synthetic_run`、`DataQualityReport.synthetic_run`、`EventIngestionDailyCounter.synthetic_run`：隔离正式质量口径和指定合成批次口径。
+- `AnalyticsPipelineRun.synthetic_run`、`DataQualityReport.synthetic_run`、`EventIngestionDailyCounter.synthetic_run`：隔离正式记录和指定测试批次。
 
-正式夜间质量任务排除 `is_synthetic=true` 的独立学校；正式学校质量报告始终排除已关联 `synthetic_run` 的叠加事件和计数。合成事件仍通过正式双写、机会和评分服务生成，以验证生产契约，详细边界见[合成数据研究轨道](synthetic_data_research_track.md)。
+正式夜间检查排除 `is_synthetic=true` 的模拟学校；正式学校检查报告始终排除已关联 `synthetic_run` 的测试事件和计数。模拟事件仍通过正式写入、任务关联和评分服务生成，以验证程序，详细边界见[模拟数据开发说明](synthetic_data_research_track.md)。
 
-## M2 测量设计
+## 学校评价管理
 
-- `AssessmentBlueprint`：教师可编辑任务蓝图草案，保存课程范围、任务版本、目标总体、课程目标、主张、证据规则、任务规格、内容覆盖、认知复杂度、允许支持、评分模型和形成性行动。
-- `AssessmentBlueprintVersion`：不可变蓝图发布版本。按草案递增版本号，规范化内容计算 SHA-256；相同内容不重复发布。
-- `RubricDefinition`：教师可编辑量规草案，绑定任务蓝图并保存总体评价对象和结构化条目草案。
-- `RubricDefinitionVersion`：不可变量规版本，必须绑定同一蓝图的已发布版本。
-- `RubricCriterionVersion`：不可变量规条目，模块为 P/S/R/C/D/E；逐项保存评价对象、证据来源、可观察证据、`NOT_ASSESSED` 条件、允许支持、反例、1-5 星文字锚点和下一步行动。
-- `RubricAnchorExample`：量规条目的不可变锚定样例，登记星级、证据说明和可选材料引用。
+- `EvaluationPlan`：学校管理员维护的评价方案，保存课程、适用学生、学习目标、评价依据、学习任务、评价内容、思维要求、可用帮助、评分规则和后续教学建议。
+- `EvaluationPlanVersion`：已发布的评价方案版本。相同内容不重复发布，修改后生成下一版本。
+- `EvaluationStandard`：学校管理员维护的评价标准，绑定评价方案并保存评价对象和评价指标。
+- `EvaluationStandardVersion`：已发布的评价标准版本，必须绑定对应的评价方案版本。
+- `EvaluationCriterionVersion`：单项评价指标，保存评价方面、材料来源、具体表现、暂不评价条件、可用帮助、常见问题、1-5 星表现说明和后续教学建议。
+- `EvaluationScoringExample`：评价指标的评分示例，登记星级、示例说明和可选材料引用。
 
-教师创建对象的 `intended_use` 固定为 `local_formative`。`school_common/research_linked` 仅预留给后续治理流程。发布版本、条目和样例不能原地修改或删除；完整约束见[任务蓝图与量规版本](measurement_design.md)。
+实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名。完整约束见[学校评价管理](evaluation_management.md)。
 
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

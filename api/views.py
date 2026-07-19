@@ -4703,7 +4703,7 @@ def _teacher_evaluation_payload(
     profiles = _classroom_student_profiles(session)
     submissions = list(
         ClassroomEvaluationSubmission.objects.select_related(
-            "evaluator", "target", "group", "rubric_version"
+            "evaluator", "target", "group", "evaluation_version"
         )
         .filter(course=session.course, session=session)
         .order_by("-updated_at", "-id")
@@ -4805,7 +4805,7 @@ def _teacher_course_evaluation_payload(
     target_ids = [profile.user_id for profile in profiles]
     submissions = list(
         ClassroomEvaluationSubmission.objects.select_related(
-            "evaluator", "target", "group", "session", "rubric_version"
+            "evaluator", "target", "group", "session", "evaluation_version"
         )
         .filter(course=course, target_id__in=target_ids)
         .order_by("-updated_at", "-id")
@@ -5101,7 +5101,7 @@ def teacher_classroom_evaluation_submit(request, pk):
             evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             evaluator=request.user,
             target=profile.user,
-            rubric_version=version,
+            evaluation_version=version,
             ratings=ratings,
             comment=comment,
             group=None,
@@ -5203,7 +5203,7 @@ def teacher_course_evaluation_submit(request, pk):
             evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
             evaluator=request.user,
             target=profile.user,
-            rubric_version=version,
+            evaluation_version=version,
             ratings=ratings,
             comment=comment,
             group=None,
@@ -5282,7 +5282,7 @@ def _student_evaluation_payload(
     runtime_enabled = bool(session.evaluation_enabled)
     submissions = list(
         ClassroomEvaluationSubmission.objects.select_related(
-            "evaluator", "target", "group", "rubric_version"
+            "evaluator", "target", "group", "evaluation_version"
         )
         .filter(course=session.course, session=session, evaluator=request.user)
         .order_by("-updated_at", "-id")
@@ -5441,7 +5441,7 @@ def student_classroom_evaluation_submit(request, pk):
             evaluation_type=evaluation_type,
             evaluator=request.user,
             target=target,
-            rubric_version=config,
+            evaluation_version=config,
             ratings=ratings,
             comment=comment,
             group=target_group,

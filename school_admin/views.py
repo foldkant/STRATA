@@ -75,8 +75,8 @@ def _base_context(request, active_page: str, page_title: str) -> dict:
             ("teaching", "任课关系", reverse("school_admin_teaching_list")),
             ("permissions", "教师权限", reverse("school_admin_teacher_permission_list")),
             ("question_bank", "题库中心", reverse("school_admin_placeholder", args=["question-bank"])),
-            ("rubrics", "评价模板", reverse("school_admin_placeholder", args=["rubrics"])),
-            ("models", "模型与训练", reverse("school_admin_model_overview")),
+            ("evaluations", "评价管理", reverse("school_admin_placeholder", args=["evaluations"])),
+            ("models", "分层分析", reverse("school_admin_model_overview")),
             ("exports", "数据导出", reverse("school_admin_export_center")),
             ("settings", "系统设置", reverse("school_admin_placeholder", args=["settings"])),
             ("logs", "操作日志", reverse("school_admin_log_list")),
@@ -664,7 +664,7 @@ def placeholder(request, slug):
     _require_school_admin(request)
     labels = {
         "question-bank": ("question_bank", "题库中心", "公共题库、知识点、审核和使用记录将在第二阶段接入。"),
-        "rubrics": ("rubrics", "评价模板", "前测、问卷、量规、自评、互评、师评模板将在第二阶段接入。"),
+        "evaluations": ("evaluations", "评价管理", "评价方案和评价标准已迁移到 Vue 学校管理员页面。"),
         "settings": ("settings", "系统设置", "本校展示、学年学期、密码策略和上传限制将在第二阶段接入。"),
     }
     active_page, title, hint = labels.get(slug, ("dashboard", "模块建设中", "该模块尚未开放。"))

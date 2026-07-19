@@ -264,7 +264,7 @@ class ItemGradedPayload(StrictPayloadModel):
     score_raw: float | None = None
     score_max: Annotated[float, Field(gt=0)]
     is_correct: bool | None = None
-    grader_type: Literal["automatic", "teacher", "rubric"]
+    grader_type: Literal["automatic", "teacher", "evaluation"]
 
     @model_validator(mode="after")
     def validate_score(self):
@@ -321,8 +321,8 @@ class CriterionRatingPayload(StrictPayloadModel):
     rating: Annotated[int, Field(ge=1, le=5)]
 
 
-class RubricRatingSubmittedPayload(StrictPayloadModel):
-    rubric_version: Annotated[str, Field(min_length=1, max_length=128)]
+class EvaluationRatingSubmittedPayload(StrictPayloadModel):
+    evaluation_version: Annotated[str, Field(min_length=1, max_length=128)]
     criterion_ratings: list[CriterionRatingPayload] = Field(
         min_length=1, max_length=100
     )
@@ -733,10 +733,10 @@ _EVENT_SPECS = (
         requires_opportunity=True,
     ),
     EventSchemaSpec(
-        "rubric.rating.submitted",
+        "evaluation.rating.submitted",
         "1.0",
-        "学生或教师按已发布量规提交逐项五星评价。",
-        RubricRatingSubmittedPayload,
+        "学生或教师按已发布评价标准提交逐项五星评价。",
+        EvaluationRatingSubmittedPayload,
         "assessment",
         "student",
         ("class_group", "subject", "object_id"),

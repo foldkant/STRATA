@@ -29,17 +29,17 @@ const metricLabels: Record<string, string> = {
   duplicate_rate: '重复事件率',
   invalid_event_rate: '无效事件率',
   late_event_rate: '迟到事件率',
-  semantic_missing_rate: '语义缺失率',
-  opportunity_coverage_rate: '机会关联覆盖率',
+  unconverted_old_event_rate: '旧事件未转换比例',
+  learning_task_link_rate: '学习任务关联率',
   client_offline_rate: '客户端离线率',
-  v1_v2_difference_rate: 'V1/V2 差异率',
+  old_new_event_difference_rate: '新旧记录差异率',
   event_count: '有效事件数',
-  counter_accepted_count: '摄取计数完整性'
+  recorded_accepted_event_count: '接收记录完整性'
 }
 
 const issueMessages: Record<string, string> = {
   no_events: '统计窗口内没有可用于分析的事件。',
-  ingestion_telemetry_incomplete: '事件事实与摄取计数尚未完全对齐。'
+  receive_counts_incomplete: '学习记录数量与接收记录数量尚未完全一致。'
 }
 
 const statusClass = (status: string) => `quality-${status}`
@@ -66,7 +66,7 @@ async function loadData(showLoading = true) {
   try {
     data.value = await getSchoolDataQuality()
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '数据质量信息加载失败。'
+    notice.value = error instanceof ApiError ? error.message : '学习数据检查结果加载失败。'
     noticeTone.value = 'error'
   } finally {
     loading.value = false
@@ -80,11 +80,11 @@ async function startQualityRun() {
   notice.value = ''
   try {
     await runSchoolDataQuality(7)
-    notice.value = '数据质量任务已提交。'
+    notice.value = '学习数据检查任务已提交。'
     noticeTone.value = 'success'
     await loadData(false)
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '数据质量任务提交失败。'
+    notice.value = error instanceof ApiError ? error.message : '学习数据检查任务提交失败。'
     noticeTone.value = 'error'
   } finally {
     running.value = false
@@ -112,19 +112,19 @@ function metricThreshold(metric: QualityMetric) {
   const direction = metric.thresholds.direction === 'low' ? '低于' : '高于'
   const amber = formatPercent(Number(metric.thresholds.amber || 0))
   const red = formatPercent(Number(metric.thresholds.red || 0))
-  return `关注 ${direction} ${amber} · 阻断 ${direction} ${red}`
+  return `提醒 ${direction} ${amber} · 不通过 ${direction} ${red}`
 }
 
 function issueText(issue: QualityIssue) {
   if (issueMessages[issue.code]) return issueMessages[issue.code]
-  return `${metricLabels[issue.metric] || issue.metric}达到${issue.level === 'red' ? '阻断' : '关注'}阈值。`
+  return `${metricLabels[issue.metric] || issue.metric}达到${issue.level === 'red' ? '不通过' : '提醒'}标准。`
 }
 
 function issueValue(issue: QualityIssue) {
   if (issue.metric.endsWith('_rate')) {
-    return `实际 ${formatPercent(issue.value)} · 阈值 ${formatPercent(issue.threshold)}`
+    return `实际 ${formatPercent(issue.value)} · 判断标准 ${formatPercent(issue.threshold)}`
   }
-  return `实际 ${issue.value} · 阈值 ${issue.threshold}`
+  return `实际 ${issue.value} · 判断标准 ${issue.threshold}`
 }
 
 function metricValue(report: DataQualityReport, key: string) {
@@ -182,15 +182,15 @@ const anomalyTrendOption = computed(() =>
     { key: 'duplicate_rate', label: '重复' },
     { key: 'invalid_event_rate', label: '无效' },
     { key: 'late_event_rate', label: '迟到' },
-    { key: 'semantic_missing_rate', label: '语义缺失' },
+    { key: 'unconverted_old_event_rate', label: '旧事件未转换' },
     { key: 'client_offline_rate', label: '离线' }
   ])
 )
 
 const integrityTrendOption = computed(() =>
   trendOption([
-    { key: 'opportunity_coverage_rate', label: '机会覆盖' },
-    { key: 'v1_v2_difference_rate', label: 'V1/V2 一致', inverse: true }
+    { key: 'learning_task_link_rate', label: '任务关联' },
+    { key: 'old_new_event_difference_rate', label: '新旧记录一致', inverse: true }
   ])
 )
 
@@ -203,11 +203,11 @@ onBeforeUnmount(clearPoll)
 </script>
 
 <template>
-  <AppShell title="数据质量" eyebrow="学校管理员" :nav-items="navItems" natural-scroll>
+  <AppShell title="数据检查" eyebrow="学校管理员" :nav-items="navItems" natural-scroll>
     <section class="quality-page-heading">
       <div>
-        <h2>分析数据质量闸门</h2>
-        <p>每日检查事件摄取、语义映射、机会关联与 V1/V2 对账。红色状态会阻止后续分析。</p>
+        <h2>学习数据检查</h2>
+        <p>检查学习记录是否完整、是否能正确转换，以及是否关联到对应课程和任务。</p>
       </div>
       <div class="quality-page-actions">
         <a class="secondary-button" href="/api/v1/school-admin/analytics/quality/export/">导出 XLSX</a>
@@ -226,7 +226,7 @@ onBeforeUnmount(clearPoll)
     <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" />
 
     <section v-if="loading" class="panel quality-loading" aria-live="polite">
-      <strong>正在加载数据质量信息</strong>
+      <strong>正在加载检查结果</strong>
       <span>请稍候</span>
     </section>
 
@@ -234,8 +234,8 @@ onBeforeUnmount(clearPoll)
       <section v-if="!current" class="quality-empty-state">
         <div>
           <span>尚无报告</span>
-          <h2>当前学校还没有数据质量基线</h2>
-          <p>执行一次完整日检查后，质量指标和流水线记录会显示在这里。</p>
+          <h2>当前学校还没有检查记录</h2>
+          <p>执行一次检查后，结果和自动检查记录会显示在这里。</p>
         </div>
         <button class="primary-button" type="button" :disabled="running || hasActiveRun" @click="startQualityRun">
           开始检查
@@ -245,23 +245,23 @@ onBeforeUnmount(clearPoll)
       <template v-else>
         <section class="quality-gate-banner" :class="statusClass(current.status)">
           <div class="quality-gate-state">
-            <span>当前质量闸门</span>
-            <strong>{{ current.gate_passed ? '已通过' : '已阻断' }}</strong>
-            <small>{{ current.status_label }} · {{ current.methodology_version }}</small>
+            <span>当前检查结果</span>
+            <strong>{{ current.checks_passed ? '通过' : '未通过' }}</strong>
+            <small>{{ current.status_label }} · 最近一次完整检查</small>
           </div>
           <dl>
             <div><dt>统计窗口</dt><dd>{{ formatDateTime(current.window_start) }} 至 {{ formatDateTime(current.window_end) }}</dd></div>
             <div><dt>有效事件</dt><dd>{{ current.event_count }}</dd></div>
-            <div><dt>摄取尝试</dt><dd>{{ current.ingestion_attempt_count }}</dd></div>
+            <div><dt>接收尝试</dt><dd>{{ current.receive_attempt_count }}</dd></div>
             <div><dt>生成时间</dt><dd>{{ formatDateTime(current.generated_at) }}</dd></div>
           </dl>
         </section>
 
-        <section class="quality-metric-grid" aria-label="数据质量指标">
+        <section class="quality-metric-grid" aria-label="学习数据检查指标">
           <article v-for="metric in current.metrics" :key="metric.key" :class="statusClass(metric.level)">
             <header>
               <span>{{ metric.label }}</span>
-              <b>{{ metric.level === 'green' ? '正常' : metric.level === 'amber' ? '关注' : '阻断' }}</b>
+              <b>{{ metric.level === 'green' ? '正常' : metric.level === 'amber' ? '提醒' : '未通过' }}</b>
             </header>
             <strong>{{ formatPercent(metric.value) }}</strong>
             <small>{{ metricThreshold(metric) }}</small>
@@ -271,31 +271,31 @@ onBeforeUnmount(clearPoll)
         <section v-if="data.history.length >= 2" class="quality-trend-grid">
           <EChartPanel
             title="异常率趋势"
-            subtitle="重复、无效、迟到、语义缺失与客户端离线"
+            subtitle="重复、无效、延迟、旧事件未转换与客户端离线"
             :option="anomalyTrendOption"
             tall
           />
           <EChartPanel
-            title="完整性趋势"
-            subtitle="学习机会覆盖与 V1/V2 一致率"
+            title="完整程度趋势"
+            subtitle="学习任务关联与新旧记录一致率"
             :option="integrityTrendOption"
             tall
           />
         </section>
         <section v-else class="quality-trend-pending">
           <strong>趋势数据正在积累</strong>
-          <span>至少生成 2 期完整日质量报告后显示趋势图。</span>
+          <span>至少生成 2 期完整日检查报告后显示趋势图。</span>
         </section>
 
         <section class="quality-detail-grid">
           <article class="panel quality-issue-panel">
             <div class="panel-heading">
               <h2>当前问题</h2>
-              <p>{{ current.issues.length ? `共 ${current.issues.length} 项需要处理` : '当前窗口未发现阈值问题' }}</p>
+              <p>{{ current.issues.length ? `共 ${current.issues.length} 项需要处理` : '当前时间范围未发现问题' }}</p>
             </div>
             <div v-if="current.issues.length" class="quality-issue-list">
               <div v-for="issue in current.issues" :key="issue.code" :class="statusClass(issue.level)">
-                <span>{{ issue.level === 'red' ? '阻断' : '关注' }}</span>
+                <span>{{ issue.level === 'red' ? '未通过' : '提醒' }}</span>
                 <div>
                   <strong>{{ issueText(issue) }}</strong>
                   <small>{{ issueValue(issue) }}</small>
@@ -307,14 +307,14 @@ onBeforeUnmount(clearPoll)
 
           <article class="panel quality-count-panel">
             <div class="panel-heading">
-              <h2>对账计数</h2>
+              <h2>数据核对</h2>
               <p>用于追踪问题来源，不作为学生评价依据。</p>
             </div>
             <dl>
-              <div><dt>拒绝事件</dt><dd>{{ current.rejection_count }}</dd></div>
-              <div><dt>语义未映射</dt><dd>{{ current.legacy_unmapped_count }}</dd></div>
-              <div><dt>未关联 V1</dt><dd>{{ current.unlinked_legacy_count }}</dd></div>
-              <div><dt>V1/V2 差异</dt><dd>{{ current.counts.v1_v2_difference_count || 0 }}</dd></div>
+              <div><dt>未接收记录</dt><dd>{{ current.rejected_event_count }}</dd></div>
+              <div><dt>旧事件未转换</dt><dd>{{ current.unconverted_old_event_count }}</dd></div>
+              <div><dt>未关联旧记录</dt><dd>{{ current.unlinked_old_event_count }}</dd></div>
+              <div><dt>新旧记录差异</dt><dd>{{ current.counts.old_new_event_difference_count || 0 }}</dd></div>
             </dl>
           </article>
         </section>
@@ -323,8 +323,8 @@ onBeforeUnmount(clearPoll)
       <section class="panel quality-run-panel">
         <div class="panel-heading split">
           <div>
-            <h2>流水线运行记录</h2>
-            <p>保留定时、手动和重试运行及各阶段结果。</p>
+            <h2>自动检查记录</h2>
+            <p>保留定时检查、手动检查和失败重试结果。</p>
           </div>
           <span>{{ data.runs.length }} 条</span>
         </div>
@@ -356,7 +356,7 @@ onBeforeUnmount(clearPoll)
                   <td colspan="6">
                     <div v-if="run.tasks.length" class="quality-task-list">
                       <div v-for="task in run.tasks" :key="task.id">
-                        <span>{{ task.task_name }}</span>
+                        <span>{{ task.task_label }}</span>
                         <strong :class="statusClass(task.status)">{{ task.status_label }}</strong>
                         <small>{{ formatDateTime(task.finished_at) }}</small>
                       </div>
@@ -366,7 +366,7 @@ onBeforeUnmount(clearPoll)
                   </td>
                 </tr>
               </template>
-              <tr v-if="!data.runs.length"><td colspan="6" class="empty">暂无流水线运行记录</td></tr>
+              <tr v-if="!data.runs.length"><td colspan="6" class="empty">暂无自动检查记录</td></tr>
             </tbody>
           </table>
         </div>

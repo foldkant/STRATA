@@ -1,43 +1,43 @@
 from django.urls import path
 
-from . import event_views, measurement_views, school_admin_views
+from . import evaluation_views, event_views, school_admin_views
 
 app_name = "analytics_api"
 urlpatterns = [
     path(
-        "teacher/measurement/options/",
-        measurement_views.measurement_options,
-        name="teacher_measurement_options",
+        "school-admin/evaluations/options/",
+        evaluation_views.evaluation_options,
+        name="school_admin_evaluation_options",
     ),
     path(
-        "teacher/measurement/blueprints/",
-        measurement_views.blueprints,
-        name="teacher_measurement_blueprints",
+        "school-admin/evaluations/plans/",
+        evaluation_views.plans,
+        name="school_admin_evaluation_plans",
     ),
     path(
-        "teacher/measurement/blueprints/<int:pk>/",
-        measurement_views.blueprint_detail,
-        name="teacher_measurement_blueprint_detail",
+        "school-admin/evaluations/plans/<int:pk>/",
+        evaluation_views.plan_detail,
+        name="school_admin_evaluation_plan_detail",
     ),
     path(
-        "teacher/measurement/blueprints/<int:pk>/publish/",
-        measurement_views.publish_blueprint_view,
-        name="teacher_measurement_blueprint_publish",
+        "school-admin/evaluations/plans/<int:pk>/publish/",
+        evaluation_views.publish_plan_view,
+        name="school_admin_evaluation_plan_publish",
     ),
     path(
-        "teacher/measurement/rubrics/",
-        measurement_views.rubrics,
-        name="teacher_measurement_rubrics",
+        "school-admin/evaluations/standards/",
+        evaluation_views.standards,
+        name="school_admin_evaluation_standards",
     ),
     path(
-        "teacher/measurement/rubrics/<int:pk>/",
-        measurement_views.rubric_detail,
-        name="teacher_measurement_rubric_detail",
+        "school-admin/evaluations/standards/<int:pk>/",
+        evaluation_views.standard_detail,
+        name="school_admin_evaluation_standard_detail",
     ),
     path(
-        "teacher/measurement/rubrics/<int:pk>/publish/",
-        measurement_views.publish_rubric_view,
-        name="teacher_measurement_rubric_publish",
+        "school-admin/evaluations/standards/<int:pk>/publish/",
+        evaluation_views.publish_standard_view,
+        name="school_admin_evaluation_standard_publish",
     ),
     path(
         "learning-events/batch/",

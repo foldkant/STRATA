@@ -36,9 +36,9 @@
 | R11 | Chi & Wylie (2014), *The ICAP Framework*. `10.1080/00461520.2014.965823` | 认知投入活动层级 | 元数据 |
 | R12 | Black & Wiliam (1998), *Assessment and Classroom Learning*. `10.1080/0969595980050102` | 形成性评价基础 | 元数据 |
 | R13 | Shute (2008), *Focus on Formative Feedback*. `10.3102/0034654307313795` | 反馈设计原则 | 元数据 |
-| R14 | Jonsson & Svingby (2007), *The use of scoring rubrics*. `10.1016/j.edurev.2007.05.002` | 量规信效度综述 | 元数据 |
-| R15 | Panadero & Jonsson (2013), *The use of scoring rubrics for formative assessment purposes revisited*. `10.1016/j.edurev.2013.01.002` | 量规用于形成性评价 | 元数据 |
-| R16 | Panadero et al. (2023), *Effects of Rubrics on Academic Performance, Self-Regulated Learning, and Self-Efficacy*. `10.1007/s10648-023-09823-4` | 量规效果元分析 | [PDF](papers/16_PanaderoEtAl2023.pdf) |
+| R14 | Jonsson & Svingby (2007), *The use of scoring rubrics*. `10.1016/j.edurev.2007.05.002` | 评价标准信效度综述 | 元数据 |
+| R15 | Panadero & Jonsson (2013), *The use of scoring rubrics for formative assessment purposes revisited*. `10.1016/j.edurev.2013.01.002` | 评价标准用于形成性评价 | 元数据 |
+| R16 | Panadero et al. (2023), *Effects of Rubrics on Academic Performance, Self-Regulated Learning, and Self-Efficacy*. `10.1007/s10648-023-09823-4` | 评价标准效果元分析 | [PDF](papers/16_PanaderoEtAl2023.pdf) |
 | R17 | Double et al. (2019), *The Impact of Peer Assessment on Academic Performance*. `10.1007/s10648-019-09510-3` | 互评效果元分析 | [PDF](papers/17_Double2019.pdf) |
 | R18 | Wisniewski et al. (2020), *The Power of Feedback Revisited*. `10.3389/fpsyg.2019.03087` | 教育反馈元分析 | [PDF](papers/18_Wisniewski2020.pdf) |
 | R19 | Deunk et al. (2018), *Effective differentiation Practices*. `10.1016/j.edurev.2018.02.002` | 差异化教学认知效果 | 元数据 |
@@ -131,6 +131,6 @@
 
 ## 使用边界
 
-- 设计文档中的观点是对文献的工程化综合，不等于论文已经验证了 STRATA 的量规或模型。
+- 设计文档中的观点是对文献的工程化综合，不等于论文已经验证了 STRATA 的评价标准或模型。
 - 正式写作引用某项结果前，作者需要阅读对应全文；只有元数据的条目不能仅凭摘要转述细节。
 - 未来加入文献时先更新 `refs.txt` 和 `papers_manifest.csv`，重新生成引用文件和 OA 报告，避免手工引用漂移。

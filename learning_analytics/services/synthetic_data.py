@@ -387,10 +387,10 @@ def _result(run: SyntheticDatasetRun, *, reused: bool) -> dict:
             {
                 "report_id": str(report.report_id),
                 "status": report.status,
-                "gate_passed": report.gate_passed,
+                "checks_passed": report.checks_passed,
                 "event_count": report.event_count,
-                "semantic_missing_rate": float(report.semantic_missing_rate),
-                "v1_v2_difference_rate": float(report.v1_v2_difference_rate),
+                "unconverted_old_event_rate": float(report.unconverted_old_event_rate),
+                "old_new_event_difference_rate": float(report.old_new_event_difference_rate),
                 "issues": report.issues,
             }
             if report
@@ -505,7 +505,7 @@ def generate_synthetic_dataset(
             course = Course.objects.create(
                 subject=subject,
                 title=f"数据与计算（{object_prefix}）",
-                introduction="仅用于验证 STRATA 分析流水线。",
+                introduction="仅用于验证 STRATA 分析自动流程。",
                 teacher=teacher,
                 teaching_model=Course.TeachingModel.TASK,
                 is_active=True,
@@ -969,7 +969,7 @@ def generate_synthetic_dataset(
         report = _quality_report_for_run(run)
         counts = dict(run.counts)
         counts["quality_report_id"] = str(report.report_id)
-        counts["quality_gate_passed"] = report.gate_passed
+        counts["quality_checks_passed"] = report.checks_passed
         run.counts = counts
         run.save(update_fields=["counts"])
     return _result(run, reused=False)

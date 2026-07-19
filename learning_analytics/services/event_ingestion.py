@@ -264,15 +264,15 @@ def _resolve_context(
     target_student = None
     requested_target_id = event_data.get("target_student_id")
     if actor.role == User.Role.STUDENT:
-        peer_rubric_target = bool(
+        peer_evaluation_target = bool(
             trusted_source == "server"
-            and event_data.get("event_name") == "rubric.rating.submitted"
+            and event_data.get("event_name") == "evaluation.rating.submitted"
             and event_data.get("payload", {}).get("rater_role") == "peer"
         )
         if (
             requested_target_id
             and requested_target_id != actor.id
-            and not peer_rubric_target
+            and not peer_evaluation_target
         ):
             raise EventIngestionError(
                 "target_forbidden", "学生只能提交归属于自己的学习事件。"
@@ -474,7 +474,7 @@ def ingest_learning_event(
             else None
         ),
         delivered_band=opportunity.delivered_band if opportunity else "",
-        rubric_version=payload.get("rubric_version", ""),
+        evaluation_version=payload.get("evaluation_version", ""),
         privacy_class=spec.privacy_class,
         analysis_unit=spec.analysis_unit,
         payload=payload,

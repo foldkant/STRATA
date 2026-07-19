@@ -28,8 +28,8 @@
 | P2 | 抢答响应与加减分 | [`api/views.py`](../api/views.py) | `page_view/teacher_intervention` | **已迁移**：可选 `interaction` 机会、服务端排名的 `quick_answer.responded`、积分流水及冲正；回答正文只留 V1 业务元数据 |
 | P2 | 签到与人工考勤 | [`api/views.py`](../api/views.py) | 曾直接追加 `page_view` 且无机会分母 | **已迁移**：全班 `attendance` 机会和追加式 `attendance.recorded`，学生仅能自助签到，迟到/请假/缺勤由教师确认 |
 | P2 | 课堂活动开关 | [`api/services.py`](../api/services.py#L4287) | `teacher_intervention` | 内容/活动 `released/withdrawn` 与课堂控制事实 |
-| P3 | 课堂师评 | [`api/views.py`](../api/views.py) | 曾原地覆盖 `teacher_intervention/classroom_evaluation` | **已迁移**：冻结课堂量规版本，追加提交版本并双写 `rubric.rating.submitted` |
-| P3 | 课程级师评 | [`api/views.py`](../api/views.py) | 曾原地覆盖 `teacher_intervention/course_evaluation` | **已迁移**：按课程、班级和量规版本创建机会，评价归属目标学生 |
+| P3 | 课堂师评 | [`api/views.py`](../api/views.py) | 曾原地覆盖 `teacher_intervention/classroom_evaluation` | **已迁移**：冻结课堂评价版本，追加提交版本并双写 `evaluation.rating.submitted` |
+| P3 | 课程级师评 | [`api/views.py`](../api/views.py) | 曾原地覆盖 `teacher_intervention/course_evaluation` | **已迁移**：按课程、班级和评价版本创建机会，评价归属目标学生 |
 | P3 | 学生自评/互评 | [`api/views.py`](../api/views.py) | 曾通过 `_write_student_event(answer_submit)` 覆盖旧提交 | **已迁移**：自评归本人；互评保留评价者并归属被评价学生，普通客户端不能伪造跨学生目标 |
 | P4 | 聊天消息 | [`api/chat_views.py`](../api/chat_views.py#L407) | `chat_message` | 只写参与事实，不复制聊天原文 |
 | P4 | 聊天审核/扣分 | [`api/chat_views.py`](../api/chat_views.py#L606) | `teacher_intervention` | 审核事实 + 积分流水，保留教师决策与冲正 |
@@ -79,8 +79,8 @@
 - AI 学习网页随课堂环节创建页面版本机会；打开、受控区块可见时长和表单提交均已双写。V2 仅保存区块/表单 ID、版本、时长和业务响应引用，不保存页面正文或学生答案。
 - 课堂普通资源按真实 `Resource` 和投放时版本生成机会。资源切换记录 `resource.opened`，视频约每 10 秒及暂停/结束记录 `video.progress`；PDF/Office 无真实页码时不伪造文档进度。
 - 纯资源环节不再自动创建无法完成的通用任务机会，避免扩大必做任务分母。
-- 课程评价配置发布为不可变量规版本，课堂首次开启后冻结版本；自评、互评、师评修订均追加 `submission_version/supersedes`，不覆盖旧记录。
-- 五星评价写入 `rubric.rating.submitted`，评论正文只留业务表。关闭评价和结束课堂撤回未完成机会，已提交评价不撤回。
+- 课程评价配置发布为不可变评价版本，课堂首次开启后冻结版本；自评、互评、师评修订均追加 `submission_version/supersedes`，不覆盖旧记录。
+- 五星评价写入 `evaluation.rating.submitted`，评论正文只留业务表。关闭评价和结束课堂撤回未完成机会，已提交评价不撤回。
 - 小组协作按当前组员使用 `content.released@1.1.target_student_ids` 定向生成文档和共享区机会，不扩展到全班其他学生。
 - 学生打开协作文档写 `group.document.opened`；上传共享文件写 `group.file.shared`，文件名、描述、地址和正文不进入 V2。
 - ONLYOFFICE 回调必须通过 HS256 JWT、文档 key、文档服务器来源和大小校验。真实变化追加 `ClassroomGroupDocumentVersion` 与组级 `group.document.saved`；回调只能证明组文档变化，不能推断个人贡献。

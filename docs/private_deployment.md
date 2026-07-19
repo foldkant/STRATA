@@ -148,7 +148,7 @@ PostgreSQL 环境缺失或配置错误时，`manage.py check` 会阻断启动。
 .\.venv\Scripts\python.exe manage.py reconcile_learning_event_writes --check
 ```
 
-`legacy.unmapped` 是明确的数据质量隔离状态，不得手工改成已接受事件，也不得据此补造学习机会。
+不能确定含义的旧记录必须保留为“未转换”状态，不得手工改成已接受记录，也不得据此补造学习任务关联。
 
 清理超过保留期限的隔离事件：
 
@@ -193,9 +193,9 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 `run_dev.ps1`、`run_lan.ps1` 和 `start_lan_background.ps1` 已统一使用 Uvicorn。Waitress/WSGI 不支持 WebSocket，`run_waitress_lan.ps1` 现会转交 ASGI 启动脚本。
 
-## 数据质量夜间任务
+## 学习数据夜间检查
 
-迁移到 `learning_analytics.0011` 后，学校服务器包含数据质量计数、运行、任务、报告和合成来源隔离字段。升级顺序：
+迁移到最新版本后，学校服务器包含学习记录接收数量、自动检查记录、执行阶段、检查报告和测试数据隔离字段。升级顺序：
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py migrate --noinput
@@ -203,7 +203,7 @@ REDIS_URL=redis://127.0.0.1:6379/0
 .\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
 ```
 
-Celery Beat 默认每天 01:30 调度前一完整自然日的数据质量检查。正式环境必须同时运行：
+Celery Beat 默认每天 01:30 检查前一完整自然日的学习数据。正式环境必须同时运行：
 
 ```powershell
 .\scripts\run_celery_worker.ps1
@@ -218,12 +218,12 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 .\.venv\Scripts\celery.exe -A config inspect ping --timeout=5
 ```
 
-再由学校管理员访问 `/app/school-admin/data-quality` 手动检查最近完整 7 日。出现红色报告是数据阻断，不是服务故障；先查看问题和 XLSX，不得直接修改报告为绿色。学校正式启用 M2/M3 前，必须保存一份最新通过报告及对应运行/任务记录。
+再由学校管理员访问 `/app/school-admin/data-quality` 手动检查最近完整 7 日。报告未通过不代表服务故障；应先查看待处理问题和 XLSX，不得直接修改报告状态。进入后续分析前，必须保存一份最新通过报告及对应检查记录。
 
 便携验证实例可使用非默认端口，但 Web、worker 和 beat 的 `REDIS_URL/CELERY_*` 必须一致。当前工程验证使用 PostgreSQL `55432` 和 Redis 兼容服务 `56379`；这不是学校生产默认端口。
 
 ## 合成研究数据部署边界
 
-`generate_synthetic_learning_data` 主要用于开发机或独立研究数据库。学校正式库确需做界面验收时可使用 `school_overlay`，但必须先备份、指定真实任课教师，并记录返回的 `run_id` 和完整 `dataset_key`。正式质量报告会排除叠加批次，其他普通业务统计在清理前可能显示带 `SIM` 前缀的测试班级和学生。
+`generate_synthetic_learning_data` 主要用于开发机或独立测试数据库。学校正式库确需做界面验收时可使用 `school_overlay`，但必须先备份、指定真实任课教师，并记录返回的 `run_id` 和完整 `dataset_key`。正式检查报告会排除测试批次，其他普通业务统计在清理前可能显示带 `SIM` 前缀的测试班级和学生。
 
-独立合成账号使用不可登录密码；校内叠加学生统一使用测试密码 `123456`，只能用于受控验收，不能作为正式账号分发。验收后执行 `purge_synthetic_learning_data --run-id ... --confirm-key ...` 整批清理。合成报告只能证明数据契约和流水线可运行，不能覆盖本校真实质量报告，也不能作为模型上线依据。
+独立模拟账号使用不可登录密码；校内测试学生统一使用测试密码 `123456`，只能用于受控验收，不能作为正式账号分发。验收后执行 `purge_synthetic_learning_data --run-id ... --confirm-key ...` 整批清理。测试报告只能证明程序和自动检查可运行，不能覆盖本校正式检查报告，也不能作为模型上线依据。

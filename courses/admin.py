@@ -258,7 +258,7 @@ class ClassroomEvaluationSubmissionAdmin(admin.ModelAdmin):
         "evaluator",
         "target",
         "submission_version",
-        "rubric_version",
+        "evaluation_version",
         "updated_at",
     )
     list_filter = ("evaluation_type",)

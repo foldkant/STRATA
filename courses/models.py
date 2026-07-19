@@ -917,15 +917,15 @@ class ClassroomEvaluationConfigVersion(models.Model):
         ordering = ["-version_no", "-id"]
 
     def __str__(self) -> str:
-        return f"{self.course} - 评价量规 v{self.version_no}"
+        return f"{self.course} - 评价评价标准 v{self.version_no}"
 
     def save(self, *args, **kwargs):
         if self.pk and type(self).objects.filter(pk=self.pk).exists():
-            raise ValidationError("已发布评价量规版本不可修改。")
+            raise ValidationError("已发布评价评价标准版本不可修改。")
         return super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        raise ValidationError("已发布评价量规版本不可删除。")
+        raise ValidationError("已发布评价评价标准版本不可删除。")
 
 
 class ClassroomEvaluationSubmission(models.Model):
@@ -969,7 +969,7 @@ class ClassroomEvaluationSubmission(models.Model):
         blank=True,
         related_name="evaluation_submissions",
     )
-    rubric_version = models.ForeignKey(
+    evaluation_version = models.ForeignKey(
         ClassroomEvaluationConfigVersion,
         on_delete=models.PROTECT,
         related_name="submissions",

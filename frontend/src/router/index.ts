@@ -13,6 +13,7 @@ const TeachingView = () => import('@/views/school-admin/TeachingView.vue')
 const PretestsView = () => import('@/views/school-admin/PretestsView.vue')
 const SchoolAdminResourceReviewsView = () => import('@/views/school-admin/ResourceReviewsView.vue')
 const SchoolAdminDataQualityView = () => import('@/views/school-admin/DataQualityView.vue')
+const SchoolAdminEvaluationManagementView = () => import('@/views/school-admin/EvaluationManagementView.vue')
 const TeacherDashboard = () => import('@/views/teacher/DashboardView.vue')
 const TeacherCoursesView = () => import('@/views/teacher/CoursesView.vue')
 const TeacherClassroomView = () => import('@/views/teacher/ClassroomView.vue')
@@ -26,7 +27,6 @@ const TeacherFeedbackView = () => import('@/views/teacher/FeedbackView.vue')
 const TeacherResourcesView = () => import('@/views/teacher/ResourcesView.vue')
 const TeacherQuestionBankView = () => import('@/views/teacher/QuestionBankView.vue')
 const TeacherAssessmentsView = () => import('@/views/teacher/AssessmentsView.vue')
-const TeacherMeasurementDesignView = () => import('@/views/teacher/MeasurementDesignView.vue')
 const TeacherModulePlaceholder = () => import('@/views/teacher/ModulePlaceholderView.vue')
 const StudentDashboard = () => import('@/views/student/DashboardView.vue')
 const StudentCoursesView = () => import('@/views/student/CoursesView.vue')
@@ -63,7 +63,8 @@ const routes: RouteRecordRaw[] = [
   { path: '/school-admin/pretests', component: PretestsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/resource-reviews', component: SchoolAdminResourceReviewsView, meta: { role: 'school_admin' } },
   { path: '/school-admin/data-quality', component: SchoolAdminDataQualityView, meta: { role: 'school_admin' } },
-  { path: '/school-admin/models', component: PlaceholderView, meta: { role: 'school_admin', title: '模型与训练' } },
+  { path: '/school-admin/evaluations', component: SchoolAdminEvaluationManagementView, meta: { role: 'school_admin' } },
+  { path: '/school-admin/models', component: PlaceholderView, meta: { role: 'school_admin', title: '分层分析' } },
   { path: '/teacher', component: TeacherDashboard, meta: { role: 'teacher' } },
   { path: '/teacher/courses', component: TeacherCoursesView, meta: { role: 'teacher' } },
   { path: '/teacher/lessons/:lessonId/design', component: TeacherLessonDesignerView, meta: { role: 'teacher' } },
@@ -78,7 +79,6 @@ const routes: RouteRecordRaw[] = [
   },
   { path: '/teacher/students', component: TeacherStudentsView, meta: { role: 'teacher' } },
   { path: '/teacher/question-bank', component: TeacherQuestionBankView, meta: { role: 'teacher' } },
-  { path: '/teacher/measurement-design', component: TeacherMeasurementDesignView, meta: { role: 'teacher' } },
   {
     path: '/teacher/documents',
     component: TeacherDocumentsView,
@@ -97,7 +97,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/teacher/stratification',
     component: TeacherModulePlaceholder,
-    meta: { role: 'teacher', title: '分层调节', description: '查看 AI 分层建议、原因和置信度，由教师确认后生效。' }
+    meta: { role: 'teacher', title: '分层建议', description: '查看学生学习安排建议和参考原因，由教师确认后生效。' }
   },
   {
     path: '/teacher/notices',

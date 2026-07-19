@@ -30,16 +30,16 @@ export type DataQualityReport = {
   report_id: string
   status: QualityLevel
   status_label: string
-  gate_passed: boolean
+  checks_passed: boolean
   window_start: string
   window_end: string
-  methodology_version: string
-  source_fingerprint: string
+  check_version: string
+  source_checksum: string
   event_count: number
-  ingestion_attempt_count: number
-  rejection_count: number
-  legacy_unmapped_count: number
-  unlinked_legacy_count: number
+  receive_attempt_count: number
+  rejected_event_count: number
+  unconverted_old_event_count: number
+  unlinked_old_event_count: number
   metrics: QualityMetric[]
   counts: Record<string, number | string | boolean | null>
   issues: QualityIssue[]
@@ -51,6 +51,7 @@ export type AnalyticsTaskRun = {
   id: number
   task_id: string
   task_name: string
+  task_label: string
   status: string
   status_label: string
   attempt_no: number
@@ -71,7 +72,7 @@ export type AnalyticsPipelineRun = {
   attempt_no: number
   window_start: string
   window_end: string
-  methodology_version: string
+  check_version: string
   summary: Record<string, unknown>
   error_code: string
   error_message: string

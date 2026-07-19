@@ -5,8 +5,8 @@ from .models import (
     AnalyticsOperatingMode,
     AnalyticsPipelineRun,
     AnalyticsTaskRun,
-    AssessmentBlueprint,
-    AssessmentBlueprintVersion,
+    EvaluationPlan,
+    EvaluationPlanVersion,
     DataQualityReport,
     EventSchemaDefinition,
     EventIngestionDailyCounter,
@@ -15,10 +15,10 @@ from .models import (
     LearningOpportunity,
     LearningOpportunityTransitionFact,
     ParticipationPointLedger,
-    RubricAnchorExample,
-    RubricCriterionVersion,
-    RubricDefinition,
-    RubricDefinitionVersion,
+    EvaluationScoringExample,
+    EvaluationCriterionVersion,
+    EvaluationStandard,
+    EvaluationStandardVersion,
     SensitiveInferenceAccessLog,
     SyntheticDatasetRun,
 )
@@ -371,11 +371,11 @@ class DataQualityReportAdmin(ReadOnlyAnalyticsAdmin):
         "school",
         "synthetic_run",
         "status",
-        "gate_passed",
+        "checks_passed",
         "event_count",
         "window_end",
     )
-    list_filter = ("status", "gate_passed", "school", "synthetic_run")
+    list_filter = ("status", "checks_passed", "school", "synthetic_run")
     readonly_fields = tuple(field.name for field in DataQualityReport._meta.fields)
 
 
@@ -396,79 +396,79 @@ class SyntheticDatasetRunAdmin(ReadOnlyAnalyticsAdmin):
     readonly_fields = tuple(field.name for field in SyntheticDatasetRun._meta.fields)
 
 
-@admin.register(AssessmentBlueprint)
-class AssessmentBlueprintAdmin(admin.ModelAdmin):
+@admin.register(EvaluationPlan)
+class EvaluationPlanAdmin(admin.ModelAdmin):
     list_display = (
         "title",
         "school",
         "subject",
         "course",
-        "intended_use",
-        "validation_status",
+        "scope",
+        "review_status",
         "updated_at",
     )
-    list_filter = ("intended_use", "validation_status", "school", "subject")
+    list_filter = ("scope", "review_status", "school", "subject")
     search_fields = ("title", "course__title", "created_by__username")
 
 
-@admin.register(RubricDefinition)
-class RubricDefinitionAdmin(admin.ModelAdmin):
+@admin.register(EvaluationStandard)
+class EvaluationStandardAdmin(admin.ModelAdmin):
     list_display = (
         "title",
         "school",
         "subject",
-        "blueprint",
-        "intended_use",
-        "validation_status",
+        "plan",
+        "scope",
+        "review_status",
         "updated_at",
     )
-    list_filter = ("intended_use", "validation_status", "school", "subject")
-    search_fields = ("title", "blueprint__title", "created_by__username")
+    list_filter = ("scope", "review_status", "school", "subject")
+    search_fields = ("title", "plan__title", "created_by__username")
 
 
-@admin.register(AssessmentBlueprintVersion)
-class AssessmentBlueprintVersionAdmin(ReadOnlyAnalyticsAdmin):
+@admin.register(EvaluationPlanVersion)
+class EvaluationPlanVersionAdmin(ReadOnlyAnalyticsAdmin):
     list_display = (
         "source",
         "version_no",
-        "intended_use",
-        "validation_status",
+        "scope",
+        "review_status",
         "published_by",
         "published_at",
     )
-    list_filter = ("intended_use", "validation_status", "school", "subject")
+    list_filter = ("scope", "review_status", "school", "subject")
     readonly_fields = tuple(
-        field.name for field in AssessmentBlueprintVersion._meta.fields
+        field.name for field in EvaluationPlanVersion._meta.fields
     )
 
 
-@admin.register(RubricDefinitionVersion)
-class RubricDefinitionVersionAdmin(ReadOnlyAnalyticsAdmin):
+@admin.register(EvaluationStandardVersion)
+class EvaluationStandardVersionAdmin(ReadOnlyAnalyticsAdmin):
     list_display = (
         "source",
         "version_no",
-        "blueprint_version",
-        "intended_use",
-        "validation_status",
+        "plan_version",
+        "scope",
+        "review_status",
         "published_at",
     )
-    list_filter = ("intended_use", "validation_status", "school", "subject")
+    list_filter = ("scope", "review_status", "school", "subject")
     readonly_fields = tuple(
-        field.name for field in RubricDefinitionVersion._meta.fields
+        field.name for field in EvaluationStandardVersion._meta.fields
     )
 
 
-@admin.register(RubricCriterionVersion)
-class RubricCriterionVersionAdmin(ReadOnlyAnalyticsAdmin):
-    list_display = ("rubric_version", "code", "module", "title", "sort_order")
-    list_filter = ("module",)
-    search_fields = ("code", "title", "rubric_version__title")
-    readonly_fields = tuple(field.name for field in RubricCriterionVersion._meta.fields)
+@admin.register(EvaluationCriterionVersion)
+class EvaluationCriterionVersionAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = ("standard_version", "code", "dimension", "title", "sort_order")
+    list_filter = ("dimension",)
+    search_fields = ("code", "title", "standard_version__title")
+    readonly_fields = tuple(field.name for field in EvaluationCriterionVersion._meta.fields)
 
 
-@admin.register(RubricAnchorExample)
-class RubricAnchorExampleAdmin(ReadOnlyAnalyticsAdmin):
+@admin.register(EvaluationScoringExample)
+class EvaluationScoringExampleAdmin(ReadOnlyAnalyticsAdmin):
     list_display = ("criterion", "level", "title", "sort_order")
     list_filter = ("level",)
     search_fields = ("title", "criterion__code", "criterion__title")
-    readonly_fields = tuple(field.name for field in RubricAnchorExample._meta.fields)
+    readonly_fields = tuple(field.name for field in EvaluationScoringExample._meta.fields)

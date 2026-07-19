@@ -19,10 +19,16 @@ METRIC_LABELS = {
     "duplicate_rate": "重复事件率",
     "invalid_event_rate": "无效事件率",
     "late_event_rate": "迟到事件率",
-    "semantic_missing_rate": "语义缺失率",
-    "opportunity_coverage_rate": "机会关联覆盖率",
+    "unconverted_old_event_rate": "旧事件未转换比例",
+    "learning_task_link_rate": "学习任务关联率",
     "client_offline_rate": "客户端离线率",
-    "v1_v2_difference_rate": "V1/V2 差异率",
+    "old_new_event_difference_rate": "新旧记录差异率",
+}
+
+TASK_LABELS = {
+    "collect_learning_data": "汇总学习记录",
+    "compare_old_new_records": "核对新旧记录",
+    "save_data_check_report": "保存检查报告",
 }
 
 
@@ -31,6 +37,7 @@ def _task_row(task: AnalyticsTaskRun) -> dict:
         "id": task.id,
         "task_id": str(task.task_id),
         "task_name": task.task_name,
+        "task_label": TASK_LABELS.get(task.task_name, task.task_name),
         "status": task.status,
         "status_label": task.get_status_display(),
         "attempt_no": task.attempt_no,
@@ -54,7 +61,7 @@ def _run_row(run: AnalyticsPipelineRun) -> dict:
         "attempt_no": run.attempt_no,
         "window_start": run.window_start,
         "window_end": run.window_end,
-        "methodology_version": run.methodology_version,
+        "check_version": run.check_version,
         "summary": run.summary,
         "error_code": run.error_code,
         "error_message": run.error_message,
@@ -89,16 +96,16 @@ def _report_row(report: DataQualityReport) -> dict:
         "report_id": str(report.report_id),
         "status": report.status,
         "status_label": report.get_status_display(),
-        "gate_passed": report.gate_passed,
+        "checks_passed": report.checks_passed,
         "window_start": report.window_start,
         "window_end": report.window_end,
-        "methodology_version": report.methodology_version,
-        "source_fingerprint": report.source_fingerprint,
+        "check_version": report.check_version,
+        "source_checksum": report.source_checksum,
         "event_count": report.event_count,
-        "ingestion_attempt_count": report.ingestion_attempt_count,
-        "rejection_count": report.rejection_count,
-        "legacy_unmapped_count": report.legacy_unmapped_count,
-        "unlinked_legacy_count": report.unlinked_legacy_count,
+        "receive_attempt_count": report.receive_attempt_count,
+        "rejected_event_count": report.rejected_event_count,
+        "unconverted_old_event_count": report.unconverted_old_event_count,
+        "unlinked_old_event_count": report.unlinked_old_event_count,
         "metrics": metrics,
         "counts": report.counts,
         "issues": report.issues,
@@ -157,7 +164,7 @@ def run_school_quality(request):
             AnalyticsPipelineRun.Status.RUNNING,
         },
     ).exists():
-        return fail("本校已有数据质量任务正在等待或运行。", status=409)
+        return fail("本校已有数据检查任务正在等待或运行。", status=409)
     try:
         days = int(request.data.get("days") or 7)
         window_start, window_end = trailing_window(days=days)
@@ -175,10 +182,10 @@ def run_school_quality(request):
             trigger=AnalyticsPipelineRun.Trigger.MANUAL,
         )
     except Exception as exc:
-        return fail(f"质量任务未能入队：{exc}", status=503)
+        return fail(f"数据检查任务未能提交：{exc}", status=503)
     return ok(
         {"run": _run_row(run), "task_id": async_result.id},
-        "数据质量任务已提交。",
+        "数据检查任务已提交。",
         status=202,
     )
 
@@ -209,16 +216,16 @@ def export_school_quality(request):
         [
             report.report_id,
             report.get_status_display(),
-            "通过" if report.gate_passed else "阻断",
+            "通过" if report.checks_passed else "未通过",
             report.window_start,
             report.window_end,
             report.event_count,
-            report.ingestion_attempt_count,
-            report.rejection_count,
-            report.legacy_unmapped_count,
-            report.unlinked_legacy_count,
-            report.methodology_version,
-            report.source_fingerprint,
+            report.receive_attempt_count,
+            report.rejected_event_count,
+            report.unconverted_old_event_count,
+            report.unlinked_old_event_count,
+            report.check_version,
+            report.source_checksum,
             report.generated_at,
         ]
         for report in reports
@@ -233,7 +240,11 @@ def export_school_quality(request):
                     report.report_id,
                     label,
                     float(getattr(report, key)),
-                    threshold.get("direction", ""),
+                    (
+                        "低于"
+                        if threshold.get("direction") == "low"
+                        else "高于"
+                    ),
                     threshold.get("amber", ""),
                     threshold.get("red", ""),
                 ]
@@ -244,7 +255,7 @@ def export_school_quality(request):
             issue_rows.append(
                 [
                     report.report_id,
-                    issue.get("level", ""),
+                    "未通过" if issue.get("level") == "red" else "提醒",
                     issue.get("code", ""),
                     METRIC_LABELS.get(issue.get("metric"), issue.get("metric", "")),
                     issue.get("value", ""),
@@ -262,7 +273,7 @@ def export_school_quality(request):
                 run.attempt_no,
                 run.window_start,
                 run.window_end,
-                run.methodology_version,
+                run.check_version,
                 run.error_code,
                 run.error_message,
                 run.started_at,
@@ -274,7 +285,7 @@ def export_school_quality(request):
                 [
                     run.run_id,
                     task.task_id,
-                    task.task_name,
+                    TASK_LABELS.get(task.task_name, task.task_name),
                     task.get_status_display(),
                     task.attempt_no,
                     task.error_code,
@@ -286,43 +297,43 @@ def export_school_quality(request):
     workbook = build_workbook(
         [
             {
-                "title": "质量报告",
+                "title": "检查报告",
                 "headers": [
                     "报告ID",
-                    "质量状态",
-                    "闸门",
+                    "检查状态",
+                    "检查",
                     "窗口开始",
                     "窗口结束",
                     "事件数",
-                    "摄取尝试数",
+                    "接收尝试数",
                     "拒绝数",
-                    "语义未映射数",
-                    "未关联V1数",
-                    "方法版本",
-                    "来源指纹",
+                    "未转换旧事件数",
+                    "未关联旧记录数",
+                    "检查版本",
+                    "来源校验码",
                     "生成时间",
                 ],
                 "rows": report_rows,
             },
             {
-                "title": "质量指标",
+                "title": "检查指标",
                 "headers": [
                     "报告ID",
                     "指标",
                     "比率",
-                    "阈值方向",
-                    "关注阈值",
-                    "阻断阈值",
+                    "判断方向",
+                    "提醒标准",
+                    "不通过标准",
                 ],
                 "rows": metric_rows,
             },
             {
-                "title": "质量问题",
-                "headers": ["报告ID", "级别", "问题代码", "指标", "实际值", "阈值"],
+                "title": "待处理问题",
+                "headers": ["报告ID", "级别", "问题代码", "指标", "实际值", "判断标准"],
                 "rows": issue_rows,
             },
             {
-                "title": "流水线运行",
+                "title": "自动检查记录",
                 "headers": [
                     "运行ID",
                     "触发方式",
@@ -330,7 +341,7 @@ def export_school_quality(request):
                     "尝试次数",
                     "窗口开始",
                     "窗口结束",
-                    "方法版本",
+                    "检查版本",
                     "错误代码",
                     "错误信息",
                     "开始时间",
@@ -339,7 +350,7 @@ def export_school_quality(request):
                 "rows": run_rows,
             },
             {
-                "title": "任务阶段",
+                "title": "执行阶段",
                 "headers": [
                     "运行ID",
                     "任务ID",
@@ -357,5 +368,5 @@ def export_school_quality(request):
     )
     return workbook_response(
         workbook,
-        f"{school.code}-数据质量-{timezone.localdate():%Y%m%d}.xlsx",
+        f"{school.code}-学习数据检查-{timezone.localdate():%Y%m%d}.xlsx",
     )

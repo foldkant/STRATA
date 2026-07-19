@@ -94,7 +94,7 @@ class AnalyticsSecurityModelTests(TestCase):
             school=self.school,
             target_mode=AnalyticsOperatingMode.Mode.SUSPENDED,
             actor=self.teacher,
-            reason="数据质量闸门失败",
+            reason="学习数据检查失败",
         )
         self.assertEqual(state.mode, AnalyticsOperatingMode.Mode.SUSPENDED)
 

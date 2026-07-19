@@ -40,7 +40,7 @@ def execute_data_quality_pipeline_task(self, pipeline_run_id: int):
         "run_id": str(run.run_id),
         "report_id": str(report.report_id),
         "status": report.status,
-        "gate_passed": report.gate_passed,
+        "checks_passed": report.checks_passed,
     }
 
 

@@ -1,6 +1,6 @@
 # API 契约
 
-> 本文只记录已经实现或已进入当前开发批次的接口。AI 隐性动态分层的未来接口、实施顺序和上线闸门见 [开发路线图](student_behavior_ai_stratification_development_roadmap.md)；实现后再逐项合并到本文，不能把规划中的路由当作可用接口。
+> 本文只记录已经实现或已进入当前开发批次的接口。AI 隐性动态分层的未来接口、实施顺序和上线检查见 [开发路线图](student_behavior_ai_stratification_development_roadmap.md)；实现后再逐项合并到本文，不能把规划中的路由当作可用接口。
 
 ## 基本约定
 
@@ -997,7 +997,7 @@ POST /api/v1/student/lesson-steps/{step_id}/reflection/
 - 学生端会读取 `question_items` 并按题型渲染作答控件；参考答案不会下发给学生端。
 - `question_items` 支持 `single`、`multiple`、`judge`、`blank`、`text`、`file`。
 - `file` 附件提交题下发 `file_config.allowed_extensions` 和 `file_config.max_size_mb`，学生上传接口仍会在后端二次校验格式和大小。
-- 进入课程、课时、环节和查看资源仍处于 V1 迁移阶段；课堂提交和附件上传已由统一服务事务双写 V1/V2。
+- 进入课程、课时、环节和查看资源仍处于旧记录迁移阶段；课堂提交和附件上传已由统一服务在同一事务写入新旧记录。
 - 学生上传附件会追加 `StudentWorkAttachment.upload_version`，不会覆盖或删除旧版本，并写 `task.submitted`；响应中的 `upload_version` 可用于教师端确认版本。
 - 学生提交环节后返回 `attempt_id` 和 `attempt_no`。正文保存在 `LessonStepAttempt/Answer`；V2 `item.submitted` 仅保存题目版本、题型、尝试号及机会引用。
 
@@ -1154,7 +1154,7 @@ POST /api/v1/learning-events/batch/
 - `content.released@1.3` 保持 1.2 规则并新增 `interaction` 内容类型。既有 1.0/1.1/1.2 模式不可修改，旧事件仍按原哈希重放。
 - `target_layers` 支持 `all`、`A`、`B`、`C`、`A/B`、`B/C` 和 `A/B/C`。层级只在服务端用于实际投放，学生响应不得返回目标层级或 `delivered_band`；尚无当前层级的学生只接收 `all` 内容。
 - `content.withdrawn@1.0` 必须引用原 `release_event_id` 和结构化 `reason_code`；已提交或已评分的机会保留，其余机会追加 `withdrawn` 事实。
-- `resource.opened`、`video.progress`、`document.progress`、`group.document.opened`、`group.file.shared`、`attendance.recorded`、`quick_answer.responded`、`item.submitted`、`item.graded`、`task.submitted` 和 `rubric.rating.submitted` 必须提交真实 `opportunity_id`。随机 UUID、跨学生引用、内容版本不一致或机会终止后的事件按条拒绝。
+- `resource.opened`、`video.progress`、`document.progress`、`group.document.opened`、`group.file.shared`、`attendance.recorded`、`quick_answer.responded`、`item.submitted`、`item.graded`、`task.submitted` 和 `evaluation.rating.submitted` 必须提交真实 `opportunity_id`。随机 UUID、跨学生引用、内容版本不一致或机会终止后的事件按条拒绝。
 - `quick_answer.responded` 只允许服务端写入，载荷仅保存首次响应排名和相对活动开启时间的延迟；学生回答正文不复制进 V2。`random_call.selected` 也只允许服务端写入，记录教师选择事实，不要求机会、不生成提交状态。
 - `resource.center.opened`、`lesson.entered`、`lesson.step.entered/completed`、`pretest.submitted`、`chat.message.sent`、`intervention.acknowledged`、`classroom.interaction.responded` 和 `classroom.control.executed` 由对应业务接口通过统一服务写入。资源中心自由浏览和班级级课堂控制不生成学习机会。
 - `item.graded` 必须与同一机会、同一 `attempt_id` 的既有 `item.submitted` 对应。`pending` 只表示尚未形成成熟评分；首个成熟结果使用 `final`，后续修改必须使用 `revised` 并追加新版本。
@@ -1215,7 +1215,7 @@ POST /api/v1/student/classroom/{session_id}/resources/{resource_id}/document-pro
 
 接受结果可按事件类型额外返回 `opportunities_created`、`opportunities_withdrawn`、`opportunity_states_recorded`、`assessment_result_created`、`assessment_result_mature` 和 `assessment_result_version`；无关字段会省略，不保证全部同时出现。
 
-课堂积分流水不开放通用客户端写入 API。抢答评分、随机点名评分和聊天审核扣分已在原有受权限控制的业务接口内完成 V1/V2 双写；客户端只能提交本次操作，不能提交余额、冲正引用或修改历史流水。重复设置相同评分不重复记账，替换评分只记录实际余额变化。
+课堂积分流水不开放通用客户端写入 API。抢答评分、随机点名评分和聊天审核扣分已在原有受权限控制的业务接口内同时写入新旧记录；客户端只能提交本次操作，不能提交余额、冲正引用或修改历史流水。重复设置相同评分不重复记账，替换评分只记录实际余额变化。
 
 服务端业务双写模式由本地环境配置控制：
 
@@ -1292,14 +1292,14 @@ POST /api/v1/student/classroom/{id}/evaluation/submit/
 - 课程端 `PATCH evaluation` 保存课程级 `enable_self`、`enable_peer`、`enable_teacher` 和三类 `criteria`。
 - 每次保存课程评价配置按规范化内容计算 SHA-256；内容变化才发布新的 `ClassroomEvaluationConfigVersion`，相同内容不重复生成版本。
 - 课堂端 `PATCH evaluation` 只接受 `evaluation_enabled`，用于开启或关闭本课堂评价可见性，不修改课程评价项配置；只有进行中课堂允许开启评价。
-- 课堂第一次开启评价时冻结当前量规版本；之后修改课程评价项不会改变这节课堂。关闭后再次开启仍使用原冻结版本。
+- 课堂第一次开启评价时冻结当前评价版本；之后修改课程评价项不会改变这节课堂。关闭后再次开启仍使用原冻结版本。
 - 评价内容设置入口放在教师课时设计页；课堂控制台只调用已保存配置，不提供评价项编辑和 AI 生成。
 - 学生端只有在 `ClassroomSession.evaluation_enabled=true` 时才显示课堂评价入口；课堂默认关闭评价，适合教师在课堂收尾时手动开启。
 - 每类评价项最多 20 个；某类评价只要已有评价项，就视为该类可用于课堂开启。
 - 互评项可以先在课程中设计；学生端只有在课堂开启小组分组合作并生成小组后才显示互评，且只允许评价同组成员，不能评价自己。
 - 师评可在课程中按班级填写，也可在课堂控制台填写。课程师评不绑定具体课堂，课堂师评绑定当前 `ClassroomSession`。
 - 自评、互评、师评每次修改都追加新的 `ClassroomEvaluationSubmission`，响应默认展示最新版本；历史版本通过 `submission_version/supersedes` 保留。
-- 三类评价统一双写 `rubric.rating.submitted@1.0`。载荷只包含量规版本、评价项 ID、1-5 星和评价者角色；备注只保留在业务提交表。
+- 三类评价统一双写 `evaluation.rating.submitted@1.0`。载荷只包含评价版本、评价项 ID、1-5 星和评价者角色；备注只保留在业务提交表。
 - 自评机会归本人；师评和互评机会归被评价学生。互评 API 先校验同组关系，再由服务端可信来源写入；`POST /learning-events/batch/` 仍禁止学生直接指定其他目标学生。
 - 开启评价生成非必做机会；关闭评价或结束课堂撤回未提交机会，已经提交的评价及版本链保留。
 - `ai-generate` 使用教师自己的 DeepSeek 配置生成评价项草稿；草稿必须由教师确认保存后才对学生生效。课程端生成基于课程上下文，课堂端生成会额外参考当前课堂环节。
@@ -1446,7 +1446,7 @@ POST /api/v1/student/resources/{id}/
 
 学生 `POST` 详情接口表示实际打开资源，会增加浏览量并写入 `LearningEvent.resource_view`。权限规则和跨校同步边界见 `docs/resource_center_design.md`。
 
-## 学校数据质量
+## 学校数据检查
 
 所有接口只允许学校管理员访问，学校范围必须来自登录用户，不接受客户端学校 ID。
 
@@ -1463,13 +1463,15 @@ GET  /api/v1/school-admin/analytics/quality/export/
   "school": { "id": 1, "name": "示例学校", "code": "001" },
   "current": {
     "status": "red",
-    "gate_passed": false,
+    "checks_passed": false,
+    "check_version": "data-check-v2",
+    "source_checksum": "...",
     "window_start": "2026-07-12T00:00:00+08:00",
     "window_end": "2026-07-19T00:00:00+08:00",
     "metrics": [
       {
-        "key": "semantic_missing_rate",
-        "label": "语义缺失率",
+        "key": "unconverted_old_event_rate",
+        "label": "旧事件未转换比例",
         "value": 0.375,
         "level": "red",
         "thresholds": { "amber": 0.05, "red": 0.15, "direction": "high" }
@@ -1482,34 +1484,34 @@ GET  /api/v1/school-admin/analytics/quality/export/
 }
 ```
 
-手动运行请求体为 `{ "days": 7 }`，允许 1-365 个完整自然日。成功入队返回 202；同校已有 `pending/running` 任务返回 409；Redis/Celery 不可用返回 503 并把运行记录标为失败。
+手动运行请求体为 `{ "days": 7 }`，允许 1-365 个完整自然日。成功提交返回 202；同校已有 `pending/running` 任务返回 409；Redis/Celery 不可用返回 503 并把检查记录标为失败。
 
-导出返回本校 XLSX，包含“质量报告、质量指标、质量问题、流水线运行、任务阶段”五张表。完整口径见 `docs/data_quality_pipeline.md`。
+导出返回本校 XLSX，包含“检查报告、检查指标、待处理问题、自动检查记录、执行阶段”五张表。完整口径见 `docs/data_quality_pipeline.md`。
 
-## 教师测量设计
+## 学校评价管理
 
-所有接口仅允许教师访问，并按登录学校和创建教师隔离。客户端不能提交 `school`、`subject`、`intended_use` 或 `validation_status`；课程决定学科和学校，教师用途固定为 `local_formative/unvalidated`。
+所有接口仅允许学校管理员访问，并按登录账号所属学校隔离。客户端不能提交 `school`、`subject`、`scope` 或 `review_status`；课程决定学科和学校，新建内容默认处于“课程使用、编辑中”。教师和学生访问这些接口返回 403。
 
 ```text
-GET  /api/v1/teacher/measurement/options/
-GET|POST /api/v1/teacher/measurement/blueprints/
-GET|PATCH /api/v1/teacher/measurement/blueprints/{id}/
-POST /api/v1/teacher/measurement/blueprints/{id}/publish/
-GET|POST /api/v1/teacher/measurement/rubrics/
-GET|PATCH /api/v1/teacher/measurement/rubrics/{id}/
-POST /api/v1/teacher/measurement/rubrics/{id}/publish/
+GET  /api/v1/school-admin/evaluations/options/
+GET|POST /api/v1/school-admin/evaluations/plans/
+GET|PATCH /api/v1/school-admin/evaluations/plans/{id}/
+POST /api/v1/school-admin/evaluations/plans/{id}/publish/
+GET|POST /api/v1/school-admin/evaluations/standards/
+GET|PATCH /api/v1/school-admin/evaluations/standards/{id}/
+POST /api/v1/school-admin/evaluations/standards/{id}/publish/
 ```
 
-草案保存允许内容不完整；发布接口执行完整证据链和五星锚点校验。发布成功返回草案详情及最新版本；相同内容重复发布返回现有版本，不新增行。发布失败返回：
+编辑中的内容允许暂时不完整；发布接口检查学习目标、评价依据、学习任务、星级说明和评分示例。发布成功返回详情及最新版本；相同内容重复发布返回现有版本，不新增行。发布失败返回：
 
 ```json
 {
   "data": null,
-  "message": "量规发布前检查未通过。",
+  "message": "评价标准发布前检查未通过。",
   "errors": {
-    "criteria": ["量规条目 D1 至少需要两份锚定样例。"]
+    "criteria": ["评价指标 D1 至少需要两个评分示例。"]
   }
 }
 ```
 
-发布后的蓝图版本、量规版本、条目和锚定样例不可 PATCH 或 DELETE。完整字段见[任务蓝图与量规版本](measurement_design.md)。
+发布后的评价方案版本、评价标准版本、评价指标和评分示例不可 PATCH 或 DELETE。完整字段见[学校评价管理](evaluation_management.md)。

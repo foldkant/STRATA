@@ -1782,7 +1782,7 @@ onMounted(loadLesson)
                     <span>{{ layer }} 层分值</span>
                     <input v-model="questionDraft.layer_scores[layer]" type="number" min="0" max="100" step="0.5" />
                   </label>
-                  <small class="span-2">这里的 A/B/C 分值会作为题目设计上下文进入后续学习分析，但不直接作为学生分层模型的唯一标签。</small>
+                  <small class="span-2">这里的 A/B/C 分值会作为后续学习分析的参考之一，不会单独决定学生的学习安排。</small>
                 </div>
               </section>
               <label class="span-2">

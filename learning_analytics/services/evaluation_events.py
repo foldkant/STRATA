@@ -119,7 +119,7 @@ def publish_evaluation_config_version(
     )
 
 
-def rubric_version_label(version: ClassroomEvaluationConfigVersion) -> str:
+def evaluation_version_label(version: ClassroomEvaluationConfigVersion) -> str:
     return (
         f"course:{version.course_id}:v{version.version_no}:{version.config_hash[:12]}"
     )
@@ -147,12 +147,12 @@ def _type_enabled(version, evaluation_type: str) -> bool:
     )
 
 
-def classroom_rubric_object_id(session, evaluation_type: str) -> str:
-    return f"classroom-rubric:{session.id}:{evaluation_type}"
+def classroom_evaluation_object_id(session, evaluation_type: str) -> str:
+    return f"classroom-evaluation:{session.id}:{evaluation_type}"
 
 
-def course_rubric_object_id(course, class_group, evaluation_type: str) -> str:
-    return f"course-rubric:{course.id}:{class_group.id}:{evaluation_type}"
+def course_evaluation_object_id(course, class_group, evaluation_type: str) -> str:
+    return f"course-evaluation:{course.id}:{class_group.id}:{evaluation_type}"
 
 
 @transaction.atomic
@@ -167,7 +167,7 @@ def release_classroom_evaluation_opportunities(
             school=session.school,
             event_name="content.released",
             classroom_session=session,
-            legacy_event__metadata__action="classroom_rubric_released",
+            legacy_event__metadata__action="classroom_evaluation_released",
             client_occurred_at__gte=session.evaluation_opened_at or occurred_at,
         ).values_list("object_id", flat=True)
     )
@@ -176,7 +176,7 @@ def release_classroom_evaluation_opportunities(
     for evaluation_type in sorted(EVALUATION_TYPES):
         if not _type_enabled(version, evaluation_type):
             continue
-        object_id = classroom_rubric_object_id(session, evaluation_type)
+        object_id = classroom_evaluation_object_id(session, evaluation_type)
         if object_id in existing_ids:
             continue
         try:
@@ -194,14 +194,14 @@ def release_classroom_evaluation_opportunities(
                 course=session.course,
                 lesson=session.lesson,
                 classroom_session=session,
-                object_type="evaluation_rubric",
+                object_type="evaluation_standard",
                 object_id=object_id,
                 object_version=version.config_hash,
                 legacy_metadata={
-                    "action": "classroom_rubric_released",
+                    "action": "classroom_evaluation_released",
                     "classroom_session": session.id,
                     "evaluation_type": evaluation_type,
-                    "rubric_version": rubric_version_label(version),
+                    "evaluation_version": evaluation_version_label(version),
                 },
                 occurred_at=occurred_at,
             )
@@ -229,7 +229,7 @@ def withdraw_classroom_evaluation_opportunities(
         school=session.school,
         event_name="content.released",
         classroom_session=session,
-        legacy_event__metadata__action="classroom_rubric_released",
+        legacy_event__metadata__action="classroom_evaluation_released",
     ).select_related("class_group", "subject", "course", "lesson")
     withdrawal_events = 0
     for release in releases:
@@ -256,7 +256,7 @@ def withdraw_classroom_evaluation_opportunities(
                 object_type=release.object_type,
                 object_id=release.object_id,
                 legacy_metadata={
-                    "action": "classroom_rubric_withdrawn",
+                    "action": "classroom_evaluation_withdrawn",
                     "classroom_session": session.id,
                     "release_event_id": str(release.event_id),
                     "reason_code": reason_code,
@@ -269,7 +269,7 @@ def withdraw_classroom_evaluation_opportunities(
     return {"withdrawal_events": withdrawal_events}
 
 
-def _active_rubric_opportunity(*, student, object_id: str, object_version: str):
+def _active_evaluation_opportunity(*, student, object_id: str, object_version: str):
     if learning_event_write_mode() == "v1_only":
         return None
     opportunities = LearningOpportunity.objects.filter(
@@ -284,7 +284,7 @@ def _active_rubric_opportunity(*, student, object_id: str, object_version: str):
         ).exists():
             return opportunity
     raise EvaluationEventError(
-        "rubric_opportunity_missing",
+        "evaluation_opportunity_missing",
         "评价机会不存在或已经关闭，请重新开启评价后再提交。",
     )
 
@@ -295,14 +295,14 @@ def _ensure_course_evaluation_opportunities(
 ):
     if learning_event_write_mode() == "v1_only":
         return
-    object_id = course_rubric_object_id(course, class_group, evaluation_type)
+    object_id = course_evaluation_object_id(course, class_group, evaluation_type)
     old_releases = LearningEventV2.objects.filter(
         school=actor.school,
         event_name="content.released",
         class_group=class_group,
         course=course,
         object_id=object_id,
-        legacy_event__metadata__action="course_rubric_released",
+        legacy_event__metadata__action="course_evaluation_released",
     ).exclude(object_version=version.config_hash)
     for release in old_releases.select_related("class_group", "subject", "course"):
         if LearningEventV2.objects.filter(
@@ -317,7 +317,7 @@ def _ensure_course_evaluation_opportunities(
                 event_name="content.withdrawn",
                 payload={
                     "release_event_id": release.event_id,
-                    "reason_code": "rubric_revised",
+                    "reason_code": "evaluation_revised",
                 },
                 legacy_event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
                 class_group=release.class_group,
@@ -326,9 +326,9 @@ def _ensure_course_evaluation_opportunities(
                 object_type=release.object_type,
                 object_id=release.object_id,
                 legacy_metadata={
-                    "action": "course_rubric_withdrawn",
+                    "action": "course_evaluation_withdrawn",
                     "release_event_id": str(release.event_id),
-                    "reason_code": "rubric_revised",
+                    "reason_code": "evaluation_revised",
                 },
                 occurred_at=occurred_at or timezone.now(),
             )
@@ -341,7 +341,7 @@ def _ensure_course_evaluation_opportunities(
         course=course,
         object_id=object_id,
         object_version=version.config_hash,
-        legacy_event__metadata__action="course_rubric_released",
+        legacy_event__metadata__action="course_evaluation_released",
     ).exists()
     if exists:
         return
@@ -358,13 +358,13 @@ def _ensure_course_evaluation_opportunities(
             class_group=class_group,
             subject=course.subject,
             course=course,
-            object_type="evaluation_rubric",
+            object_type="evaluation_standard",
             object_id=object_id,
             object_version=version.config_hash,
             legacy_metadata={
-                "action": "course_rubric_released",
+                "action": "course_evaluation_released",
                 "evaluation_type": evaluation_type,
-                "rubric_version": rubric_version_label(version),
+                "evaluation_version": evaluation_version_label(version),
             },
             occurred_at=occurred_at or timezone.now(),
         )
@@ -380,14 +380,14 @@ def append_evaluation_submission(
     evaluation_type: str,
     evaluator,
     target,
-    rubric_version: ClassroomEvaluationConfigVersion,
+    evaluation_version: ClassroomEvaluationConfigVersion,
     ratings: dict,
     comment: str,
     session=None,
     group=None,
 ) -> ClassroomEvaluationSubmission:
-    if rubric_version.course_id != course.id:
-        raise EvaluationEventError("rubric_course_mismatch", "评价量规不属于当前课程。")
+    if evaluation_version.course_id != course.id:
+        raise EvaluationEventError("evaluation_course_mismatch", "评价评价标准不属于当前课程。")
     query = ClassroomEvaluationSubmission.objects.select_for_update().filter(
         course=course,
         session=session,
@@ -404,7 +404,7 @@ def append_evaluation_submission(
         evaluator=evaluator,
         target=target,
         group=group,
-        rubric_version=rubric_version,
+        evaluation_version=evaluation_version,
         submission_version=(previous.submission_version + 1 if previous else 1),
         supersedes=previous,
         ratings=ratings,
@@ -414,27 +414,27 @@ def append_evaluation_submission(
         release_classroom_evaluation_opportunities(
             session=session,
             actor=session.teacher,
-            version=rubric_version,
+            version=evaluation_version,
         )
-        object_id = classroom_rubric_object_id(session, evaluation_type)
+        object_id = classroom_evaluation_object_id(session, evaluation_type)
     else:
         _ensure_course_evaluation_opportunities(
             course=course,
             class_group=class_group,
-            version=rubric_version,
+            version=evaluation_version,
             evaluation_type=evaluation_type,
             actor=course.teacher,
         )
-        object_id = course_rubric_object_id(course, class_group, evaluation_type)
-    opportunity = _active_rubric_opportunity(
+        object_id = course_evaluation_object_id(course, class_group, evaluation_type)
+    opportunity = _active_evaluation_opportunity(
         student=target,
         object_id=object_id,
-        object_version=rubric_version.config_hash,
+        object_version=evaluation_version.config_hash,
     )
     criterion_order = {
         item["id"]: index
         for index, item in enumerate(
-            _criteria_for_type(rubric_version, evaluation_type)
+            _criteria_for_type(evaluation_version, evaluation_type)
         )
     }
     criterion_ratings = [
@@ -447,9 +447,9 @@ def append_evaluation_submission(
         record_learning_event(
             actor=evaluator,
             target_student=target,
-            event_name="rubric.rating.submitted",
+            event_name="evaluation.rating.submitted",
             payload={
-                "rubric_version": rubric_version_label(rubric_version),
+                "evaluation_version": evaluation_version_label(evaluation_version),
                 "criterion_ratings": criterion_ratings,
                 "rater_role": evaluation_type,
             },
@@ -465,9 +465,9 @@ def append_evaluation_submission(
             course=course,
             lesson=session.lesson if session else None,
             classroom_session=session,
-            object_type="evaluation_rubric",
+            object_type="evaluation_standard",
             object_id=object_id,
-            object_version=rubric_version.config_hash,
+            object_version=evaluation_version.config_hash,
             opportunity_id=opportunity.opportunity_id if opportunity else None,
             attempt_id=submission.analytics_attempt_id,
             legacy_metadata={
@@ -476,7 +476,7 @@ def append_evaluation_submission(
                 "submission_version": submission.submission_version,
                 "target_id": target.id,
                 "group_id": group.id if group else None,
-                "rubric_version": rubric_version_label(rubric_version),
+                "evaluation_version": evaluation_version_label(evaluation_version),
                 "ratings": ratings,
             },
             occurred_at=timezone.now(),
