@@ -374,6 +374,7 @@ def ingest_learning_event(
     event_data: dict,
     received_at=None,
     legacy_event=None,
+    synthetic_run=None,
     trusted_source: str | None = None,
 ) -> dict:
     received_at = received_at or timezone.now()
@@ -450,6 +451,7 @@ def ingest_learning_event(
         actor=actor,
         target_student=target_student,
         school=actor.school,
+        synthetic_run=synthetic_run,
         object_type=event_data.get("object_type", ""),
         object_id=event_data.get("object_id", ""),
         object_version=event_data.get("object_version", ""),

@@ -441,10 +441,14 @@ def me_view(request):
 @permission_classes([IsSuperAdmin])
 def super_admin_dashboard(request):
     User = get_user_model()
+    operational_schools = School.objects.filter(is_synthetic=False)
+    operational_users = User.objects.filter(
+        Q(school__is_synthetic=False) | Q(school__isnull=True)
+    )
     with connection.cursor() as cursor:
         cursor.execute("SELECT 1")
     school_scale_rows = list(
-        School.objects.annotate(
+        operational_schools.annotate(
             student_count=Count("users__student_profile", distinct=True),
             class_count=Count("classes", distinct=True),
         ).order_by("-student_count", "name")[:10]
@@ -452,30 +456,38 @@ def super_admin_dashboard(request):
 
     data = {
         "metrics": [
-            {"label": "学校", "value": School.objects.count(), "sub": "已登记学校"},
+            {
+                "label": "学校",
+                "value": operational_schools.count(),
+                "sub": "已登记学校",
+            },
             {
                 "label": "学校管理员",
-                "value": User.objects.filter(role="school_admin").count(),
+                "value": operational_users.filter(role="school_admin").count(),
                 "sub": "本地管理账号",
             },
             {
                 "label": "教师",
-                "value": User.objects.filter(role="teacher").count(),
+                "value": operational_users.filter(role="teacher").count(),
                 "sub": "教师账号",
             },
             {
                 "label": "学生档案",
-                "value": StudentProfile.objects.count(),
+                "value": StudentProfile.objects.filter(
+                    user__school__is_synthetic=False
+                ).count(),
                 "sub": "已建档学生",
             },
             {
                 "label": "班级",
-                "value": ClassGroup.objects.count(),
+                "value": ClassGroup.objects.filter(school__is_synthetic=False).count(),
                 "sub": "行政/教学班",
             },
             {
                 "label": "行为事件",
-                "value": LearningEvent.objects.count(),
+                "value": LearningEvent.objects.filter(
+                    actor__school__is_synthetic=False
+                ).count(),
                 "sub": "学习过程记录",
             },
         ],
@@ -496,16 +508,18 @@ def super_admin_dashboard(request):
         },
         "charts": {
             "school_status": _choice_counts(
-                School.objects.all(), "status", School.Status.choices
+                operational_schools, "status", School.Status.choices
             ),
             "import_status": _choice_counts(
                 ImportBatch.objects.all(), "status", ImportBatch.Status.choices
             ),
             "account_roles": _choice_counts(
-                User.objects.all(), "role", User.Role.choices
+                operational_users, "role", User.Role.choices
             ),
             "learning_events_7d": _day_series(
-                LearningEvent.objects.all(), "occurred_at", days=7
+                LearningEvent.objects.filter(actor__school__is_synthetic=False),
+                "occurred_at",
+                days=7,
             ),
             "training_jobs_7d": _day_series(
                 TrainingJob.objects.filter(
@@ -562,10 +576,14 @@ def super_admin_schools(request):
 
     query = request.GET.get("q", "").strip()
     status = request.GET.get("status", "").strip()
-    schools = School.objects.annotate(
-        class_count=Count("classes", distinct=True),
-        user_count=Count("users", distinct=True),
-    ).order_by("name", "code")
+    schools = (
+        School.objects.filter(is_synthetic=False)
+        .annotate(
+            class_count=Count("classes", distinct=True),
+            user_count=Count("users", distinct=True),
+        )
+        .order_by("name", "code")
+    )
     if query:
         schools = schools.filter(
             Q(name__icontains=query)
@@ -583,7 +601,8 @@ def super_admin_schools(request):
 @permission_classes([IsSuperAdmin])
 def super_admin_school_detail(request, pk):
     school = (
-        School.objects.annotate(
+        School.objects.filter(is_synthetic=False)
+        .annotate(
             class_count=Count("classes", distinct=True),
             user_count=Count("users", distinct=True),
         )
@@ -644,7 +663,7 @@ def super_admin_school_admins(request):
     school_id = request.GET.get("school", "").strip()
     status = request.GET.get("status", "").strip()
     users = (
-        User.objects.filter(role="school_admin")
+        User.objects.filter(role="school_admin", school__is_synthetic=False)
         .select_related("school")
         .order_by("school__name", "username")
     )
@@ -3445,9 +3464,7 @@ def teacher_learning_web_page_responses(request, pk):
                     "status": (
                         "completed"
                         if completed
-                        else "started"
-                        if started
-                        else "pending"
+                        else "started" if started else "pending"
                     ),
                     "status_label": (
                         "已完成" if completed else "进行中" if started else "未开始"
@@ -5576,9 +5593,7 @@ def classroom_group_office_config(request, group_id):
         signed_protected_file_url(
             "group-document",
             group.id,
-            version=(
-                f"{group.document_version}:{group.collaboration_document.name}"
-            ),
+            version=(f"{group.document_version}:{group.collaboration_document.name}"),
         )
     )
     base_url = f"{'https' if request.is_secure() else 'http'}://{request.get_host()}"
@@ -6023,9 +6038,7 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
                 "submitted_at": (
                     attempt.submitted_at
                     if attempt
-                    else event.occurred_at
-                    if event
-                    else None
+                    else event.occurred_at if event else None
                 ),
                 "event_id": event.id if event else None,
                 "attempt_id": str(attempt.attempt_id) if attempt else None,
@@ -8373,9 +8386,7 @@ def student_lesson_step_enter(request, step_id):
     except ServiceError as exc:
         return _service_fail(exc)
     try:
-        record_lesson_step_entered(
-            student=request.user, profile=profile, step=step
-        )
+        record_lesson_step_entered(student=request.user, profile=profile, step=step)
     except EventWriteError as exc:
         return fail(exc.message, status=500)
     return ok({}, "已记录进入环节。")

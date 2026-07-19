@@ -14,7 +14,9 @@ from school.models import School
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def execute_data_quality_pipeline_task(self, pipeline_run_id: int):
-    run = AnalyticsPipelineRun.objects.select_related("school").get(pk=pipeline_run_id)
+    run = AnalyticsPipelineRun.objects.select_related("school", "synthetic_run").get(
+        pk=pipeline_run_id
+    )
     try:
         report = execute_quality_pipeline(run)
     except Exception as exc:
@@ -26,6 +28,7 @@ def execute_data_quality_pipeline_task(self, pipeline_run_id: int):
             window_end=run.window_end,
             trigger=AnalyticsPipelineRun.Trigger.RETRY,
             retry_of=run,
+            synthetic_run=run.synthetic_run,
         )
         raise self.retry(
             args=(retry_run.id,),
@@ -73,7 +76,10 @@ def dispatch_school_data_quality_pipeline(
 def run_nightly_data_quality():
     dispatched = []
     window_start, window_end = previous_local_day_window()
-    for school in School.objects.filter(status=School.Status.ACTIVE).iterator():
+    for school in School.objects.filter(
+        status=School.Status.ACTIVE,
+        is_synthetic=False,
+    ).iterator():
         run_query = AnalyticsPipelineRun.objects.filter(
             school=school,
             pipeline_type=AnalyticsPipelineRun.PipelineType.DATA_QUALITY,

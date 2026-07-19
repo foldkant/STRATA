@@ -112,7 +112,10 @@ def _report_row(report: DataQualityReport) -> dict:
 def school_quality(request):
     school = request.user.school
     reports = list(
-        DataQualityReport.objects.filter(school=school)
+        DataQualityReport.objects.filter(
+            school=school,
+            synthetic_run__isnull=True,
+        )
         .select_related("pipeline_run")
         .order_by("-window_end", "-created_at")[:30]
     )
@@ -120,6 +123,7 @@ def school_quality(request):
         AnalyticsPipelineRun.objects.filter(
             school=school,
             pipeline_type=AnalyticsPipelineRun.PipelineType.DATA_QUALITY,
+            synthetic_run__isnull=True,
         )
         .prefetch_related(
             Prefetch(
@@ -147,6 +151,7 @@ def run_school_quality(request):
     if AnalyticsPipelineRun.objects.filter(
         school=school,
         pipeline_type=AnalyticsPipelineRun.PipelineType.DATA_QUALITY,
+        synthetic_run__isnull=True,
         status__in={
             AnalyticsPipelineRun.Status.PENDING,
             AnalyticsPipelineRun.Status.RUNNING,
@@ -183,7 +188,10 @@ def run_school_quality(request):
 def export_school_quality(request):
     school = request.user.school
     reports = list(
-        DataQualityReport.objects.filter(school=school)
+        DataQualityReport.objects.filter(
+            school=school,
+            synthetic_run__isnull=True,
+        )
         .select_related("pipeline_run")
         .order_by("-window_end", "-created_at")[:100]
     )
@@ -191,6 +199,7 @@ def export_school_quality(request):
         AnalyticsPipelineRun.objects.filter(
             school=school,
             pipeline_type=AnalyticsPipelineRun.PipelineType.DATA_QUALITY,
+            synthetic_run__isnull=True,
         )
         .prefetch_related("task_runs")
         .order_by("-created_at")[:100]

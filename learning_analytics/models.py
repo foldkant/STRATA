@@ -216,6 +216,13 @@ class LearningEventV2(models.Model):
         on_delete=models.PROTECT,
         related_name="learning_events_v2",
     )
+    synthetic_run = models.ForeignKey(
+        "SyntheticDatasetRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="events",
+    )
     class_group = models.ForeignKey(
         "school.ClassGroup",
         on_delete=models.SET_NULL,
@@ -359,6 +366,9 @@ class LearningEventV2(models.Model):
 
         if self.actor_id and self.actor.school_id not in {None, self.school_id}:
             errors["actor"] = "事件执行人与事件学校不一致。"
+        if self.synthetic_run_id:
+            if self.synthetic_run.school_id != self.school_id:
+                errors["synthetic_run"] = "合成数据批次与事件学校不一致。"
         if self.target_student_id:
             if self.target_student.school_id != self.school_id:
                 errors["target_student"] = "目标学生与事件学校不一致。"
@@ -1341,6 +1351,166 @@ class SensitiveInferenceAccessLog(models.Model):
         return f"{self.actor_role}:{self.purpose}:{outcome}"
 
 
+class SyntheticDatasetRun(models.Model):
+    class Mode(models.TextChoices):
+        ISOLATED_SCHOOL = "isolated_school", "独立模拟学校"
+        SCHOOL_OVERLAY = "school_overlay", "校内测试叠加"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "等待生成"
+        RUNNING = "running", "生成中"
+        SUCCEEDED = "succeeded", "生成成功"
+        FAILED = "failed", "生成失败"
+        PURGED = "purged", "已清理"
+
+    run_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    dataset_key = models.CharField(max_length=64, unique=True)
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="synthetic_dataset_runs",
+    )
+    mode = models.CharField(
+        max_length=24,
+        choices=Mode.choices,
+        default=Mode.ISOLATED_SCHOOL,
+    )
+    generator_version = models.CharField(max_length=32)
+    seed = models.PositiveBigIntegerField()
+    window_start = models.DateTimeField()
+    window_end = models.DateTimeField()
+    configuration = models.JSONField(default=dict)
+    manifest_hash = models.CharField(max_length=64, blank=True)
+    counts = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    error_message = models.CharField(max_length=1000, blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    purged_at = models.DateTimeField(null=True, blank=True)
+    purge_summary = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["school", "status", "created_at"]),
+            models.Index(fields=["generator_version", "created_at"]),
+        ]
+        ordering = ["-created_at", "-id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.school_id:
+            if self.mode == self.Mode.ISOLATED_SCHOOL and not self.school.is_synthetic:
+                errors["school"] = "独立模拟批次只能属于合成研究学校。"
+            if self.mode == self.Mode.SCHOOL_OVERLAY and self.school.is_synthetic:
+                errors["school"] = "校内测试叠加批次必须属于正式学校。"
+        if self.window_end <= self.window_start:
+            errors["window_end"] = "生成窗口结束时间必须晚于开始时间。"
+        if not isinstance(self.configuration, dict):
+            errors["configuration"] = "生成配置必须是 JSON 对象。"
+        if not isinstance(self.counts, dict):
+            errors["counts"] = "生成计数必须是 JSON 对象。"
+        if not isinstance(self.purge_summary, dict):
+            errors["purge_summary"] = "清理摘要必须是 JSON 对象。"
+        if self.manifest_hash and not re.fullmatch(r"[0-9a-f]{64}", self.manifest_hash):
+            errors["manifest_hash"] = "清单指纹必须是 64 位小写 SHA-256。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.school.code}:{self.generator_version}:{self.dataset_key[:12]}"
+
+
+class SyntheticStudentTruth(models.Model):
+    synthetic_run = models.ForeignKey(
+        SyntheticDatasetRun,
+        on_delete=models.PROTECT,
+        related_name="student_truths",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="synthetic_truth_records",
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="synthetic_truth_records",
+    )
+    prior_mastery = models.DecimalField(max_digits=5, decimal_places=4)
+    engagement = models.DecimalField(max_digits=5, decimal_places=4)
+    self_regulation = models.DecimalField(max_digits=5, decimal_places=4)
+    response_speed = models.DecimalField(max_digits=5, decimal_places=4)
+    growth_rate = models.DecimalField(max_digits=6, decimal_places=5)
+    class_effect = models.DecimalField(max_digits=6, decimal_places=5)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["synthetic_run", "student"],
+                name="uniq_synthetic_truth_run_student",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["synthetic_run", "class_group"]),
+        ]
+        ordering = ["synthetic_run_id", "class_group_id", "student_id"]
+
+    def clean(self) -> None:
+        errors = {}
+        if self.synthetic_run_id:
+            school_id = self.synthetic_run.school_id
+            if self.student_id and self.student.school_id != school_id:
+                errors["student"] = "隐藏真值学生与合成批次学校不一致。"
+            if self.class_group_id and self.class_group.school_id != school_id:
+                errors["class_group"] = "隐藏真值班级与合成批次学校不一致。"
+        if self.student_id and self.class_group_id:
+            try:
+                profile = self.student.student_profile
+            except ObjectDoesNotExist:
+                errors["student"] = "隐藏真值学生缺少学生档案。"
+            else:
+                if profile.class_group_id != self.class_group_id:
+                    errors["class_group"] = "隐藏真值班级与学生档案不一致。"
+        for field_name in (
+            "prior_mastery",
+            "engagement",
+            "self_regulation",
+            "response_speed",
+        ):
+            value = getattr(self, field_name)
+            if value < 0 or value > 1:
+                errors[field_name] = "潜变量必须位于 0 到 1 之间。"
+        if self.growth_rate < Decimal("-0.05000") or self.growth_rate > Decimal(
+            "0.10000"
+        ):
+            errors["growth_rate"] = "成长率超出合成模型允许范围。"
+        if self.class_effect < Decimal("-0.25000") or self.class_effect > Decimal(
+            "0.25000"
+        ):
+            errors["class_effect"] = "班级效应超出合成模型允许范围。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("合成学生隐藏真值不可原地修改。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.synthetic_run_id}:{self.student_id}"
+
+
 class EventIngestionDailyCounter(models.Model):
     school = models.ForeignKey(
         "school.School",
@@ -1349,6 +1519,13 @@ class EventIngestionDailyCounter(models.Model):
     )
     counter_date = models.DateField()
     source = models.CharField(max_length=64)
+    synthetic_run = models.ForeignKey(
+        SyntheticDatasetRun,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="ingestion_daily_counters",
+    )
     accepted_count = models.PositiveBigIntegerField(default=0)
     duplicate_count = models.PositiveBigIntegerField(default=0)
     rejected_count = models.PositiveBigIntegerField(default=0)
@@ -1362,8 +1539,14 @@ class EventIngestionDailyCounter(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["school", "counter_date", "source"],
-                name="uniq_event_ingestion_counter_school_date_source",
-            )
+                condition=models.Q(synthetic_run__isnull=True),
+                name="uniq_operational_ingest_counter_day_source",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "counter_date", "source", "synthetic_run"],
+                condition=models.Q(synthetic_run__isnull=False),
+                name="uniq_synthetic_ingest_counter_day_source",
+            ),
         ]
         indexes = [
             models.Index(fields=["school", "counter_date"]),
@@ -1399,6 +1582,13 @@ class AnalyticsPipelineRun(models.Model):
     school = models.ForeignKey(
         "school.School",
         on_delete=models.PROTECT,
+        related_name="analytics_pipeline_runs",
+    )
+    synthetic_run = models.ForeignKey(
+        SyntheticDatasetRun,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="analytics_pipeline_runs",
     )
     pipeline_type = models.CharField(
@@ -1448,8 +1638,12 @@ class AnalyticsPipelineRun(models.Model):
         ordering = ["-created_at", "-id"]
 
     def clean(self) -> None:
+        if self.synthetic_run_id and self.synthetic_run.school_id != self.school_id:
+            raise ValidationError({"synthetic_run": "合成批次与分析流水线学校不一致。"})
         if self.window_end <= self.window_start:
-            raise ValidationError({"window_end": "流水线窗口结束时间必须晚于开始时间。"})
+            raise ValidationError(
+                {"window_end": "流水线窗口结束时间必须晚于开始时间。"}
+            )
         if self.retry_of_id:
             if self.retry_of.school_id != self.school_id:
                 raise ValidationError({"retry_of": "重试任务必须属于同一学校。"})
@@ -1520,6 +1714,13 @@ class DataQualityReport(models.Model):
         on_delete=models.PROTECT,
         related_name="quality_report",
     )
+    synthetic_run = models.ForeignKey(
+        SyntheticDatasetRun,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="data_quality_reports",
+    )
     window_start = models.DateTimeField()
     window_end = models.DateTimeField()
     methodology_version = models.CharField(max_length=32)
@@ -1534,13 +1735,13 @@ class DataQualityReport(models.Model):
     duplicate_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
     invalid_event_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
     late_event_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
-    semantic_missing_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
+    semantic_missing_rate = models.DecimalField(
+        max_digits=7, decimal_places=6, default=0
+    )
     opportunity_coverage_rate = models.DecimalField(
         max_digits=7, decimal_places=6, default=0
     )
-    client_offline_rate = models.DecimalField(
-        max_digits=7, decimal_places=6, default=0
-    )
+    client_offline_rate = models.DecimalField(max_digits=7, decimal_places=6, default=0)
     v1_v2_difference_rate = models.DecimalField(
         max_digits=7, decimal_places=6, default=0
     )
@@ -1567,6 +1768,8 @@ class DataQualityReport(models.Model):
                 or self.pipeline_run.window_end != self.window_end
             ):
                 errors["pipeline_run"] = "质量报告与流水线时间窗口不一致。"
+            if self.pipeline_run.synthetic_run_id != self.synthetic_run_id:
+                errors["synthetic_run"] = "质量报告与流水线合成范围不一致。"
         if self.window_end <= self.window_start:
             errors["window_end"] = "质量窗口结束时间必须晚于开始时间。"
         if not isinstance(self.thresholds, dict) or not isinstance(self.counts, dict):

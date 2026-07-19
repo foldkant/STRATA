@@ -13,7 +13,10 @@ class School(models.Model):
     contact_name = models.CharField(max_length=64, blank=True)
     contact_phone = models.CharField(max_length=32, blank=True)
     address = models.CharField(max_length=255, blank=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    is_synthetic = models.BooleanField(default=False, db_index=True)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ACTIVE
+    )
     note = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -35,7 +38,9 @@ class ClassGroup(models.Model):
     name = models.CharField(max_length=64)
     grade = models.CharField(max_length=32, blank=True)
     entry_year = models.PositiveIntegerField(null=True, blank=True)
-    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ACTIVE
+    )
     graduated_at = models.DateTimeField(null=True, blank=True)
     graduated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -54,7 +59,9 @@ class ClassGroup(models.Model):
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["school", "name"], name="uniq_class_name_per_school"),
+            models.UniqueConstraint(
+                fields=["school", "name"], name="uniq_class_name_per_school"
+            ),
         ]
         ordering = ["school_id", "grade", "name"]
 
@@ -75,7 +82,11 @@ class StudentProfile(models.Model):
         PRETEST_COMPLETED = "pretest_completed", "已完成前测"
         ACTIVE = "active", "已进入平台"
 
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="student_profile")
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="student_profile",
+    )
     class_group = models.ForeignKey(
         ClassGroup,
         on_delete=models.PROTECT,
@@ -84,7 +95,9 @@ class StudentProfile(models.Model):
         blank=True,
     )
     student_no = models.CharField(max_length=32, blank=True)
-    current_layer = models.CharField(max_length=1, choices=Layer.choices, null=True, blank=True)
+    current_layer = models.CharField(
+        max_length=1, choices=Layer.choices, null=True, blank=True
+    )
     current_group_no = models.PositiveIntegerField(null=True, blank=True)
     score = models.FloatField(default=0)
     is_first_use = models.BooleanField(default=True)
@@ -113,8 +126,12 @@ class StudentProfile(models.Model):
 
 
 class TeachingAssignment(models.Model):
-    school = models.ForeignKey(School, on_delete=models.CASCADE, related_name="teaching_assignments")
-    class_group = models.ForeignKey(ClassGroup, on_delete=models.PROTECT, related_name="teaching_assignments")
+    school = models.ForeignKey(
+        School, on_delete=models.CASCADE, related_name="teaching_assignments"
+    )
+    class_group = models.ForeignKey(
+        ClassGroup, on_delete=models.PROTECT, related_name="teaching_assignments"
+    )
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

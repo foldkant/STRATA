@@ -92,10 +92,12 @@ def create_quality_pipeline_run(
     window_end,
     trigger: str,
     retry_of: AnalyticsPipelineRun | None = None,
+    synthetic_run=None,
 ) -> AnalyticsPipelineRun:
     attempt_no = retry_of.attempt_no + 1 if retry_of else 1
     run = AnalyticsPipelineRun(
         school=school,
+        synthetic_run=synthetic_run,
         pipeline_type=AnalyticsPipelineRun.PipelineType.DATA_QUALITY,
         trigger=trigger,
         status=AnalyticsPipelineRun.Status.PENDING,
@@ -143,12 +145,18 @@ def _task(run: AnalyticsPipelineRun, task_name: str, operation):
     return result
 
 
-def collect_event_quality_metrics(*, school, window_start, window_end) -> dict:
+def collect_event_quality_metrics(
+    *, school, window_start, window_end, synthetic_run=None
+) -> dict:
     events = LearningEventV2.objects.filter(
         school=school,
         server_received_at__gte=window_start,
         server_received_at__lt=window_end,
     )
+    if synthetic_run is None:
+        events = events.filter(synthetic_run__isnull=True)
+    else:
+        events = events.filter(synthetic_run=synthetic_run)
     operational_events = events.exclude(source="migration")
     event_count = events.count()
     operational_event_count = operational_events.count()
@@ -160,11 +168,16 @@ def collect_event_quality_metrics(*, school, window_start, window_end) -> dict:
 
     local_start = timezone.localtime(window_start).date()
     local_end = timezone.localtime(window_end - timedelta(microseconds=1)).date()
-    counter_totals = EventIngestionDailyCounter.objects.filter(
+    counters = EventIngestionDailyCounter.objects.filter(
         school=school,
         counter_date__gte=local_start,
         counter_date__lte=local_end,
-    ).aggregate(
+    )
+    if synthetic_run is None:
+        counters = counters.filter(synthetic_run__isnull=True)
+    else:
+        counters = counters.filter(synthetic_run=synthetic_run)
+    counter_totals = counters.aggregate(
         accepted=Sum("accepted_count"),
         duplicate=Sum("duplicate_count"),
         rejected=Sum("rejected_count"),
@@ -182,7 +195,13 @@ def collect_event_quality_metrics(*, school, window_start, window_end) -> dict:
     opportunity_expected_count = 0
     opportunity_linked_count = 0
     student_web_count = 0
-    for quality_errors, event_name, opportunity_id, source, requires_opportunity in events.values_list(
+    for (
+        quality_errors,
+        event_name,
+        opportunity_id,
+        source,
+        requires_opportunity,
+    ) in events.values_list(
         "quality_errors",
         "event_name",
         "opportunity_id",
@@ -226,8 +245,12 @@ def collect_event_quality_metrics(*, school, window_start, window_end) -> dict:
     }
 
 
-def collect_reconciliation_metrics(*, school) -> dict:
-    return reconcile_v1_v2_events(school=school)
+def collect_reconciliation_metrics(*, school, synthetic_run=None) -> dict:
+    return reconcile_v1_v2_events(
+        school=school,
+        synthetic_run=synthetic_run,
+        exclude_synthetic=synthetic_run is None,
+    )
 
 
 def _metric_issue(metric: str, value: Decimal) -> dict | None:
@@ -286,9 +309,7 @@ def publish_quality_report(
         "semantic_missing_rate": _ratio(
             event_metrics["legacy_unmapped_count"], event_count
         ),
-        "opportunity_coverage_rate": _ratio(
-            linked_count, required_count, empty=1
-        ),
+        "opportunity_coverage_rate": _ratio(linked_count, required_count, empty=1),
         "client_offline_rate": _ratio(
             event_metrics["explicit_offline_count"], student_web_count
         ),
@@ -305,9 +326,10 @@ def publish_quality_report(
                 "threshold": 1,
             }
         )
-    if not event_metrics["telemetry_complete"] and event_metrics[
-        "operational_event_count"
-    ]:
+    if (
+        not event_metrics["telemetry_complete"]
+        and event_metrics["operational_event_count"]
+    ):
         issues.append(
             {
                 "code": "ingestion_telemetry_incomplete",
@@ -332,12 +354,18 @@ def publish_quality_report(
         "event_metrics": event_metrics,
         "reconciliation": reconciliation,
         "methodology_version": METHODOLOGY_VERSION,
+        "synthetic_run_id": (
+            str(pipeline_run.synthetic_run.run_id)
+            if pipeline_run.synthetic_run_id
+            else None
+        ),
     }
     source_fingerprint = hashlib.sha256(
         json.dumps(source_values, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return DataQualityReport.objects.create(
         school=pipeline_run.school,
+        synthetic_run=pipeline_run.synthetic_run,
         pipeline_run=pipeline_run,
         window_start=pipeline_run.window_start,
         window_end=pipeline_run.window_end,
@@ -377,9 +405,7 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
         run.started_at = timezone.now()
         run.error_code = ""
         run.error_message = ""
-        run.save(
-            update_fields=["status", "started_at", "error_code", "error_message"]
-        )
+        run.save(update_fields=["status", "started_at", "error_code", "error_message"])
     try:
         event_metrics = _task(
             run,
@@ -388,12 +414,16 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
                 school=run.school,
                 window_start=run.window_start,
                 window_end=run.window_end,
+                synthetic_run=run.synthetic_run,
             ),
         )
         reconciliation = _task(
             run,
             "reconcile_v1_v2",
-            lambda: collect_reconciliation_metrics(school=run.school),
+            lambda: collect_reconciliation_metrics(
+                school=run.school,
+                synthetic_run=run.synthetic_run,
+            ),
         )
 
         def publish_and_finalize():
@@ -440,15 +470,25 @@ def execute_quality_pipeline(pipeline_run: AnalyticsPipelineRun) -> DataQualityR
     return report
 
 
-def latest_quality_report(*, school, as_of=None):
+def latest_quality_report(*, school, as_of=None, synthetic_run=None):
     query = DataQualityReport.objects.filter(school=school)
+    if synthetic_run is None:
+        query = query.filter(synthetic_run__isnull=True)
+    else:
+        query = query.filter(synthetic_run=synthetic_run)
     if as_of is not None:
         query = query.filter(window_end__lte=as_of)
     return query.select_related("pipeline_run").first()
 
 
-def require_quality_gate(*, school, as_of=None) -> DataQualityReport:
-    report = latest_quality_report(school=school, as_of=as_of)
+def require_quality_gate(
+    *, school, as_of=None, synthetic_run=None
+) -> DataQualityReport:
+    report = latest_quality_report(
+        school=school,
+        as_of=as_of,
+        synthetic_run=synthetic_run,
+    )
     if report is None:
         raise QualityGateError("quality_report_missing", "本校尚无数据质量报告。")
     if not report.gate_passed:

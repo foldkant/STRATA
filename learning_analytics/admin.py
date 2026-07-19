@@ -14,6 +14,7 @@ from .models import (
     LearningOpportunityTransitionFact,
     ParticipationPointLedger,
     SensitiveInferenceAccessLog,
+    SyntheticDatasetRun,
 )
 
 
@@ -313,6 +314,7 @@ class ReadOnlyAnalyticsAdmin(admin.ModelAdmin):
 class EventIngestionDailyCounterAdmin(ReadOnlyAnalyticsAdmin):
     list_display = (
         "school",
+        "synthetic_run",
         "counter_date",
         "source",
         "accepted_count",
@@ -320,7 +322,7 @@ class EventIngestionDailyCounterAdmin(ReadOnlyAnalyticsAdmin):
         "rejected_count",
         "late_count",
     )
-    list_filter = ("source", "counter_date", "school")
+    list_filter = ("source", "counter_date", "school", "synthetic_run")
     readonly_fields = tuple(
         field.name for field in EventIngestionDailyCounter._meta.fields
     )
@@ -331,13 +333,14 @@ class AnalyticsPipelineRunAdmin(ReadOnlyAnalyticsAdmin):
     list_display = (
         "run_id",
         "school",
+        "synthetic_run",
         "pipeline_type",
         "trigger",
         "status",
         "attempt_no",
         "created_at",
     )
-    list_filter = ("pipeline_type", "trigger", "status", "school")
+    list_filter = ("pipeline_type", "trigger", "status", "school", "synthetic_run")
     readonly_fields = tuple(field.name for field in AnalyticsPipelineRun._meta.fields)
 
 
@@ -360,10 +363,28 @@ class DataQualityReportAdmin(ReadOnlyAnalyticsAdmin):
     list_display = (
         "report_id",
         "school",
+        "synthetic_run",
         "status",
         "gate_passed",
         "event_count",
         "window_end",
     )
-    list_filter = ("status", "gate_passed", "school")
+    list_filter = ("status", "gate_passed", "school", "synthetic_run")
     readonly_fields = tuple(field.name for field in DataQualityReport._meta.fields)
+
+
+@admin.register(SyntheticDatasetRun)
+class SyntheticDatasetRunAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "run_id",
+        "school",
+        "mode",
+        "generator_version",
+        "seed",
+        "status",
+        "window_start",
+        "window_end",
+    )
+    list_filter = ("mode", "status", "generator_version", "school")
+    search_fields = ("run_id", "dataset_key", "school__code", "school__name")
+    readonly_fields = tuple(field.name for field in SyntheticDatasetRun._meta.fields)

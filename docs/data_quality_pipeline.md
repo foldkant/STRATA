@@ -4,6 +4,10 @@
 > 更新日期：2026-07-19  
 > 状态：`DATA-03A/B` 工程实现完成；开发校当前数据闸门为红色，M2 尚未进入。
 
+补充：`SIM-01` 合成研究学校可运行独立质量报告并用于 M2/M3 工程开发，但不进入夜间正式学校调度，也不能改变本节所述真实学校闸门。详见[合成数据研究轨道](synthetic_data_research_track.md)。
+
+校内测试叠加使用相同学校但绑定独立 `synthetic_run`。正式质量 API、XLSX、手动任务、夜间任务和 `require_quality_gate()` 只读取 `synthetic_run IS NULL`；批次质量报告只读取该批次事件、摄取计数和 V1/V2 对账，不允许相互稀释。
+
 ## 1. 目标与边界
 
 数据质量层回答“当前学校的事件事实是否足以进入后续测量、特征和模型流程”，不评价学生能力。质量问题只影响分析资格、置信度和流水线状态，禁止转化为学生扣分、素养分或分层标签。
@@ -71,8 +75,8 @@ learning_analytics.tasks.run_nightly_data_quality
 
 ## 7. 验收证据
 
-- SQLite：全量 101 项测试通过。
-- PostgreSQL 17.10：迁移 `0009` 和全量 101 项测试通过。
+- SQLite：全量 104 项测试通过。
+- PostgreSQL 17.10：迁移 `0011` 和全量 104 项测试通过。
 - Redis/Memurai：`56379` 实例协议和任务队列验证通过。
 - 真实 Celery：三阶段任务成功写入 PostgreSQL；红色报告正确产生 `blocked`。
 - 真实重试：失败运行保留 `IntegrityError`，60 秒后生成 `attempt_no=2` 的独立 retry 运行并完成三阶段任务。

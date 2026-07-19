@@ -308,4 +308,14 @@
 
 质量报告不可原地修改或直接删除；重新检查必须产生新运行和新报告。质量数据只控制后续分析资格，禁止写入学生能力特征、核心素养得分、积分或奖章。
 
+## 合成数据研究轨道
+
+- `School.is_synthetic`：区分正式运营学校与合成研究学校，默认 `false`。
+- `SyntheticDatasetRun`：保存 `isolated_school/school_overlay` 模式、生成器版本、数据集指纹、随机种子、窗口、配置、计数、状态、清理摘要和清单 SHA-256。
+- `SyntheticStudentTruth`：保存模拟生成所需的连续隐藏潜变量；不进入正式特征、API 或学生档案。
+- `LearningEventV2.synthetic_run`：模拟事件到生成批次的不可变来源关联。
+- `AnalyticsPipelineRun.synthetic_run`、`DataQualityReport.synthetic_run`、`EventIngestionDailyCounter.synthetic_run`：隔离正式质量口径和指定合成批次口径。
+
+正式夜间质量任务排除 `is_synthetic=true` 的独立学校；正式学校质量报告始终排除已关联 `synthetic_run` 的叠加事件和计数。合成事件仍通过正式双写、机会和评分服务生成，以验证生产契约，详细边界见[合成数据研究轨道](synthetic_data_research_track.md)。
+
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。

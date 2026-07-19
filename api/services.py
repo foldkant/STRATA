@@ -64,7 +64,9 @@ from learning_analytics.services.group_collaboration_events import (
     withdraw_group_collaboration_opportunities,
 )
 from learning_analytics.services.dual_write import EventWriteError
-from learning_analytics.services.operational_events import record_classroom_control_executed
+from learning_analytics.services.operational_events import (
+    record_classroom_control_executed,
+)
 from ops.forms import PASSWORD_PATTERN, _matches
 from ops.forms import (
     PERSON_NAME_PATTERN,
@@ -1917,7 +1919,9 @@ def delete_school(request, school: School) -> None:
 @transaction.atomic
 def bulk_disable_schools(request, data) -> dict:
     ids = _clean_id_list(data)
-    schools = list(School.objects.filter(id__in=ids).order_by("name", "code"))
+    schools = list(
+        School.objects.filter(id__in=ids, is_synthetic=False).order_by("name", "code")
+    )
     _ensure_all_selected({school.id for school in schools}, ids, "学校")
 
     updated = 0
@@ -1938,7 +1942,9 @@ def bulk_disable_schools(request, data) -> dict:
 
 def bulk_delete_schools(request, data) -> dict:
     ids = _clean_id_list(data)
-    schools = list(School.objects.filter(id__in=ids).order_by("name", "code"))
+    schools = list(
+        School.objects.filter(id__in=ids, is_synthetic=False).order_by("name", "code")
+    )
     _ensure_all_selected({school.id for school in schools}, ids, "学校")
 
     active = [school for school in schools if school.status == School.Status.ACTIVE]

@@ -20,6 +20,7 @@ def record_ingestion_outcome(
     quality_errors: list[str] | None = None,
     error_code: str = "",
     event_name: str = "",
+    synthetic_run=None,
 ) -> None:
     if source == "migration":
         return
@@ -31,6 +32,7 @@ def record_ingestion_outcome(
         school=school,
         counter_date=counter_date,
         source=source,
+        synthetic_run=synthetic_run,
     )
     updates = {f"{status}_count": F(f"{status}_count") + 1}
     flags = set(quality_errors or [])

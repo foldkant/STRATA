@@ -19,7 +19,7 @@ STRATA 是面向中学课堂的过程性评价与分层教学平台。系统采�
 - 文档能力：ONLYOFFICE 在线预览与协作，未安装时保留本地预览和下载降级路线。
 - 数据能力：35 个严格事件模式、不可变 `LearningEventV2`、批量幂等接收、统一 V1/V2 事务双写、确定性历史回填、学生级 `LearningOpportunity`、评分成熟版本、课堂积分流水，以及七项数据质量指标和夜间 Celery 闸门。
 
-当前开发校质量报告因历史 `legacy.unmapped` 比例过高为红色，研究级 M2 量规与题目生命周期尚未开始。跨学校数据采集、统一分析、夜间班级模型训练和正式模型发布流程仍在后续开发范围内。
+当前开发校质量报告因历史 `legacy.unmapped` 比例过高为红色。独立 `SIM-01` 合成研究轨道已经完成，可继续开发 M2 量规与题目生命周期的工程契约，但不能替代真实数据验证。跨学校数据采集、统一分析、夜间班级模型训练和正式模型发布流程仍在后续开发范围内。
 
 ## 技术架构
 
@@ -212,6 +212,24 @@ http://127.0.0.1:8010/app/school-admin/data-quality
 ```
 
 质量指标、阈值和 M2 进入条件见 [数据质量流水线与闸门](docs/data_quality_pipeline.md)。
+
+## 合成研究数据
+
+平台无真实纵向样本时，可以在独立模拟学校中生成可复现数据，用于验证 M2/M3 工程，不进入正式运营统计：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py generate_synthetic_learning_data `
+  --school-code SIM-RESEARCH `
+  --seed 20260719 `
+  --classes 4 `
+  --students-per-class 30 `
+  --weeks 8 `
+  --end-date 2026-07-18
+```
+
+先加 `--dry-run` 可只查看规模估算。相同配置重复执行不会重复造数。完整隔离规则和学术使用边界见[合成数据研究轨道](docs/synthetic_data_research_track.md)。
+
+也可以使用 `--mode school_overlay --school-code <现有学校代码> --teacher-username <教师账号>` 在现有学校中生成带 `SIM` 前缀的界面测试数据。完成后使用 `purge_synthetic_learning_data` 并同时提供 `run_id` 和完整 `dataset_key` 整批清理；正式数据质量报告不会读取这些叠加事件。
 
 ## ONLYOFFICE
 

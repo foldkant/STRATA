@@ -101,9 +101,11 @@ def record_learning_event(
     legacy_score=None,
     legacy_metadata: dict | None = None,
     occurred_at=None,
+    received_at=None,
     event_id=None,
     schema_version: str = "1.0",
     source_override: str | None = None,
+    synthetic_run=None,
 ) -> EventWriteResult:
     mode = learning_event_write_mode()
     if mode not in {"dual_required", "v1_only"}:
@@ -112,7 +114,7 @@ def record_learning_event(
         raise EventWriteError("actor_school_required", "事件执行人必须绑定学校。")
 
     occurred_at = occurred_at or timezone.now()
-    received_at = timezone.now()
+    received_at = received_at or timezone.now()
     event_id = uuid.UUID(str(event_id)) if event_id else uuid.uuid4()
     object_id_text = str(object_id or "")
     metadata = dict(legacy_metadata or {})
@@ -156,6 +158,7 @@ def record_learning_event(
             status="accepted",
             received_at=received_at,
             event_name=event_name,
+            synthetic_run=synthetic_run,
         )
         return EventWriteResult(
             legacy_event=legacy_event,
@@ -190,6 +193,7 @@ def record_learning_event(
             event_data=event_data,
             received_at=received_at,
             legacy_event=legacy_event,
+            synthetic_run=synthetic_run,
             trusted_source=source_override,
         )
     except EventIngestionError as exc:
@@ -202,6 +206,7 @@ def record_learning_event(
         received_at=received_at,
         quality_errors=result.get("quality_errors") or [],
         event_name=event_name,
+        synthetic_run=synthetic_run,
     )
 
     analytics_event = LearningEventV2.objects.get(
@@ -283,7 +288,9 @@ def backfill_existing_learning_event(
         "object_version": str(object_version or ""),
         "client_occurred_at": legacy_event.occurred_at,
         "duration_ms": (
-            legacy_event.duration_ms if duration_ms is None else max(int(duration_ms), 0)
+            legacy_event.duration_ms
+            if duration_ms is None
+            else max(int(duration_ms), 0)
         ),
         "payload": normalized_payload,
     }
@@ -519,20 +526,39 @@ def record_classroom_point_adjustment(
     )
 
 
-def reconcile_v1_v2_events(*, school=None, max_examples: int = 50) -> dict:
+def reconcile_v1_v2_events(
+    *,
+    school=None,
+    synthetic_run=None,
+    exclude_synthetic: bool = False,
+    max_examples: int = 50,
+) -> dict:
     legacy = LearningEvent.objects.filter(metadata__analytics_dual_write=True)
     analytics = LearningEventV2.objects.filter(
         legacy_event__metadata__analytics_dual_write=True
     )
-    historical = LearningEventV2.objects.filter(
-        legacy_event__isnull=False
-    ).exclude(legacy_event_id__in=legacy.values_list("id", flat=True))
+    historical = LearningEventV2.objects.filter(legacy_event__isnull=False).exclude(
+        legacy_event_id__in=legacy.values_list("id", flat=True)
+    )
     unlinked_legacy = LearningEvent.objects.filter(analytics_event_v2__isnull=True)
     if school is not None:
         legacy = legacy.filter(actor__school=school)
         analytics = analytics.filter(school=school)
         historical = historical.filter(school=school)
         unlinked_legacy = unlinked_legacy.filter(actor__school=school)
+    if synthetic_run is not None:
+        if school is not None and synthetic_run.school_id != school.id:
+            raise ValueError("Synthetic run does not belong to the requested school.")
+        run_id = str(synthetic_run.run_id)
+        legacy = legacy.filter(metadata__synthetic_run_id=run_id)
+        analytics = analytics.filter(synthetic_run=synthetic_run)
+        historical = historical.filter(synthetic_run=synthetic_run)
+        unlinked_legacy = unlinked_legacy.filter(metadata__synthetic_run_id=run_id)
+    elif exclude_synthetic:
+        legacy = legacy.exclude(metadata__synthetic=True)
+        analytics = analytics.filter(synthetic_run__isnull=True)
+        historical = historical.filter(synthetic_run__isnull=True)
+        unlinked_legacy = unlinked_legacy.exclude(metadata__synthetic=True)
 
     mapped_legacy_ids = analytics.values_list("legacy_event_id", flat=True)
     missing = legacy.exclude(pk__in=mapped_legacy_ids)
