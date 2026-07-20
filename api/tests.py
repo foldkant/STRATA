@@ -22,6 +22,8 @@ from courses.models import (
 )
 from learning.models import (
     AssessmentComparabilityRecord,
+    CommonQuestionSet,
+    KnowledgeComponent,
     LearningEvent,
     QuestionBankItem,
     TestAssessment,
@@ -783,6 +785,84 @@ class AssessmentWorkflowTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(QuestionBankItem.objects.filter(stem="无效 AI 题").exists())
+
+    def test_follow_up_common_test_preserves_anchors_and_knowledge_mappings(self):
+        questions = []
+        for index in range(10):
+            questions.append(
+                QuestionBankItem.objects.create(
+                    school=self.school,
+                    subject=self.subject,
+                    creator=self.teacher,
+                    stem=f"共同测试题 {index + 1}",
+                    question_type=QuestionBankItem.QuestionType.SINGLE,
+                    options=["A", "B", "C"],
+                    answer=["A"],
+                    knowledge_point=f"知识点 {index % 3 + 1}",
+                    default_score=2,
+                    status=QuestionBankItem.Status.ACTIVE,
+                    library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+                )
+            )
+        self.client.force_authenticate(self.school_admin)
+        first = self.client.post(
+            "/api/v1/school-admin/common-question-sets/",
+            {
+                "subject": self.subject.id,
+                "title": "高一共同测试第一版",
+                "grade_scope": "高一",
+                "term": "第一学期",
+                "items": [
+                    {
+                        "question_id": question.id,
+                        "comparison_code": f"IT-G10-C{index + 1:02d}",
+                        "required": True,
+                    }
+                    for index, question in enumerate(questions)
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(first.status_code, 201, first.data)
+        first_row = first.data["data"]
+        self.assertFalse(first_row["readiness"]["ve_collection_ready"])
+        self.assertTrue(first_row["readiness"]["irt_collection_ready"])
+        self.assertEqual(KnowledgeComponent.objects.filter(subject=self.subject).count(), 3)
+
+        second = self.client.post(
+            "/api/v1/school-admin/common-question-sets/",
+            {
+                "subject": self.subject.id,
+                "title": "高一共同测试第二版",
+                "grade_scope": "高一",
+                "term": "第一学期",
+                "previous_version": first_row["id"],
+                "items": [
+                    {
+                        "question_id": item["question_id"],
+                        "comparison_code": item["comparison_code"],
+                        "required": item["required"],
+                        "anchor_source_id": item["id"],
+                    }
+                    for item in first_row["items"]
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(second.status_code, 201, second.data)
+        second_row = second.data["data"]
+        self.assertEqual(second_row["version_no"], 2)
+        self.assertEqual(second_row["previous_version_id"], first_row["id"])
+        self.assertEqual(second_row["measurement_series"], first_row["measurement_series"])
+        self.assertEqual(second_row["readiness"]["anchor_count"], 10)
+        self.assertTrue(second_row["readiness"]["ve_collection_ready"])
+        self.assertTrue(second_row["readiness"]["irt_collection_ready"])
+        self.assertTrue(second_row["readiness"]["bkt_collection_ready"])
+        self.assertTrue(second_row["readiness"]["requires_real_responses"])
+        self.assertEqual(
+            CommonQuestionSet.objects.get(pk=second_row["id"]).previous_version_id,
+            first_row["id"],
+        )
 
     def test_common_and_layered_questions_keep_common_measurement_base(self):
         common_question = QuestionBankItem.objects.create(

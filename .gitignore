@@ -19,6 +19,8 @@ storage/media/
 storage/static/
 storage/mlruns/
 storage/models/
+storage/model_packages/
+storage/keys/
 storage/onlyoffice-test/
 wheelhouse/
 _paper_reading/

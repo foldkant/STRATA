@@ -54,6 +54,8 @@ from .model_models import (  # noqa: F401
     ModelComparisonRun,
     ModelEvaluationResult,
     ModelPrediction,
+    ModelRelease,
+    ModelReleaseAudit,
     NegativeControlResult,
 )
 

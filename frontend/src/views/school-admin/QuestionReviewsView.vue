@@ -40,8 +40,8 @@ const note = ref('')
 const commonSetOpen = ref(false)
 const commonSetSaving = ref(false)
 const commonSets = ref<CommonQuestionSetRow[]>([])
-const commonCandidates = ref<Array<{ question: BankQuestion; selected: boolean; comparison_code: string; required: boolean }>>([])
-const commonSetForm = reactive({ subject: '', title: '', grade_scope: '', term: '' })
+const commonCandidates = ref<Array<{ question: BankQuestion; selected: boolean; comparison_code: string; required: boolean; anchor_source_id: number | null }>>([])
+const commonSetForm = reactive({ subject: '', title: '', grade_scope: '', term: '', previous_version: null as number | null })
 
 const statusTabs: Array<{ value: BankQuestionStatus | ''; label: string }> = [
   { value: 'pending_review', label: '待审核' },
@@ -175,7 +175,8 @@ async function loadCommonCandidates() {
     question,
     selected: false,
     comparison_code: question.comparison_code || '',
-    required: true
+    required: true,
+    anchor_source_id: null
   }))
 }
 
@@ -185,6 +186,7 @@ async function openCommonSetManager() {
   commonSetForm.title = ''
   commonSetForm.grade_scope = ''
   commonSetForm.term = ''
+  commonSetForm.previous_version = null
   try {
     commonSets.value = await getCommonQuestionSets()
     await loadCommonCandidates()
@@ -210,10 +212,12 @@ async function saveCommonSet() {
       title: commonSetForm.title.trim(),
       grade_scope: commonSetForm.grade_scope.trim(),
       term: commonSetForm.term.trim(),
+      previous_version: commonSetForm.previous_version,
       items: selected.map((item) => ({
         question_id: item.question.id,
         comparison_code: item.comparison_code.trim().toUpperCase(),
-        required: item.required
+        required: item.required,
+        anchor_source_id: item.anchor_source_id
       }))
     })
     commonSets.value = await getCommonQuestionSets()
@@ -224,6 +228,25 @@ async function saveCommonSet() {
   } finally {
     commonSetSaving.value = false
   }
+}
+
+async function prepareNextVersion(row: CommonQuestionSetRow) {
+  commonSetForm.subject = String(row.subject.id)
+  commonSetForm.title = `${row.title} 后续版`
+  commonSetForm.grade_scope = row.grade_scope
+  commonSetForm.term = row.term
+  commonSetForm.previous_version = row.id
+  await loadCommonCandidates()
+  const sourceByQuestion = new Map(row.items.map((item) => [item.question_id, item]))
+  for (const candidate of commonCandidates.value) {
+    const sourceItem = sourceByQuestion.get(candidate.question.id)
+    if (!sourceItem) continue
+    candidate.selected = true
+    candidate.comparison_code = sourceItem.comparison_code
+    candidate.required = sourceItem.required
+    candidate.anchor_source_id = sourceItem.id
+  }
+  notice.value = `已载入 v${row.version_no} 的题目。保持内容不变的题目将作为锚题，新题可继续勾选。`
 }
 
 async function archiveSet(row: CommonQuestionSetRow) {
@@ -414,11 +437,17 @@ onMounted(async () => {
               <label><span>年级范围</span><input v-model.trim="commonSetForm.grade_scope" maxlength="32" placeholder="例如 高一" /></label>
               <label><span>学期</span><input v-model.trim="commonSetForm.term" maxlength="32" placeholder="例如 第一学期" /></label>
             </div>
+            <div v-if="commonSetForm.previous_version" class="common-version-note">
+              <strong>正在准备后续版本</strong>
+              <span>锚题必须保持题目内容和比较编号不变；发布后仍需真实作答数据才能进行版本比较。</span>
+              <button type="button" @click="openCommonSetManager">取消继承</button>
+            </div>
             <header class="common-candidate-head"><strong>选择已启用题目</strong><span>{{ commonCandidates.filter((item) => item.selected).length }} / {{ commonCandidates.length }}</span></header>
             <div class="common-candidate-list">
               <article v-for="item in commonCandidates" :key="item.question.id" :class="{ selected: item.selected }">
                 <label class="common-candidate-select"><input v-model="item.selected" type="checkbox" /><span>{{ item.question.stem }}</span></label>
                 <div><input v-model.trim="item.comparison_code" :disabled="!item.selected" maxlength="64" placeholder="比较编号，例如 IT-G10-U1-Q01" /><label><input v-model="item.required" :disabled="!item.selected" type="checkbox" />必备题</label></div>
+                <small v-if="item.anchor_source_id" class="common-anchor-label">与上一版本内容一致 · 锚题</small>
               </article>
               <p v-if="!commonCandidates.length" class="empty">当前学科还没有已启用的共享题目。</p>
             </div>
@@ -428,7 +457,11 @@ onMounted(async () => {
             <article v-for="item in commonSets.filter((row) => !commonSetForm.subject || row.subject.id === Number(commonSetForm.subject))" :key="item.id">
               <div><strong>{{ item.title }}</strong><span>v{{ item.version_no }} · {{ item.question_count }} 题</span></div>
               <small>{{ item.grade_scope || '全部年级' }} · {{ item.term || '未限定学期' }} · {{ item.status_label }}</small>
-              <button v-if="item.status === 'active'" type="button" @click="archiveSet(item)">归档</button>
+              <small>锚题 {{ item.readiness.anchor_count || 0 }} · 知识点 {{ item.readiness.knowledge_mapped_count || 0 }}/{{ item.question_count }}</small>
+              <div class="common-set-row-actions">
+                <button type="button" @click="prepareNextVersion(item)">准备下一版本</button>
+                <button v-if="item.status === 'active'" type="button" @click="archiveSet(item)">归档</button>
+              </div>
             </article>
             <p v-if="!commonSets.length" class="empty">暂无已发布集合。</p>
           </aside>

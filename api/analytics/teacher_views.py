@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from rest_framework.decorators import api_view, permission_classes
@@ -333,6 +334,10 @@ def stratification_suggestions(request):
         )
         .order_by("status", "class_group__name", "student__username", "-created_at")
     )
+    rows = rows.filter(
+        ~Q(rule_version__startswith="m03-")
+        | Q(calibration_run__releases__status="active")
+    ).distinct()
     status_value = str(request.query_params.get("status") or "")
     if status_value:
         rows = rows.filter(status=status_value)

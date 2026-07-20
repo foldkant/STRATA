@@ -407,19 +407,7 @@ onMounted(async () => {
 .suggestion-history-detail dt { color: var(--muted); font-size: 12px; }
 .suggestion-history-detail dd { margin: 5px 0 0; color: var(--ink); line-height: 1.5; }
 
-@media (max-width: 760px) {
-  .learning-summary-heading { align-items: flex-start; }
-  .learning-summary-heading, .learning-summary-toolbar { flex-direction: column; }
-  .learning-summary-heading > button, .learning-summary-toolbar select, .learning-view-tabs { width: 100%; }
-  .learning-summary-heading-actions { width: 100%; }
-  .learning-summary-heading-actions > * { flex: 1; }
-  .learning-view-tabs button { flex: 1; }
-  .learning-window-tabs { overflow-x: auto; }
-  .learning-window-tabs button { flex: 0 0 auto; }
-  .suggestion-list-head { align-items: flex-start; flex-direction: column; }
-  .suggestion-scope-tabs { width: 100%; }
-  .suggestion-scope-tabs button { flex: 1; }
-  .suggestion-pagination { justify-content: space-between; }
+@media (max-width: 1180px) {
   .learning-summary-table,
   .suggestion-table,
   .learning-summary-table tbody,
@@ -483,11 +471,36 @@ onMounted(async () => {
   .learning-summary-table .assessment-row-review,
   .suggestion-table .assessment-row-review {
     width: 100%;
-    min-height: 40px;
+    min-height: 44px;
   }
+}
+
+@media (max-width: 760px) {
+  .learning-summary-heading { align-items: flex-start; }
+  .learning-summary-heading, .learning-summary-toolbar { flex-direction: column; }
+  .learning-summary-heading > button, .learning-summary-toolbar select, .learning-view-tabs { width: 100%; }
+  .learning-summary-heading-actions { width: 100%; }
+  .learning-summary-heading-actions > * { flex: 1; }
+  .learning-view-tabs button { flex: 1; }
+  .learning-window-tabs { overflow-x: auto; }
+  .learning-window-tabs button { flex: 0 0 auto; }
+  .suggestion-list-head { align-items: flex-start; flex-direction: column; }
+  .suggestion-scope-tabs { width: 100%; }
+  .suggestion-scope-tabs button { flex: 1; }
+  .suggestion-pagination { justify-content: space-between; }
   .summary-detail-grid, .summary-evaluation-grid { grid-template-columns: 1fr; }
   .suggestion-history-detail { grid-template-columns: 1fr; }
   .suggestion-history-detail .wide { grid-column: auto; }
   .suggestion-actions { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 820px) {
+  .learning-summary-heading-actions > *,
+  .learning-summary-toolbar select,
+  .learning-view-tabs button,
+  .learning-window-tabs button,
+  .suggestion-scope-tabs button {
+    min-height: 44px;
+  }
 }
 </style>

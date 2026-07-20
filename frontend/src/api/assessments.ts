@@ -298,6 +298,21 @@ export type CommonQuestionSetRow = {
   grade_scope: string
   term: string
   version_no: number
+  measurement_series: string
+  version_purpose: 'baseline' | 'follow_up' | 'parallel'
+  version_purpose_label: string
+  previous_version_id: number | null
+  readiness: {
+    item_count?: number
+    anchor_count?: number
+    anchor_ratio?: number
+    knowledge_mapped_count?: number
+    ve_collection_ready?: boolean
+    irt_collection_ready?: boolean
+    bkt_collection_ready?: boolean
+    requires_real_responses?: boolean
+    blockers?: string[]
+  }
   content_hash: string
   status: string
   status_label: string
@@ -311,6 +326,13 @@ export type CommonQuestionSetRow = {
     comparison_code: string
     required: boolean
     sort_order: number
+    anchor_source_id: number | null
+    knowledge_components: Array<{
+      code: string
+      name: string
+      weight: number
+      is_primary: boolean
+    }>
   }>
   published_at: string | null
   created_at: string
@@ -326,7 +348,13 @@ export function createCommonQuestionSet(payload: {
   title: string
   grade_scope: string
   term: string
-  items: Array<{ question_id: number; comparison_code: string; required: boolean }>
+  previous_version?: number | null
+  items: Array<{
+    question_id: number
+    comparison_code: string
+    required: boolean
+    anchor_source_id?: number | null
+  }>
 }) {
   return apiRequest<CommonQuestionSetRow>('/api/v1/school-admin/common-question-sets/', {
     method: 'POST',

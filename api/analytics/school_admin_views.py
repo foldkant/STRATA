@@ -6,6 +6,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import Count, Prefetch, Q
+from django.http import FileResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework.decorators import api_view, permission_classes
@@ -27,6 +28,8 @@ from learning_analytics.models import (
     ClassCalibrationRun,
     LongitudinalAnalysisRun,
     ModelComparisonRun,
+    ModelRelease,
+    ModelReleaseAudit,
 )
 from learning_analytics.services.feature_registry import (
     sync_feature_and_outcome_definitions,
@@ -41,6 +44,11 @@ from learning_analytics.services.model_comparison import build_model_comparison
 from learning_analytics.services.advanced_models import build_model_02_comparison
 from learning_analytics.services.class_calibration import (
     build_class_calibration_candidate,
+)
+from learning_analytics.services.model_packages import (
+    publish_model_candidate,
+    rollback_model_release,
+    verify_model_release,
 )
 from learning_analytics.services.quality import (
     QUALITY_THRESHOLDS,
@@ -1052,6 +1060,7 @@ def _model_comparison_row(run: ModelComparisonRun, detail=False):
 
 
 def _class_calibration_row(run: ClassCalibrationRun):
+    releases = list(getattr(run, "prefetched_releases", []))
     return {
         "id": run.id,
         "run_id": str(run.run_id),
@@ -1070,8 +1079,54 @@ def _class_calibration_row(run: ClassCalibrationRun):
         "manifest_hash": run.manifest_hash,
         "artifact_hash": run.artifact_hash,
         "suggestion_count": run.suggestion_count,
+        "release": _model_release_row(releases[0]) if releases else None,
         "created_at": run.created_at,
         "finished_at": run.finished_at,
+    }
+
+
+def _model_release_row(release: ModelRelease):
+    return {
+        "id": release.id,
+        "release_id": str(release.release_id),
+        "release_version": release.release_version,
+        "status": release.status,
+        "status_label": release.get_status_display(),
+        "school": {
+            "id": release.school_id,
+            "name": release.school.name,
+            "code": release.school.code,
+        },
+        "subject": {"id": release.subject_id, "name": release.subject.name},
+        "calibration_run_id": release.calibration_run_id,
+        "calibration_run_key": str(release.calibration_run.run_id),
+        "model_key": release.calibration_run.model_key,
+        "is_test_data": release.is_test_data,
+        "previous_release_id": release.previous_release_id,
+        "package_hash": release.package_hash,
+        "signing_key_id": release.signing_key_id,
+        "manifest": release.manifest,
+        "released_by": release.released_by.display_name
+        or release.released_by.username,
+        "released_at": release.released_at,
+        "deactivated_at": release.deactivated_at,
+    }
+
+
+def _model_release_audit_row(record: ModelReleaseAudit):
+    return {
+        "id": record.id,
+        "action": record.action,
+        "action_label": record.get_action_display(),
+        "result": record.result,
+        "result_label": record.get_result_display(),
+        "subject": {"id": record.subject_id, "name": record.subject.name},
+        "calibration_run_id": record.calibration_run_id,
+        "release_id": record.release_id,
+        "actor": record.actor.display_name or record.actor.username,
+        "message": record.message,
+        "details": record.details,
+        "created_at": record.created_at,
     }
 
 
@@ -1087,6 +1142,8 @@ def model_validation(request):
         status=TrainingDatasetVersion.Status.FROZEN,
     )
     calibration_query = ClassCalibrationRun.objects.filter(school=school)
+    release_query = ModelRelease.objects.filter(school=school)
+    audit_query = ModelReleaseAudit.objects.filter(school=school)
     if not include_test_data:
         longitudinal_query = longitudinal_query.filter(
             dataset__synthetic_run__isnull=True
@@ -1097,6 +1154,11 @@ def model_validation(request):
         dataset_query = dataset_query.filter(synthetic_run__isnull=True)
         calibration_query = calibration_query.filter(
             dataset__synthetic_run__isnull=True
+        )
+        release_query = release_query.filter(is_test_data=False)
+        audit_query = audit_query.filter(
+            Q(calibration_run__isnull=True)
+            | Q(calibration_run__dataset__synthetic_run__isnull=True)
         )
     longitudinal_runs = list(
         longitudinal_query
@@ -1118,7 +1180,23 @@ def model_validation(request):
     calibration_runs = list(
         calibration_query.select_related(
             "dataset", "comparison_run", "subject"
+        ).prefetch_related(
+            Prefetch(
+                "releases",
+                queryset=ModelRelease.objects.select_related(
+                    "school", "subject", "calibration_run", "released_by"
+                ),
+                to_attr="prefetched_releases",
+            )
         ).order_by("-created_at")[:20]
+    )
+    releases = list(
+        release_query.select_related(
+            "school", "subject", "calibration_run", "released_by"
+        ).order_by("-released_at")[:50]
+    )
+    release_audits = list(
+        audit_query.select_related("subject", "actor").order_by("-created_at")[:50]
     )
     return ok(
         {
@@ -1131,6 +1209,10 @@ def model_validation(request):
             ],
             "calibration_runs": [
                 _class_calibration_row(item) for item in calibration_runs
+            ],
+            "releases": [_model_release_row(item) for item in releases],
+            "release_audits": [
+                _model_release_audit_row(item) for item in release_audits
             ],
             "test_data_visible": include_test_data,
             "rules": {
@@ -1249,6 +1331,98 @@ def create_class_calibration(request):
         else "班级校准暂未生成建议，请查看阻塞原因。",
         status=201,
     )
+
+
+def _calibration_for_release(request, pk: int):
+    query = ClassCalibrationRun.objects.filter(pk=pk, school=request.user.school)
+    if not _include_test_data(request):
+        query = query.filter(dataset__synthetic_run__isnull=True)
+    return query.select_related(
+        "school", "subject", "dataset", "comparison_run"
+    ).first()
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def publish_class_calibration(request, pk: int):
+    run = _calibration_for_release(request, pk)
+    if run is None:
+        return fail("班级校准候选不存在。", status=404)
+    try:
+        release = publish_model_candidate(calibration_run=run, actor=request.user)
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    except Exception:
+        return fail("模型包生成失败，当前使用版本没有改变。", status=500)
+    release = ModelRelease.objects.select_related(
+        "school", "subject", "calibration_run", "released_by"
+    ).get(pk=release.pk)
+    message = "测试候选已发布，仅用于本地工程验收。" if release.is_test_data else "候选模型已发布。"
+    return ok({"release": _model_release_row(release)}, message, status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def rollback_model_release_view(request, pk: int):
+    query = ModelRelease.objects.filter(pk=pk, school=request.user.school)
+    if not _include_test_data(request):
+        query = query.filter(is_test_data=False)
+    release = query.select_related(
+        "school", "subject", "calibration_run", "released_by"
+    ).first()
+    if release is None:
+        return fail("模型发布版本不存在。", status=404)
+    try:
+        release = rollback_model_release(target=release, actor=request.user)
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    except Exception:
+        return fail("模型回滚失败，当前使用版本没有改变。", status=500)
+    return ok({"release": _model_release_row(release)}, "已回滚到所选模型版本。")
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def verify_model_release_view(request, pk: int):
+    query = ModelRelease.objects.filter(pk=pk, school=request.user.school)
+    if not _include_test_data(request):
+        query = query.filter(is_test_data=False)
+    release = query.select_related(
+        "school", "subject", "calibration_run", "released_by"
+    ).first()
+    if release is None:
+        return fail("模型发布版本不存在。", status=404)
+    try:
+        manifest = verify_model_release(release=release, actor=request.user)
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    return ok(
+        {"release": _model_release_row(release), "manifest": manifest},
+        "模型包签名和文件校验通过。",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsSchoolAdmin])
+def download_model_release_package(request, pk: int):
+    query = ModelRelease.objects.filter(pk=pk, school=request.user.school)
+    if not _include_test_data(request):
+        query = query.filter(is_test_data=False)
+    release = query.select_related("calibration_run").first()
+    if release is None:
+        return fail("模型发布版本不存在。", status=404)
+    try:
+        verify_model_release(release=release)
+        package = open(release.package_path, "rb")
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    except OSError:
+        return fail("模型包文件无法读取。", status=409)
+    filename = (
+        f"{request.user.school.code}-{release.subject.code}-model-v"
+        f"{release.release_version}.zip"
+    )
+    return FileResponse(package, as_attachment=True, filename=filename)
 
 
 @api_view(["GET"])

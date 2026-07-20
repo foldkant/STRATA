@@ -1642,3 +1642,29 @@ GET|PATCH|DELETE /api/v1/teacher/evaluations/lesson-steps/{step_id}/binding/
 ```
 
 至少启用一种评价方式。绑定一旦在课堂中使用，修改或删除返回 `409`。课堂开启评价后，正式评价事件的 `object_version` 使用 `standard:{id}:v{version_no}:{hash}`，并与本次课堂冻结快照及学生作答/作品证据保持一致。没有课时绑定的历史课程评价继续使用原课程评价版本，不自动视为正式评价标准证据。
+
+## 学校管理员分析与模型发布
+
+```text
+GET  /api/v1/school-admin/analytics/models/?include_test_data=1
+POST /api/v1/school-admin/analytics/models/class-calibration/{id}/publish/?include_test_data=1
+POST /api/v1/school-admin/analytics/models/releases/{id}/verify/?include_test_data=1
+POST /api/v1/school-admin/analytics/models/releases/{id}/rollback/?include_test_data=1
+GET  /api/v1/school-admin/analytics/models/releases/{id}/package/?include_test_data=1
+GET  /api/v1/school-admin/analytics/models/{id}/export/?include_test_data=1
+```
+
+发布接口只接受当前学校、当前学科、相同测试标记且状态为 `candidate` 的班级校准运行。发布前后端均检查比较状态、阻塞清单、教师确认规则、模型文件路径和 SHA-256。成功返回 `release`；失败返回 `400/409`，当前 `active` 版本保持不变。
+
+`verify` 返回签名和文件校验结果；`rollback` 只允许回到同学校、同学科、同测试标记的历史版本，并在切换前重新验签。模型下载返回离线 ZIP，不返回学生逐行预测。每次发布、校验和回滚都产生不可修改 `ModelReleaseAudit`。
+
+## 共同测试版本
+
+```text
+GET  /api/v1/school-admin/common-question-sets/
+POST /api/v1/school-admin/common-question-sets/
+GET  /api/v1/school-admin/common-question-sets/export/
+POST /api/v1/school-admin/common-question-sets/{id}/archive/
+```
+
+后续版本请求可提交 `previous_version` 和项目列表中的 `anchor_source_id`。服务端检查题目版本属于本校、比较编号唯一、锚题来源属于上一版本且题目内容未改变；不满足时拒绝发布。返回的 `readiness` 只表示锚题、知识点和采集准备状态，不代表 V-E、IRT 或 BKT 已经有效。

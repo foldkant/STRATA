@@ -296,6 +296,8 @@ export type ModelValidation = {
   longitudinal_runs: LongitudinalRun[]
   comparison_runs: ModelComparisonRun[]
   calibration_runs: ClassCalibrationRun[]
+  releases: ModelRelease[]
+  release_audits: ModelReleaseAudit[]
   test_data_visible: boolean
   rules: {
     model_comparison_is_shadow_only: boolean
@@ -323,8 +325,45 @@ export type ClassCalibrationRun = {
   manifest_hash: string
   artifact_hash: string
   suggestion_count: number
+  release: ModelRelease | null
   created_at: string
   finished_at: string | null
+}
+
+export type ModelRelease = {
+  id: number
+  release_id: string
+  release_version: number
+  status: 'active' | 'superseded' | 'rolled_back'
+  status_label: string
+  school: { id: number; name: string; code: string }
+  subject: { id: number; name: string }
+  calibration_run_id: number
+  calibration_run_key: string
+  model_key: string
+  is_test_data: boolean
+  previous_release_id: number | null
+  package_hash: string
+  signing_key_id: string
+  manifest: Record<string, unknown>
+  released_by: string
+  released_at: string
+  deactivated_at: string | null
+}
+
+export type ModelReleaseAudit = {
+  id: number
+  action: 'publish' | 'rollback' | 'verify'
+  action_label: string
+  result: 'succeeded' | 'failed'
+  result_label: string
+  subject: { id: number; name: string }
+  calibration_run_id: number | null
+  release_id: number | null
+  actor: string
+  message: string
+  details: Record<string, unknown>
+  created_at: string
 }
 
 export function getAnalysisPreparation() {
@@ -387,4 +426,29 @@ export function createClassCalibration(payload: { dataset_id: number }) {
     '/api/v1/school-admin/analytics/models/class-calibration/?include_test_data=1',
     { method: 'POST', body: toJsonBody(payload) }
   )
+}
+
+export function publishClassCalibration(id: number) {
+  return apiRequest<{ release: ModelRelease }>(
+    `/api/v1/school-admin/analytics/models/class-calibration/${id}/publish/?include_test_data=1`,
+    { method: 'POST', body: toJsonBody({}) }
+  )
+}
+
+export function rollbackModelRelease(id: number) {
+  return apiRequest<{ release: ModelRelease }>(
+    `/api/v1/school-admin/analytics/models/releases/${id}/rollback/?include_test_data=1`,
+    { method: 'POST', body: toJsonBody({}) }
+  )
+}
+
+export function verifyModelRelease(id: number) {
+  return apiRequest<{ release: ModelRelease; manifest: Record<string, unknown> }>(
+    `/api/v1/school-admin/analytics/models/releases/${id}/verify/?include_test_data=1`,
+    { method: 'POST', body: toJsonBody({}) }
+  )
+}
+
+export function modelReleasePackageUrl(id: number) {
+  return `/api/v1/school-admin/analytics/models/releases/${id}/package/?include_test_data=1`
 }

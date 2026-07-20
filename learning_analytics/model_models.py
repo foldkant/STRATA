@@ -492,3 +492,174 @@ class ClassCalibrationRun(models.Model):
         if self.status != self.Status.BUILDING:
             raise ValidationError("已结束的班级校准不可直接删除。")
         return super().delete(*args, **kwargs)
+
+
+class ModelRelease(models.Model):
+    """A signed, school-scoped release of one immutable calibration run."""
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "当前使用"
+        SUPERSEDED = "superseded", "已被新版本替代"
+        ROLLED_BACK = "rolled_back", "已回退"
+
+    release_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    release_key = models.CharField(max_length=96, unique=True)
+    school = models.ForeignKey(
+        "school.School", on_delete=models.PROTECT, related_name="model_releases"
+    )
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="model_releases"
+    )
+    calibration_run = models.ForeignKey(
+        ClassCalibrationRun,
+        on_delete=models.PROTECT,
+        related_name="releases",
+    )
+    release_version = models.PositiveIntegerField()
+    status = models.CharField(
+        max_length=16, choices=Status.choices, default=Status.ACTIVE
+    )
+    is_test_data = models.BooleanField(default=False)
+    previous_release = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="replacement_releases",
+    )
+    package_path = models.CharField(max_length=500)
+    package_hash = models.CharField(max_length=64)
+    package_signature = models.TextField()
+    signing_key_id = models.CharField(max_length=64)
+    manifest = models.JSONField(default=dict)
+    released_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="published_model_releases",
+    )
+    released_at = models.DateTimeField(auto_now_add=True)
+    deactivated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "subject", "is_test_data", "release_version"],
+                name="uniq_model_release_scope_version",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "subject", "is_test_data"],
+                condition=models.Q(status="active"),
+                name="uniq_active_model_release_scope",
+            ),
+            models.UniqueConstraint(
+                fields=["calibration_run"],
+                name="uniq_model_release_calibration_run",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["school", "subject", "is_test_data", "status"]),
+            models.Index(fields=["released_at"]),
+        ]
+        ordering = ["-released_at", "-id"]
+
+    def clean(self):
+        errors = {}
+        if self.calibration_run_id:
+            if self.calibration_run.school_id != self.school_id:
+                errors["school"] = "发布学校与班级校准运行不一致。"
+            if self.calibration_run.subject_id != self.subject_id:
+                errors["subject"] = "发布学科与班级校准运行不一致。"
+            if self.calibration_run.status != ClassCalibrationRun.Status.CANDIDATE:
+                errors["calibration_run"] = "只能发布已通过基础检查的候选模型。"
+            expected_test_data = bool(self.calibration_run.dataset.synthetic_run_id)
+            if self.is_test_data != expected_test_data:
+                errors["is_test_data"] = "发布记录的测试数据标记与数据版本不一致。"
+        if self.previous_release_id:
+            previous = self.previous_release
+            if (
+                previous.school_id != self.school_id
+                or previous.subject_id != self.subject_id
+                or previous.is_test_data != self.is_test_data
+            ):
+                errors["previous_release"] = "上一版本必须属于相同学校、学科和数据范围。"
+        for field_name in ("package_hash", "signing_key_id"):
+            value = getattr(self, field_name)
+            if not HASH_PATTERN.fullmatch(value or ""):
+                errors[field_name] = "摘要必须是 64 位小写 SHA-256。"
+        if not isinstance(self.manifest, dict):
+            errors["manifest"] = "发布清单必须是 JSON 对象。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("模型发布记录不可删除。")
+
+
+class ModelReleaseAudit(models.Model):
+    class Action(models.TextChoices):
+        PUBLISH = "publish", "发布"
+        ROLLBACK = "rollback", "回滚"
+        VERIFY = "verify", "校验"
+
+    class Result(models.TextChoices):
+        SUCCEEDED = "succeeded", "成功"
+        FAILED = "failed", "失败"
+
+    school = models.ForeignKey(
+        "school.School", on_delete=models.PROTECT, related_name="model_release_audits"
+    )
+    subject = models.ForeignKey(
+        "courses.Subject", on_delete=models.PROTECT, related_name="model_release_audits"
+    )
+    calibration_run = models.ForeignKey(
+        ClassCalibrationRun,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="release_audits",
+    )
+    release = models.ForeignKey(
+        ModelRelease,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="audit_records",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="model_release_actions",
+    )
+    action = models.CharField(max_length=16, choices=Action.choices)
+    result = models.CharField(max_length=16, choices=Result.choices)
+    message = models.CharField(max_length=500)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["school", "subject", "created_at"]),
+            models.Index(fields=["action", "result", "created_at"]),
+        ]
+        ordering = ["-created_at", "-id"]
+
+    def clean(self):
+        if not isinstance(self.details, dict):
+            raise ValidationError({"details": "审计详情必须是 JSON 对象。"})
+        if self.calibration_run_id and self.calibration_run.school_id != self.school_id:
+            raise ValidationError({"calibration_run": "校准运行不属于当前学校。"})
+        if self.release_id and self.release.school_id != self.school_id:
+            raise ValidationError({"release": "发布记录不属于当前学校。"})
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("模型发布审计不可修改。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("模型发布审计不可删除。")

@@ -30,6 +30,13 @@
 - [学习数据检查](data_quality_pipeline.md)：定义七项检查指标、完整日窗口、重试状态、本校 API、夜间任务和学校管理员页面。
 - [统计验证与模型比较](model_validation_design.md)：定义 LONG-01 重复测量统计、M00-M03 透明基线、V-A 至 V-E 验证折、拒绝预测、负对照和模型卡。
 - [MODEL-02/03 工程验收报告](model02_model03_validation_report.md)：记录两校模拟数据、CatBoost/LightGBM、跨校折、班级校准、XLSX、PostgreSQL、Redis 和 Celery 的实际验收结果及清理命令。
+- [模型发布、校验与回滚](model_release_operations.md)：候选发布、失败保护、Ed25519 离线包、校验、回滚和密钥保管。
+- [共同测试第二版本准备](common_test_v2_preparation.md)：V1/V2 继承、锚题、知识点映射及 V-E、IRT、BKT 的真实数据条件。
+- [正式学校试用方案](school_pilot_protocol.md)：从影子运行到教师审核试用的启动条件、阶段、检查和退出流程。
+- [伦理与隐私检查表](ethics_privacy_checklist.md)：未成年人数据、同意、权限、保留、退出、安全和跨校使用边界。
+- [教师试用培训](teacher_training_guide.md)：课程、评价、共同测试、学习情况和隐性建议的培训与通过标准。
+- [研究预注册模板](research_preregistration_template.md)：正式数据采集前锁定问题、设计、样本、结果、分析和偏离处理。
+- [学习分析页面多分辨率验收](responsive_qa_report.md)：学校管理员和教师分析页四档视口验收记录。
 - [学习事件新旧记录迁移清单](learning_event_write_inventory.md)：盘点测试、课堂、资源、评价、聊天和小组业务的现有写入入口、新版记录映射与兼容写入验收要求。
 - [学生评价、积分与奖章设计](student_evaluation_incentive_design.md)：规定成绩、五星评价标准、核心素养证据、课堂积分/奖章和 AI 内部建议的隔离、可见性与实施顺序。
 - [行为、特征与评价标准五轮科学审查](student_behavior_ai_stratification_five_round_review.md)：五轮文献复审发现、方案修正和仍需实证的风险。
@@ -67,7 +74,7 @@
 
 - 跨学校数据包采集、校验和统一分析。
 - 正式学校试用、真实纵向数据的校准与公平检查、教师工作流评估和效果研究。
-- IRT/BKT、测量版本 V-E 及中心侧签名模型包仍在后续研究阶段。
+- Ed25519 离线签名模型包、校验和旧版本回滚已经完成；跨学校模型导入、IRT/BKT 和真实测量版本 V-E 仍需后续研究与数据。
 - PostgreSQL/Redis 正式安装器、HTTPS、本地证书和自动端口选择。
 - 备份恢复、监控告警、审计导出和学校版本升级工具。
 - 大型前端包的路由级拆包和性能优化。

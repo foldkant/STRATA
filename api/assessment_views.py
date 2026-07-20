@@ -20,7 +20,9 @@ from learning.models import (
     AssessmentComparabilityRecord,
     CommonQuestionSet,
     CommonQuestionSetItem,
+    KnowledgeComponent,
     QuestionBankItem,
+    QuestionVersionKnowledgeComponent,
     TestAssessment,
     TestAssessmentQuestion,
     TestAttempt,
@@ -60,6 +62,8 @@ def _service_error(exc: ServiceError):
 
 
 MIN_QUESTION_STAT_SAMPLE = 30
+MIN_VERSION_ANCHORS = 5
+MIN_IRT_ITEMS = 10
 
 
 def _teacher_class_ids(user) -> list[int]:
@@ -86,6 +90,64 @@ def _course_row(course) -> dict | None:
 
 def _clean_text(value, limit: int) -> str:
     return " ".join(str(value or "").strip().split())[:limit]
+
+
+def _measurement_series_key(*, school, subject, grade_scope: str, term: str) -> str:
+    raw = f"{school.code}|{subject.code}|{grade_scope or 'ALL'}|{term or 'ALL'}"
+    return f"CS-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:24].upper()}"
+
+
+def _ensure_version_knowledge_mapping(*, version, question, actor) -> int:
+    name = _clean_text(question.knowledge_point, 128)
+    if not name:
+        return 0
+    code = f"KC-{hashlib.sha256(f'{question.subject_id}|{name}'.encode('utf-8')).hexdigest()[:12].upper()}"
+    component, _ = KnowledgeComponent.objects.get_or_create(
+        school=question.school,
+        subject=question.subject,
+        name=name,
+        defaults={"code": code},
+    )
+    QuestionVersionKnowledgeComponent.objects.get_or_create(
+        question_version=version,
+        component=component,
+        defaults={"created_by": actor, "weight": 1.0, "is_primary": True},
+    )
+    return 1
+
+
+def _common_set_readiness(*, item_count: int, anchor_count: int, mapped_count: int, previous_id: int | None) -> dict:
+    anchor_ratio = round(anchor_count / item_count, 4) if item_count else 0
+    blockers = []
+    if previous_id:
+        if anchor_count < MIN_VERSION_ANCHORS:
+            blockers.append(f"与上一版本完全一致的共同题少于 {MIN_VERSION_ANCHORS} 道。")
+        if anchor_ratio < 0.3:
+            blockers.append("锚题比例低于 30%。")
+    else:
+        blockers.append("这是首个版本，需要后续版本后才能比较版本变化。")
+    if mapped_count < item_count:
+        blockers.append(f"还有 {item_count - mapped_count} 道题未填写知识点。")
+    if item_count < MIN_IRT_ITEMS:
+        blockers.append(f"题目少于 {MIN_IRT_ITEMS} 道，暂不准备 IRT 参数估计。")
+    return {
+        "schema_version": "1.0",
+        "item_count": item_count,
+        "anchor_count": anchor_count,
+        "anchor_ratio": anchor_ratio,
+        "knowledge_mapped_count": mapped_count,
+        "ve_collection_ready": bool(
+            previous_id
+            and anchor_count >= MIN_VERSION_ANCHORS
+            and anchor_ratio >= 0.3
+        ),
+        "irt_collection_ready": bool(
+            item_count >= MIN_IRT_ITEMS and mapped_count == item_count
+        ),
+        "bkt_collection_ready": bool(item_count > 0 and mapped_count == item_count),
+        "requires_real_responses": True,
+        "blockers": blockers,
+    }
 
 
 def _clean_answer_list(value) -> list[str]:
@@ -1064,6 +1126,11 @@ def _common_set_row(question_set) -> dict:
         "grade_scope": question_set.grade_scope,
         "term": question_set.term,
         "version_no": question_set.version_no,
+        "measurement_series": question_set.measurement_series,
+        "version_purpose": question_set.version_purpose,
+        "version_purpose_label": question_set.get_version_purpose_display(),
+        "previous_version_id": question_set.previous_version_id,
+        "readiness": question_set.readiness,
         "content_hash": question_set.content_hash,
         "status": question_set.status,
         "status_label": question_set.get_status_display(),
@@ -1078,6 +1145,16 @@ def _common_set_row(question_set) -> dict:
                 "comparison_code": item.comparison_code,
                 "required": item.required,
                 "sort_order": item.sort_order,
+                "anchor_source_id": item.anchor_source_id,
+                "knowledge_components": [
+                    {
+                        "code": mapping.component.code,
+                        "name": mapping.component.name,
+                        "weight": mapping.weight,
+                        "is_primary": mapping.is_primary,
+                    }
+                    for mapping in item.question_version.knowledge_mappings.all()
+                ],
             }
             for item in getattr(question_set, "prefetched_items", [])
         ],
@@ -1094,7 +1171,9 @@ def school_admin_common_question_sets(request):
         rows = list(
             CommonQuestionSet.objects.filter(school=request.user.school)
             .select_related("subject")
-            .prefetch_related("items__question_version")
+            .prefetch_related(
+                "items__question_version__knowledge_mappings__component"
+            )
         )
         for row in rows:
             row.prefetched_items = list(row.items.all())
@@ -1108,6 +1187,16 @@ def school_admin_common_question_sets(request):
     title = _clean_text(request.data.get("title"), 128)
     grade_scope = _clean_text(request.data.get("grade_scope"), 32)
     term = _clean_text(request.data.get("term"), 32)
+    previous = None
+    previous_id = request.data.get("previous_version")
+    if previous_id:
+        previous = CommonQuestionSet.objects.filter(
+            pk=previous_id,
+            school=request.user.school,
+            subject=subject,
+        ).first()
+        if previous is None:
+            return fail("上一共同测试版本不存在或学科不一致。", status=400)
     raw_items = request.data.get("items") if isinstance(request.data.get("items"), list) else []
     if len(title) < 2 or not raw_items:
         return fail("请填写集合名称并至少选择一道共同题。", status=400)
@@ -1128,6 +1217,14 @@ def school_admin_common_question_sets(request):
     }
     if len(questions) != len(question_ids):
         return fail("共同题只能选择本学科已启用的共享题目。", status=400)
+    previous_items = {
+        item.id: item
+        for item in (
+            previous.items.select_related("question_version").all()
+            if previous
+            else []
+        )
+    }
     cleaned_items = []
     seen_codes = set()
     for index, raw in enumerate(raw_items, start=1):
@@ -1136,7 +1233,17 @@ def school_admin_common_question_sets(request):
         if question is None or not code or code in seen_codes:
             return fail("每道共同题都需要填写不重复的比较编号。", status=400)
         seen_codes.add(code)
-        cleaned_items.append((question, code, bool(raw.get("required", True))))
+        anchor = None
+        anchor_id = raw.get("anchor_source_id") if isinstance(raw, dict) else None
+        if anchor_id:
+            anchor = previous_items.get(int(anchor_id))
+            if anchor is None:
+                return fail("锚题必须来自所选上一版本。", status=400)
+            if anchor.comparison_code != code:
+                return fail("锚题在两个版本中必须使用相同的比较编号。", status=400)
+            if anchor.question_version.content_hash != question.content_hash:
+                return fail("锚题内容已经改变，请取消锚题标记或恢复原题版本。", status=400)
+        cleaned_items.append((question, code, bool(raw.get("required", True)), anchor))
     with transaction.atomic():
         latest = (
             CommonQuestionSet.objects.select_for_update()
@@ -1157,7 +1264,7 @@ def school_admin_common_question_sets(request):
             status=CommonQuestionSet.Status.ACTIVE,
         ).update(status=CommonQuestionSet.Status.ARCHIVED)
         version_rows = []
-        for question, code, required in cleaned_items:
+        for question, code, required, anchor in cleaned_items:
             question.item_role = QuestionBankItem.ItemRole.COMMON
             question.layer_scope = QuestionBankItem.LayerScope.ALL
             question.comparison_code = code
@@ -1166,16 +1273,15 @@ def school_admin_common_question_sets(request):
                     "item_role", "layer_scope", "comparison_code", "updated_at"
                 ]
             )
-            version_rows.append(
-                (ensure_question_version(question, actor=request.user), code, required)
-            )
+            version = ensure_question_version(question, actor=request.user)
+            version_rows.append((version, question, code, required, anchor))
         hash_payload = [
             {
                 "comparison_code": code,
                 "question_hash": version.content_hash,
                 "required": required,
             }
-            for version, code, required in version_rows
+            for version, _question, code, required, anchor in version_rows
         ]
         content_hash = hashlib.sha256(
             json.dumps(hash_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -1187,6 +1293,22 @@ def school_admin_common_question_sets(request):
             grade_scope=grade_scope,
             term=term,
             version_no=(latest.version_no + 1 if latest else 1),
+            measurement_series=(
+                previous.measurement_series
+                if previous and previous.measurement_series
+                else _measurement_series_key(
+                    school=request.user.school,
+                    subject=subject,
+                    grade_scope=grade_scope,
+                    term=term,
+                )
+            ),
+            version_purpose=(
+                CommonQuestionSet.VersionPurpose.FOLLOW_UP
+                if previous
+                else CommonQuestionSet.VersionPurpose.BASELINE
+            ),
+            previous_version=previous,
             content_hash=content_hash,
             status=CommonQuestionSet.Status.ACTIVE,
             created_by=request.user,
@@ -1198,15 +1320,34 @@ def school_admin_common_question_sets(request):
                 CommonQuestionSetItem(
                     question_set=question_set,
                     question_version=version,
+                    anchor_source=anchor,
                     comparison_code=code,
                     required=required,
                     sort_order=index * 10,
                 )
-                for index, (version, code, required) in enumerate(version_rows, start=1)
+                for index, (version, _question, code, required, anchor) in enumerate(version_rows, start=1)
             ]
         )
+        mapped_count = sum(
+            _ensure_version_knowledge_mapping(
+                version=version,
+                question=question,
+                actor=request.user,
+            )
+            for version, question, _code, _required, _anchor in version_rows
+        )
+        readiness = _common_set_readiness(
+            item_count=len(version_rows),
+            anchor_count=sum(1 for *_rest, anchor in version_rows if anchor),
+            mapped_count=mapped_count,
+            previous_id=previous.id if previous else None,
+        )
+        CommonQuestionSet.objects.filter(pk=question_set.pk).update(readiness=readiness)
+        question_set.readiness = readiness
     question_set.prefetched_items = list(
-        question_set.items.select_related("question_version").all()
+        question_set.items.select_related("question_version").prefetch_related(
+            "question_version__knowledge_mappings__component"
+        ).all()
     )
     return ok(_common_set_row(question_set), "共同题集合已发布。", status=201)
 

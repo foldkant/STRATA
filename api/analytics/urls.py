@@ -155,6 +155,26 @@ urlpatterns = [
         name="school_admin_class_calibration_create",
     ),
     path(
+        "school-admin/analytics/models/class-calibration/<int:pk>/publish/",
+        school_admin_views.publish_class_calibration,
+        name="school_admin_class_calibration_publish",
+    ),
+    path(
+        "school-admin/analytics/models/releases/<int:pk>/rollback/",
+        school_admin_views.rollback_model_release_view,
+        name="school_admin_model_release_rollback",
+    ),
+    path(
+        "school-admin/analytics/models/releases/<int:pk>/verify/",
+        school_admin_views.verify_model_release_view,
+        name="school_admin_model_release_verify",
+    ),
+    path(
+        "school-admin/analytics/models/releases/<int:pk>/package/",
+        school_admin_views.download_model_release_package,
+        name="school_admin_model_release_package",
+    ),
+    path(
         "school-admin/analytics/models/<int:pk>/export/",
         school_admin_views.export_model_validation,
         name="school_admin_model_validation_export",

@@ -9,7 +9,11 @@ import {
   createModelComparison,
   getAnalysisPreparation,
   getModelValidation,
+  modelReleasePackageUrl,
+  publishClassCalibration,
   refreshAnalysisOutcomes,
+  rollbackModelRelease,
+  verifyModelRelease,
   type AnalysisDataset,
   type AnalysisPreparation,
   type ModelValidation
@@ -117,7 +121,15 @@ async function loadData(showLoading = true) {
       getModelValidation()
     ])
     data.value = preparation
-    validation.value = modelValidation
+    validation.value = {
+      ...modelValidation,
+      datasets: modelValidation.datasets || [],
+      longitudinal_runs: modelValidation.longitudinal_runs || [],
+      comparison_runs: modelValidation.comparison_runs || [],
+      calibration_runs: modelValidation.calibration_runs || [],
+      releases: modelValidation.releases || [],
+      release_audits: modelValidation.release_audits || []
+    }
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '分析准备情况加载失败。'
     noticeTone.value = 'error'
@@ -184,6 +196,59 @@ async function runAdvancedValidation(dataset: AnalysisDataset, type: 'advanced' 
     await loadData(false)
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '模型任务生成失败。'
+    noticeTone.value = 'error'
+  } finally {
+    working.value = false
+  }
+}
+
+async function publishCandidate(runId: number) {
+  if (working.value || !window.confirm('确认发布这个候选版本？发布后教师才能看到对应的分层建议。')) return
+  working.value = true
+  notice.value = ''
+  try {
+    const result = await publishClassCalibration(runId)
+    notice.value = result.release.is_test_data
+      ? `测试模型 v${result.release.release_version} 已发布，仅用于本地流程验收。`
+      : `模型 v${result.release.release_version} 已发布。`
+    noticeTone.value = result.release.is_test_data ? 'warning' : 'success'
+    await loadData(false)
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '候选发布失败，当前使用版本没有改变。'
+    noticeTone.value = 'error'
+  } finally {
+    working.value = false
+  }
+}
+
+async function verifyRelease(releaseId: number) {
+  if (working.value) return
+  working.value = true
+  notice.value = ''
+  try {
+    await verifyModelRelease(releaseId)
+    notice.value = '模型包签名和文件校验通过。'
+    noticeTone.value = 'success'
+    await loadData(false)
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '模型包校验失败。'
+    noticeTone.value = 'error'
+  } finally {
+    working.value = false
+  }
+}
+
+async function rollbackRelease(releaseId: number, version: number) {
+  if (working.value || !window.confirm(`确认回滚到 v${version}？回滚前系统会重新校验离线模型包。`)) return
+  working.value = true
+  notice.value = ''
+  try {
+    const result = await rollbackModelRelease(releaseId)
+    notice.value = `已回滚到模型 v${result.release.release_version}。`
+    noticeTone.value = 'success'
+    await loadData(false)
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '模型回滚失败，当前使用版本没有改变。'
     noticeTone.value = 'error'
   } finally {
     working.value = false
@@ -559,11 +624,66 @@ onMounted(loadData)
         </div>
 
         <div v-if="validation?.calibration_runs.length" class="analysis-calibration-results">
-          <header><div><h3>班级校准候选</h3><p>只生成教师审核建议，不改写学生当前层级。</p></div></header>
-          <article v-for="run in validation.calibration_runs" :key="run.id">
-            <div><strong>{{ run.subject.name }} · {{ run.model_key || '暂未选择模型' }}</strong><small>{{ run.calibration_version }} · {{ run.status_label }}</small></div>
-            <div><span>班级参数 {{ Object.keys(run.class_parameters).length }} 组</span><strong>教师候选 {{ run.suggestion_count }} 条</strong></div>
+          <header><div><h3>候选与发布</h3><p>候选通过校验并发布后，教师才能看到对应建议；学生端始终不显示内部层级。</p></div></header>
+          <article v-for="run in validation.calibration_runs" :key="run.id" class="analysis-calibration-row">
+            <div class="analysis-calibration-main">
+              <strong>{{ run.subject.name }} · {{ run.model_key || '暂未选择模型' }}</strong>
+              <small>{{ run.calibration_version }} · {{ run.status_label }}<template v-if="run.release"> · v{{ run.release.release_version }} {{ run.release.status_label }}</template></small>
+            </div>
+            <div class="analysis-calibration-counts">
+              <span>班级参数 {{ Object.keys(run.class_parameters).length }} 组</span>
+              <strong>教师候选 {{ run.suggestion_count }} 条</strong>
+            </div>
+            <div class="analysis-release-actions">
+              <span v-if="run.release?.is_test_data" class="analysis-status analysis-tone-warning">测试版本</span>
+              <button
+                v-if="run.status === 'candidate' && !run.release"
+                class="primary-button compact-action"
+                type="button"
+                :disabled="working"
+                @click="publishCandidate(run.id)"
+              >发布候选</button>
+              <button
+                v-if="run.release"
+                class="secondary-button compact-action"
+                type="button"
+                :disabled="working"
+                @click="verifyRelease(run.release.id)"
+              >校验模型包</button>
+              <a
+                v-if="run.release"
+                class="secondary-button compact-action"
+                :href="modelReleasePackageUrl(run.release.id)"
+              >下载模型包</a>
+            </div>
           </article>
+        </div>
+
+        <div v-if="validation?.releases.length" class="analysis-release-history">
+          <header>
+            <div><h3>发布历史</h3><p>历史版本保留签名包和操作记录；回滚不会重新训练模型。</p></div>
+          </header>
+          <div class="analysis-table-wrap">
+            <table class="analysis-table release-history-table">
+              <thead><tr><th>学科与版本</th><th>状态</th><th>签名</th><th>发布时间</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr v-for="release in validation.releases" :key="release.id">
+                  <td data-label="学科与版本">
+                    <strong>{{ release.subject.name }} · v{{ release.release_version }}</strong>
+                    <small>{{ release.model_key }}<template v-if="release.is_test_data"> · 测试数据</template></small>
+                  </td>
+                  <td data-label="状态"><span class="analysis-status" :class="toneClass(release.status === 'active' ? 'success' : 'info')">{{ release.status_label }}</span></td>
+                  <td data-label="签名"><span :title="release.signing_key_id">Ed25519 · {{ shortHash(release.signing_key_id) }}</span><small :title="release.package_hash">包 {{ shortHash(release.package_hash) }}</small></td>
+                  <td data-label="发布时间"><span>{{ formatDateTime(release.released_at) }}</span><small>{{ release.released_by }}</small></td>
+                  <td data-label="操作" class="analysis-history-actions">
+                    <button class="secondary-button compact-action" type="button" :disabled="working" @click="verifyRelease(release.id)">校验</button>
+                    <button v-if="release.status !== 'active'" class="secondary-button compact-action" type="button" :disabled="working" @click="rollbackRelease(release.id, release.release_version)">回滚</button>
+                    <a class="secondary-button compact-action" :href="modelReleasePackageUrl(release.id)">下载</a>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </template>
@@ -652,3 +772,73 @@ onMounted(loadData)
     </div>
   </AppShell>
 </template>
+
+<style scoped>
+.analysis-calibration-row {
+  grid-template-columns: minmax(190px, 1.2fr) minmax(180px, 0.8fr) minmax(220px, auto);
+  align-items: center;
+}
+
+.analysis-calibration-main,
+.analysis-calibration-counts {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.analysis-calibration-main strong,
+.analysis-calibration-main small,
+.analysis-calibration-counts span {
+  overflow-wrap: anywhere;
+}
+
+.analysis-release-actions,
+.analysis-history-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.analysis-release-history {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+
+.analysis-release-history > header h3,
+.analysis-release-history > header p {
+  margin: 0;
+}
+
+.analysis-release-history > header p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 1024px) {
+  .analysis-calibration-row {
+    grid-template-columns: minmax(0, 1fr) minmax(170px, auto);
+  }
+
+  .analysis-release-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .analysis-calibration-row {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-release-actions,
+  .analysis-history-actions {
+    justify-content: flex-start;
+  }
+}
+</style>

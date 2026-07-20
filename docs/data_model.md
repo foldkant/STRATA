@@ -384,3 +384,26 @@
 实际表名和字段名已通过 `learning_analytics.0013-0015` 迁移到评价命名；迁移 `0018` 新增评价试用记录，迁移 `0019` 新增课时评价绑定和课堂证据链，`courses.0025` 新增暂不评价结构，`learning_analytics.0020` 修复旧事件登记哈希。`courses.0026` 把旧课程评价结构标记为兼容数据，`learning_analytics.0021` 将新课堂完整冻结到标准使用快照并迁移可确认来源的旧提交。已完成记录由 API 禁止修改和删除。完整约束见[教师评价标准管理](evaluation_management.md)。
 
 旧随机点名 `ClassroomActivity.metadata.picked_student` 可能含历史层级字段。新写入不再保存层级；学生 DTO 使用 `sanitize_student_payload` 清理历史受限字段，教师端证据不变，最终 `StudentPrivacyJSONRenderer` 仍执行阻断复查。
+
+## 共同测试版本基础
+
+- `KnowledgeComponent`：本校学科知识点，按学校、学科和代码唯一。
+- `QuestionVersionKnowledgeComponent`：题目不可变版本到知识点的映射，保存权重、主知识点、创建人和时间。
+- `CommonQuestionSet.measurement_series`：同一连续测量系列的标识。
+- `CommonQuestionSet.version_purpose`：首个版本、后续版本或平行版本。
+- `CommonQuestionSet.previous_version`：后续版本对上一版本的保护性引用。
+- `CommonQuestionSet.readiness`：结构准备状态 JSON，只能表示数据采集准备，不能直接产生测量结论。
+- `CommonQuestionSetItem.anchor_source`：下一版本中内容完全不变项目的来源项目；题目变化后必须为空并引用新题目版本。
+- `TestAssessment.common_question_set/common_set_version/common_set_hash`：组卷时固定共同题集合及其内容哈希。
+
+共同测试集合、题目版本和答卷均采用保护性删除，历史答卷不会跟随题库编辑改变。V-E、IRT 和 BKT 需要真实作答矩阵、题目版本、知识点或序列数据，结构字段本身不构成有效性证据。
+
+## 模型发布与审计
+
+- `ModelRelease`：学校、学科、测试标记范围内的签名模型包版本；同一范围只有一个 `active`。
+- `ModelRelease.status`：`active`、`superseded`、`rolled_back`。
+- `ModelRelease.package_hash/signing_key_id/manifest`：离线包摘要、Ed25519 公钥编号和发布清单。
+- `ModelReleaseAudit`：发布、校验、回滚的追加式审计，成功和失败均保留，不允许修改或删除。
+- `ClassCalibrationRun`：候选模型及班级校准参数；只有 `candidate` 且无阻塞时可发布。
+
+模型发布不能删除历史版本、不能自动修改学生层级，也不能把测试模型标记为正式模型。完整操作见[模型发布、校验与回滚](model_release_operations.md)。

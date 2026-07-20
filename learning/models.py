@@ -121,6 +121,13 @@ class StratificationDecision(models.Model):
     model_version = models.ForeignKey(
         "aiops.ModelVersion", on_delete=models.SET_NULL, null=True, blank=True
     )
+    calibration_run = models.ForeignKey(
+        "learning_analytics.ClassCalibrationRun",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="stratification_decisions",
+    )
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.PENDING
     )
@@ -467,6 +474,81 @@ class QuestionBankItemVersion(models.Model):
         return f"{self.original_question_id}@{self.version_no}"
 
 
+class KnowledgeComponent(models.Model):
+    """A school-owned subject concept used to link item responses over time."""
+
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.CASCADE,
+        related_name="knowledge_components",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="knowledge_components",
+    )
+    code = models.CharField(max_length=64)
+    name = models.CharField(max_length=128)
+    description = models.CharField(max_length=500, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "subject", "code"],
+                name="uniq_knowledge_component_code",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "subject", "name"],
+                name="uniq_knowledge_component_name",
+            ),
+        ]
+        indexes = [models.Index(fields=["school", "subject", "is_active"])]
+        ordering = ["subject_id", "code"]
+
+    def __str__(self) -> str:
+        return f"{self.subject_id}:{self.code}"
+
+
+class QuestionVersionKnowledgeComponent(models.Model):
+    question_version = models.ForeignKey(
+        QuestionBankItemVersion,
+        on_delete=models.PROTECT,
+        related_name="knowledge_mappings",
+    )
+    component = models.ForeignKey(
+        KnowledgeComponent,
+        on_delete=models.PROTECT,
+        related_name="question_mappings",
+    )
+    weight = models.FloatField(default=1.0)
+    is_primary = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_question_knowledge_mappings",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["question_version", "component"],
+                name="uniq_question_version_knowledge_component",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["component", "question_version"]),
+            models.Index(fields=["question_version", "is_primary"]),
+        ]
+        ordering = ["question_version_id", "-is_primary", "component_id"]
+
+    def __str__(self) -> str:
+        return f"{self.question_version_id}:{self.component.code}"
+
+
 class QuestionBankItemLifecycleRecord(models.Model):
     question = models.ForeignKey(
         QuestionBankItem,
@@ -509,6 +591,11 @@ class CommonQuestionSet(models.Model):
         ACTIVE = "active", "启用"
         ARCHIVED = "archived", "归档"
 
+    class VersionPurpose(models.TextChoices):
+        BASELINE = "baseline", "首个版本"
+        FOLLOW_UP = "follow_up", "后续版本"
+        PARALLEL = "parallel", "平行版本"
+
     school = models.ForeignKey(
         "school.School", on_delete=models.CASCADE, related_name="common_question_sets"
     )
@@ -519,6 +606,20 @@ class CommonQuestionSet(models.Model):
     grade_scope = models.CharField(max_length=32, blank=True)
     term = models.CharField(max_length=32, blank=True)
     version_no = models.PositiveIntegerField(default=1)
+    measurement_series = models.CharField(max_length=96, blank=True, db_index=True)
+    version_purpose = models.CharField(
+        max_length=16,
+        choices=VersionPurpose.choices,
+        default=VersionPurpose.BASELINE,
+    )
+    previous_version = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="next_versions",
+    )
+    readiness = models.JSONField(default=dict, blank=True)
     content_hash = models.CharField(max_length=64, blank=True, db_index=True)
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.DRAFT
@@ -548,6 +649,7 @@ class CommonQuestionSet(models.Model):
         ]
         indexes = [
             models.Index(fields=["school", "subject", "status", "updated_at"]),
+            models.Index(fields=["school", "subject", "measurement_series", "version_no"]),
         ]
         ordering = ["subject_id", "grade_scope", "term", "-version_no"]
 
@@ -563,6 +665,13 @@ class CommonQuestionSetItem(models.Model):
         QuestionBankItemVersion,
         on_delete=models.PROTECT,
         related_name="common_set_items",
+    )
+    anchor_source = models.ForeignKey(
+        "self",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="anchor_successors",
     )
     comparison_code = models.CharField(max_length=64)
     required = models.BooleanField(default=True)

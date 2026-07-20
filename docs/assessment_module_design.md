@@ -155,3 +155,14 @@ draft -> published -> open -> closed
 - 确认入库时，后端对所有选中草稿重新执行与手工新增相同的题型、选项、答案和分值校验；任一题失败时整批拒绝，避免部分入库。
 - 确认后题目以当前教师为创建者保存到“我的题目”，本人可立即组卷；只有教师主动申请共享时，才由学校管理员准许试用和正式启用。
 - 没有外网、未配置 Key、AI 未启用或接口失败时，只影响 AI 出题；手工新增、XLSX 导入和测试组卷继续可用。
+
+## 12. 共同测试第二版本
+
+- `CommonQuestionSet.measurement_series` 标识同一连续测量系列，V2 通过 `previous_version` 明确引用 V1。
+- `version_purpose` 区分首个版本、后续版本和平行版本。
+- 内容完全不变的题通过 `CommonQuestionSetItem.anchor_source` 保留锚题关系；题目内容变化后必须使用新题目版本，不能继续作为锚题。
+- `KnowledgeComponent` 维护本校学科知识点，`QuestionVersionKnowledgeComponent` 把不可修改题目版本映射到知识点。
+- `readiness` 只报告结构和采集条件，不能在没有真实作答时输出 V-E、IRT 或 BKT 有效结论。
+- 学校管理员页面支持从已发布版本“准备下一版本”，自动载入题目、比较编号和锚题来源。
+
+正式准备和停止条件见[共同测试第二版本准备指南](common_test_v2_preparation.md)。

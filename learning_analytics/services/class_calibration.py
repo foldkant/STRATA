@@ -360,6 +360,7 @@ def build_class_calibration_candidate(
                 },
                 "support_suggestion": _support_suggestion(suggested_layer),
                 "window_start": dataset.decision_start,
+                "calibration_run": run,
                 "status": StratificationDecision.Status.PENDING,
             },
         )

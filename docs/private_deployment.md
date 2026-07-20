@@ -238,3 +238,13 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 `generate_synthetic_learning_data` 主要用于开发机或独立测试数据库。学校正式库确需做界面验收时可使用 `school_overlay`，但必须先备份、指定真实任课教师，并记录返回的 `run_id` 和完整 `dataset_key`。正式检查报告会排除测试批次，其他普通业务统计在清理前可能显示带 `SIM` 前缀的测试班级和学生。
 
 独立模拟账号使用不可登录密码；校内测试学生统一使用测试密码 `123456`，只能用于受控验收，不能作为正式账号分发。验收后执行 `purge_synthetic_learning_data --run-id ... --confirm-key ...` 整批清理。测试报告只能证明程序和自动检查可运行，不能覆盖本校正式检查报告，也不能作为模型上线依据。
+
+## 2026-07-20 验收记录
+
+- PostgreSQL 17.10 便携实例在默认 `5432` 启动，空数据库从零执行全部迁移并通过 141 项回归测试。
+- Redis 兼容便携实例在 `6379` 启动，协议 `PING/PONG`、Redis Channel Layer、Celery broker 和结果后端可用。
+- Celery worker 使用 Redis 实际领取 `run_nightly_model_validation(include_test_data=True)`，为两校测试数据生成 LONG-01、MODEL-01、MODEL-02 和 MODEL-03 候选；结果仍标记为测试数据。
+- 现有模型 ZIP 使用可信 Ed25519 公钥验证通过，包内模型文件摘要一致。
+- SQLite 和 PostgreSQL 两套 141 项测试均通过；其中失败候选、篡改包拒绝、旧版本回滚和跨校权限为专项测试。
+
+学校正式部署不得直接复用本机测试数据库、测试密钥或测试模型包。正式切换前必须执行备份、迁移、签名密钥生成、Redis 密码/白名单配置、worker/beat 任务领取和恢复演练。

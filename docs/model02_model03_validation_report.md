@@ -63,7 +63,7 @@ MODEL-02 的五项防误判检查均通过。CatBoost 与 LightGBM 在 V-A、V-B
 ## 6. 环境演练
 
 - SQLite：8 项新增专项测试通过。
-- PostgreSQL 17.10：在全新 `strata_model_validation` 库执行全部迁移至 `learning_analytics.0027`，并通过同一组 8 项测试。
+- PostgreSQL 17.10：首次在全新 `strata_model_validation` 库执行全部迁移至 `learning_analytics.0027`，并通过同一组 8 项测试。后续发布功能复验已执行到 `learning.0015` 和 `learning_analytics.0028`，SQLite 与 PostgreSQL 均通过 141 项全量测试。
 - Redis 兼容服务：`PING`、Celery broker `/1`、结果后端 `/2` 均通过。
 - Django Channels：显式使用 `RedisChannelLayer` 完成发送和接收。
 - Celery 5.5.3：Windows `solo` worker 收到真实任务 `320c955e-7369-4f8f-a5ae-d27120dd5ecc`，两校均返回 `completed/candidate`。

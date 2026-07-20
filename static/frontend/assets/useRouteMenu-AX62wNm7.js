@@ -1,0 +1,1 @@
+import{m as o,r as s,K as l}from"./index-BbdW4hbn.js";function f(){const u=l(),e=s(!1);o(()=>u.fullPath,()=>{e.value=!1});function t(){e.value=!1}function a(){e.value=!e.value}return{isOpen:e,close:t,toggle:a}}export{f as u};
