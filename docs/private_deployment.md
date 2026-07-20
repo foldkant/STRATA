@@ -225,6 +225,14 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 
 模型离线依赖至少包括 CatBoost 1.2.10、LightGBM 4.7.0、scikit-learn 1.8.0、NumPy 2.5.1、pandas 3.0.3 和 SciPy 1.18.0。联网准备机更新 `requirements/base.txt` 后必须重新执行 `scripts/make_wheelhouse.ps1`，并在断网环境运行 `scripts/install_offline.ps1` 验证 wheel 完整性。
 
+## 前端覆盖升级
+
+- 不要在服务运行时先删除 `static/frontend/assets`；构建会保留上一稳定版本的哈希文件。
+- `/app/...` 入口响应必须保持 `no-cache, no-store`，Nginx 不能覆盖成长期缓存。
+- 哈希 JS/CSS 可以长期缓存，但至少保留当前和上一稳定版本，避免已打开页面在登录或切换模块时请求旧分包失败。
+- 登录成功后前端使用整页跳转重新读取最新入口文件，不继续沿用旧标签页中的路由表。
+- 发布验收必须同时用本机地址和局域网地址完成一次登录，并确认登录后所有静态资源均返回 200。
+
 ## 模拟数据部署边界
 
 `generate_synthetic_learning_data` 主要用于开发机或独立测试数据库。学校正式库确需做界面验收时可使用 `school_overlay`，但必须先备份、指定真实任课教师，并记录返回的 `run_id` 和完整 `dataset_key`。正式检查报告会排除测试批次，其他普通业务统计在清理前可能显示带 `SIM` 前缀的测试班级和学生。

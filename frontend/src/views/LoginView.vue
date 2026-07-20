@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
-const router = useRouter()
 const username = ref('')
 const password = ref('')
 const error = ref('')
@@ -17,7 +15,7 @@ async function submit() {
   submitting.value = true
   try {
     await auth.signIn(username.value, password.value)
-    router.push(auth.homePath)
+    window.location.assign(`/app${auth.homePath}`)
   } catch (exc) {
     error.value = exc instanceof ApiError ? exc.message : '登录失败'
   } finally {

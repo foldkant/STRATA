@@ -25,6 +25,7 @@ export default defineConfig({
   },
   build: {
     outDir: '../static/frontend',
-    emptyOutDir: true
+    // Keep hashed chunks from the previous release so already-open tabs can finish navigation.
+    emptyOutDir: false
   }
 })
