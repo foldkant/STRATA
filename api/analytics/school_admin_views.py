@@ -28,6 +28,7 @@ from learning_analytics.models import (
     ClassCalibrationRun,
     LongitudinalAnalysisRun,
     ModelComparisonRun,
+    ModelPrediction,
     ModelRelease,
     ModelReleaseAudit,
 )
@@ -1033,8 +1034,13 @@ def _model_comparison_row(run: ModelComparisonRun, detail=False):
                 "predicted_count": item.predicted_count,
                 "abstained_count": item.abstained_count,
                 "primary_metric": item.primary_metric,
+                "mean_residual": item.metrics.get("mean_residual"),
+                "residual_sum": item.metrics.get("residual_sum"),
+                "residual_sum_squares": item.metrics.get("residual_sum_squares"),
+                "mse": item.metrics.get("mse"),
                 "rmse": item.rmse,
                 "mae": item.mae,
+                "r_squared": item.metrics.get("r_squared"),
                 "brier_score": item.brier_score,
                 "calibration_intercept": item.calibration_intercept,
                 "calibration_slope": item.calibration_slope,
@@ -1333,6 +1339,58 @@ def create_class_calibration(request):
     )
 
 
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def train_stratification_model(request):
+    """Run the complete, repeatable model pipeline for one frozen dataset."""
+    try:
+        dataset = _dataset_for_school(request, request.data)
+        include_test_data = _include_test_data(request)
+        longitudinal = build_longitudinal_analysis(
+            dataset=dataset,
+            created_by=request.user,
+        )
+        baseline = build_model_comparison(
+            dataset=dataset,
+            created_by=request.user,
+        )
+        advanced = build_model_02_comparison(
+            dataset=dataset,
+            created_by=request.user,
+            include_test_data=include_test_data,
+        )
+        calibration = build_class_calibration_candidate(
+            dataset=dataset,
+            comparison_run=advanced,
+            created_by=request.user,
+            include_test_data=include_test_data,
+        )
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+
+    advanced = ModelComparisonRun.objects.select_related(
+        "dataset", "subject"
+    ).prefetch_related("evaluations", "negative_controls").get(pk=advanced.pk)
+    calibration = ClassCalibrationRun.objects.select_related(
+        "dataset", "comparison_run", "subject"
+    ).get(pk=calibration.pk)
+    return ok(
+        {
+            "dataset": _dataset_row(dataset),
+            "longitudinal_run_id": longitudinal.id,
+            "baseline_run_id": baseline.id,
+            "comparison_run": _model_comparison_row(advanced, detail=True),
+            "calibration_run": _class_calibration_row(calibration),
+        },
+        (
+            "模型训练完成，已生成待发布的教师分层建议。"
+            if calibration.status == ClassCalibrationRun.Status.CANDIDATE
+            else "模型训练已完成检查，但当前数据暂不能生成教师分层建议。"
+        ),
+        status=201,
+    )
+
+
 def _calibration_for_release(request, pk: int):
     query = ClassCalibrationRun.objects.filter(pk=pk, school=request.user.school)
     if not _include_test_data(request):
@@ -1506,6 +1564,25 @@ def export_model_validation(request, pk: int):
             calibration.class_parameters.items() if calibration else []
         )
     ]
+    prediction_rows = [
+        [
+            item.pseudonymous_key,
+            item.model_key,
+            item.validation_key,
+            item.get_status_display(),
+            item.observed_value,
+            item.predicted_value,
+            (
+                item.observed_value - item.predicted_value
+                if item.observed_value is not None and item.predicted_value is not None
+                else None
+            ),
+            item.abstain_reason,
+        ]
+        for item in ModelPrediction.objects.filter(run=run).order_by(
+            "model_key", "validation_key", "pseudonymous_key"
+        )
+    ]
     workbook = build_workbook(
         [
             {
@@ -1524,8 +1601,12 @@ def export_model_validation(request, pk: int):
                     "预测数",
                     "拒绝数",
                     "主要指标",
+                    "平均残差",
+                    "残差平方和",
+                    "MSE",
                     "RMSE",
                     "MAE",
+                    "R2",
                     "覆盖率",
                     "说明",
                 ],
@@ -1539,8 +1620,12 @@ def export_model_validation(request, pk: int):
                         item.predicted_count,
                         item.abstained_count,
                         item.primary_metric,
+                        item.metrics.get("mean_residual"),
+                        item.metrics.get("residual_sum_squares"),
+                        item.metrics.get("mse"),
                         item.rmse,
                         item.mae,
+                        item.metrics.get("r_squared"),
                         item.coverage,
                         item.note,
                     ]
@@ -1635,6 +1720,20 @@ def export_model_validation(request, pk: int):
                     "校准修正值",
                 ],
                 "rows": class_calibration_rows,
+            },
+            {
+                "title": "匿名预测明细",
+                "headers": [
+                    "匿名编号",
+                    "模型",
+                    "验证方式",
+                    "状态",
+                    "实际值",
+                    "预测值",
+                    "残差",
+                    "拒绝原因",
+                ],
+                "rows": prediction_rows,
             },
         ]
     )

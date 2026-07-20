@@ -13,6 +13,7 @@ import {
   publishClassCalibration,
   refreshAnalysisOutcomes,
   rollbackModelRelease,
+  trainStratificationModel,
   verifyModelRelease,
   type AnalysisDataset,
   type AnalysisPreparation,
@@ -20,6 +21,7 @@ import {
 } from '@/api/analytics'
 import { ApiError } from '@/api/client'
 import NoticeLine from '@/components/NoticeLine.vue'
+import ModelOperationsOverview from '@/components/school-admin/ModelOperationsOverview.vue'
 import AppShell from '@/layouts/AppShell.vue'
 import { schoolAdminNav } from './nav'
 
@@ -33,6 +35,7 @@ const datasetModalOpen = ref(false)
 const showAllDecisionPoints = ref(false)
 const notice = ref('')
 const noticeTone = ref<'success' | 'warning' | 'error' | 'info'>('info')
+const activeSection = ref<'overview' | 'data' | 'research'>('overview')
 
 const pointForm = reactive({
   class_id: 0,
@@ -202,6 +205,28 @@ async function runAdvancedValidation(dataset: AnalysisDataset, type: 'advanced' 
   }
 }
 
+async function runFullModelTraining(dataset: AnalysisDataset) {
+  if (
+    working.value
+    || !window.confirm(`确认使用“${dataset.subject.name} · ${dataset.outcome.label}”开始模型训练？`)
+  ) return
+  working.value = true
+  notice.value = ''
+  try {
+    const result = await trainStratificationModel({ dataset_id: dataset.id })
+    notice.value = result.calibration_run.status === 'candidate'
+      ? `训练完成：已选择 ${result.calibration_run.model_key}，生成 ${result.calibration_run.suggestion_count} 条教师候选。`
+      : '训练检查已经完成，当前数据暂不能生成教师分层建议。'
+    noticeTone.value = result.calibration_run.status === 'candidate' ? 'success' : 'warning'
+    await loadData(false)
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '模型训练失败，已有发布版本没有改变。'
+    noticeTone.value = 'error'
+  } finally {
+    working.value = false
+  }
+}
+
 async function publishCandidate(runId: number) {
   if (working.value || !window.confirm('确认发布这个候选版本？发布后教师才能看到对应的分层建议。')) return
   working.value = true
@@ -336,10 +361,10 @@ onMounted(loadData)
   <AppShell title="分层分析" eyebrow="学校管理员" :nav-items="navItems" natural-scroll>
     <section class="analysis-page-heading">
       <div>
-        <h2>分析准备情况</h2>
-        <p>按固定时间保存当时可用的学习记录，等待随后学习结果，再生成可重复的数据版本。</p>
+        <h2>分层模型管理</h2>
+        <p>训练、查看和发布本校各学科的隐性分层模型；分层情况仅向学校管理员和对应任课教师开放。</p>
       </div>
-      <div class="analysis-page-actions">
+      <div v-if="activeSection === 'data'" class="analysis-page-actions">
         <button class="secondary-button" type="button" :disabled="working" @click="refreshOutcomes">
           更新到期结果
         </button>
@@ -359,12 +384,29 @@ onMounted(loadData)
       tone="warning"
     />
 
+    <nav v-if="!loading && data" class="analysis-section-tabs" aria-label="分层分析页面">
+      <button type="button" :class="{ active: activeSection === 'overview' }" @click="activeSection = 'overview'">运行概览</button>
+      <button type="button" :class="{ active: activeSection === 'data' }" @click="activeSection = 'data'">数据准备</button>
+      <button type="button" :class="{ active: activeSection === 'research' }" @click="activeSection = 'research'">详细检查</button>
+    </nav>
+
     <section v-if="loading" class="panel analysis-loading" aria-live="polite">
       <strong>正在加载分析准备情况</strong>
       <span>请稍候</span>
     </section>
 
     <template v-else-if="data">
+      <ModelOperationsOverview
+        v-if="activeSection === 'overview' && validation"
+        :datasets="data.datasets"
+        :validation="validation"
+        :working="working"
+        @train="runFullModelTraining"
+        @publish="publishCandidate"
+        @verify="verifyRelease"
+      />
+
+      <template v-if="activeSection === 'data'">
       <section class="analysis-summary-grid" aria-label="分析准备汇总">
         <article>
           <span>已登记学习指标</span>
@@ -525,8 +567,9 @@ onMounted(loadData)
         </div>
         <p v-else class="analysis-empty-copy">随后学习结果到期后，才能生成冻结数据版本。</p>
       </section>
+      </template>
 
-      <section class="analysis-validation-section" aria-label="统计验证">
+      <section v-if="activeSection === 'research'" class="analysis-validation-section" aria-label="详细模型检查">
         <header class="analysis-validation-heading">
           <div>
             <h2>统计验证</h2>

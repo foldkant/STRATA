@@ -376,11 +376,51 @@ def _metrics(predictions: list[PredictionValue], target_type: str):
         return {"predicted_count": 0, "abstained_count": len(predictions), "coverage": 0.0}
     actual = [item.row.outcome for item in valid]
     predicted = [item.value for item in valid]
-    errors = [prediction - truth for prediction, truth in zip(predicted, actual)]
-    rmse = math.sqrt(sum(error * error for error in errors) / len(errors))
-    mae = sum(abs(error) for error in errors) / len(errors)
+    residuals = [truth - prediction for prediction, truth in zip(predicted, actual)]
+    residual_sum = sum(residuals)
+    residual_sum_squares = sum(residual * residual for residual in residuals)
+    mse = residual_sum_squares / len(residuals)
+    rmse = math.sqrt(mse)
+    mae = sum(abs(residual) for residual in residuals) / len(residuals)
+    mean_residual = residual_sum / len(residuals)
     mean_prediction = _mean(predicted)
     mean_actual = _mean(actual)
+    total_sum_squares = sum((truth - (mean_actual or 0.0)) ** 2 for truth in actual)
+    r_squared = (
+        1.0 - residual_sum_squares / total_sum_squares
+        if target_type != "binary" and len(actual) >= 2 and total_sum_squares > 0
+        else None
+    )
+    residual_min = min(residuals)
+    residual_max = max(residuals)
+    if math.isclose(residual_min, residual_max):
+        residual_histogram = [
+            {
+                "left": residual_min,
+                "right": residual_max,
+                "label": f"{residual_min:.3f}",
+                "count": len(residuals),
+            }
+        ]
+    else:
+        bin_count = min(10, max(5, int(math.sqrt(len(residuals)))))
+        bin_width = (residual_max - residual_min) / bin_count
+        counts = [0] * bin_count
+        for residual in residuals:
+            index = min(int((residual - residual_min) / bin_width), bin_count - 1)
+            counts[index] += 1
+        residual_histogram = [
+            {
+                "left": residual_min + index * bin_width,
+                "right": residual_min + (index + 1) * bin_width,
+                "label": (
+                    f"{residual_min + index * bin_width:.3f}~"
+                    f"{residual_min + (index + 1) * bin_width:.3f}"
+                ),
+                "count": count,
+            }
+            for index, count in enumerate(counts)
+        ]
     calibration_slope = _covariance(predicted, actual) / (_variance(predicted) or 1.0)
     calibration_intercept = (mean_actual or 0.0) - calibration_slope * (mean_prediction or 0.0)
     brier = (
@@ -394,8 +434,14 @@ def _metrics(predictions: list[PredictionValue], target_type: str):
         "predicted_count": len(valid),
         "abstained_count": len(predictions) - len(valid),
         "coverage": len(valid) / len(predictions) if predictions else 0.0,
+        "mean_residual": mean_residual,
+        "residual_sum": residual_sum,
+        "residual_sum_squares": residual_sum_squares,
+        "mse": mse,
         "rmse": rmse,
         "mae": mae,
+        "r_squared": r_squared,
+        "residual_histogram": residual_histogram,
         "brier_score": brier,
         "primary_metric": primary,
         "mean_prediction": mean_prediction,

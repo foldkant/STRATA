@@ -1579,10 +1579,11 @@ POST /api/v1/school-admin/analytics/models/longitudinal/
 POST /api/v1/school-admin/analytics/models/compare/
 POST /api/v1/school-admin/analytics/models/compare-advanced/
 POST /api/v1/school-admin/analytics/models/class-calibration/
+POST /api/v1/school-admin/analytics/models/train/
 GET  /api/v1/school-admin/analytics/models/{id}/export/
 ```
 
-查询接口返回本校正式冻结数据版本、LONG-01、MODEL-01、MODEL-02 和 MODEL-03 结果。内容包括个人内/学生间/班级描述、M00-M03、CatBoost、LightGBM、V-A 至 V-E、覆盖率、拒绝预测数、校准、稳定性、班级差异、负对照、模型卡和班级校准候选汇总；不返回学生姓名、账号、学号、内部匿名编号或个人预测。
+查询接口返回本校正式冻结数据版本、LONG-01、MODEL-01、MODEL-02 和 MODEL-03 结果。内容包括个人内/学生间/班级描述、M00-M03、CatBoost、LightGBM、V-A 至 V-E、平均残差、残差平方和、MAE、MSE、RMSE、R²、覆盖率、残差分布、拒绝预测数、校准、稳定性、班级差异、负对照、模型卡和班级校准候选汇总；不返回学生姓名、账号、学号、内部匿名编号或个人预测。
 
 建立重复测量统计或模型比较的请求体为：
 
@@ -1590,9 +1591,9 @@ GET  /api/v1/school-admin/analytics/models/{id}/export/
 { "dataset_id": 12 }
 ```
 
-相同数据版本和分析版本重复请求返回已有记录。只有已冻结、属于当前学校且不是模拟批次的数据版本可通过学校管理员接口使用。测试样本少于 30 条只返回“数据不足”；不能通过页面参数绕过样本门槛。
+`models/train/` 使用同一个 `dataset_id` 一次运行完整训练流程，响应返回结构化模型比较和班级候选。相同数据版本和分析版本重复请求返回已有记录。只有已冻结、属于当前学校且不是模拟批次的数据版本可通过学校管理员接口使用。测试样本少于 30 条只返回“数据不足”；不能通过页面参数绕过样本门槛。
 
-模型比较始终是影子结果。`shadow_only` 表示工程比较完成，`blocked` 表示存在数据不足、实际预测数不足或防误判问题。MODEL-03 的 `candidate` 只表示已生成教师待确认候选，不会自动修改学生层级。导出 XLSX 包含模型卡、模型比较、重复测量、防误判检查、稳定性、班级差异、班级校准和班级参数八张表。
+模型比较始终是影子结果。`shadow_only` 表示工程比较完成，`blocked` 表示存在数据不足、实际预测数不足或防误判问题。MODEL-03 的 `candidate` 只表示已生成教师待确认候选，不会自动修改学生层级。导出 XLSX 包含模型卡、模型比较、重复测量、防误判检查、稳定性、班级差异、班级校准、班级参数和匿名预测明细。匿名预测明细只包含数据版本匿名编号，不包含姓名、账号或学号。
 
 `include_test_data=1` 仅在 `DEBUG=true` 时允许学校管理员查看和导出本校模拟批次；生产环境忽略该参数。正式接口和正式夜间任务始终排除模拟数据。
 

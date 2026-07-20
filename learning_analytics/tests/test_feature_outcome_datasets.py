@@ -483,3 +483,23 @@ class FeatureOutcomeDatasetTests(TestCase):
         response = self.client.get("/api/v1/school-admin/analytics/models/")
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(len(response.data["data"]["comparison_runs"]), 1)
+
+        manual = self.client.post(
+            "/api/v1/school-admin/analytics/models/train/",
+            {"dataset_id": dataset.id},
+            format="json",
+        )
+        self.assertEqual(manual.status_code, 201, manual.data)
+        self.assertEqual(manual.data["data"]["dataset"]["id"], dataset.id)
+        self.assertEqual(
+            manual.data["data"]["calibration_run"]["status"],
+            "blocked",
+        )
+
+        self.client.force_authenticate(self.teacher)
+        forbidden = self.client.post(
+            "/api/v1/school-admin/analytics/models/train/",
+            {"dataset_id": dataset.id},
+            format="json",
+        )
+        self.assertEqual(forbidden.status_code, 403)

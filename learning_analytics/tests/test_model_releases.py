@@ -193,6 +193,22 @@ class ModelReleaseTests(TestCase):
         )
         return calibration, artifact
 
+    def _decision(self, calibration, suffix: str):
+        return StratificationDecision.objects.create(
+            student=self.student,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            previous_layer="B",
+            suggested_layer="A",
+            confidence=0.8,
+            reasons=["近 30 日学习记录稳定"],
+            learning_summary={"calibration_run_id": calibration.id},
+            rule_version=f"m03-{suffix}",
+            calibration_run=calibration,
+            status=StratificationDecision.Status.PENDING,
+        )
+
     def test_publish_creates_verified_signed_package(self):
         calibration, _ = self._candidate("one")
 
@@ -236,19 +252,32 @@ class ModelReleaseTests(TestCase):
 
     def test_new_release_supersedes_old_and_rollback_restores_it(self):
         first, _ = self._candidate("v1")
+        first_decision = self._decision(first, "release-v1")
         old_release = publish_model_candidate(calibration_run=first, actor=self.admin)
         second, _ = self._candidate("v2")
+        second_decision = self._decision(second, "release-v2")
+
+        first_decision.refresh_from_db()
+        self.assertEqual(first_decision.status, StratificationDecision.Status.PENDING)
         new_release = publish_model_candidate(calibration_run=second, actor=self.admin)
 
         old_release.refresh_from_db()
+        first_decision.refresh_from_db()
+        second_decision.refresh_from_db()
         self.assertEqual(old_release.status, ModelRelease.Status.SUPERSEDED)
         self.assertEqual(new_release.release_version, 2)
+        self.assertEqual(first_decision.status, StratificationDecision.Status.DEFERRED)
+        self.assertEqual(second_decision.status, StratificationDecision.Status.PENDING)
 
         restored = rollback_model_release(target=old_release, actor=self.admin)
 
         new_release.refresh_from_db()
+        first_decision.refresh_from_db()
+        second_decision.refresh_from_db()
         self.assertEqual(restored.status, ModelRelease.Status.ACTIVE)
         self.assertEqual(new_release.status, ModelRelease.Status.ROLLED_BACK)
+        self.assertEqual(first_decision.status, StratificationDecision.Status.PENDING)
+        self.assertEqual(second_decision.status, StratificationDecision.Status.DEFERRED)
 
     def test_tampered_package_signature_is_rejected(self):
         calibration, _ = self._candidate("tamper")
@@ -283,20 +312,7 @@ class ModelReleaseTests(TestCase):
 
     def test_teacher_only_sees_candidate_after_release(self):
         calibration, _ = self._candidate("teacher")
-        StratificationDecision.objects.create(
-            student=self.student,
-            class_group=self.class_group,
-            subject=self.subject,
-            course=self.course,
-            previous_layer="B",
-            suggested_layer="A",
-            confidence=0.8,
-            reasons=["近 30 日学习记录稳定"],
-            learning_summary={"calibration_run_id": calibration.id},
-            rule_version="m03-test-v1",
-            calibration_run=calibration,
-            status=StratificationDecision.Status.PENDING,
-        )
+        self._decision(calibration, "test-v1")
         client = APIClient()
         client.force_authenticate(self.teacher)
 

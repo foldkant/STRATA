@@ -18,9 +18,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.utils import timezone
 
+from learning.models import StratificationDecision
 from learning_analytics.feature_models import canonical_hash
 from learning_analytics.model_models import (
     ClassCalibrationRun,
@@ -32,6 +33,7 @@ from school.models import School
 
 
 PACKAGE_SCHEMA_VERSION = "1.0"
+SYSTEM_RELEASE_NOTE_PREFIX = "系统切换模型版本："
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -336,6 +338,41 @@ def _failed_audit(*, run, actor, action: str, message: str):
     )
 
 
+def _decision_scope(run: ClassCalibrationRun) -> Q:
+    scope = Q()
+    for student_id, course_id in StratificationDecision.objects.filter(
+        calibration_run=run
+    ).values_list("student_id", "course_id"):
+        scope |= Q(student_id=student_id, course_id=course_id)
+    return scope
+
+
+def _activate_release_suggestions(
+    *, run: ClassCalibrationRun, note: str
+) -> None:
+    scope = _decision_scope(run)
+    if not scope.children:
+        return
+    now = timezone.now()
+    StratificationDecision.objects.filter(
+        scope,
+        status=StratificationDecision.Status.PENDING,
+    ).exclude(calibration_run=run).update(
+        status=StratificationDecision.Status.DEFERRED,
+        review_note=f"{SYSTEM_RELEASE_NOTE_PREFIX}{note}",
+        reviewed_at=now,
+    )
+    StratificationDecision.objects.filter(
+        calibration_run=run,
+        status=StratificationDecision.Status.DEFERRED,
+        review_note__startswith=SYSTEM_RELEASE_NOTE_PREFIX,
+    ).update(
+        status=StratificationDecision.Status.PENDING,
+        review_note="",
+        reviewed_at=None,
+    )
+
+
 def publish_model_candidate(
     *, calibration_run: ClassCalibrationRun, actor
 ) -> ModelRelease:
@@ -406,6 +443,10 @@ def publish_model_candidate(
                 manifest=manifest,
                 released_by=actor,
             )
+            _activate_release_suggestions(
+                run=run,
+                note=f"已由模型 v{release_version} 替代。",
+            )
             ModelReleaseAudit.objects.create(
                 school=run.school,
                 subject=run.subject,
@@ -474,6 +515,10 @@ def rollback_model_release(*, target: ModelRelease, actor) -> ModelRelease:
                 deactivated_at=None,
             )
             target.refresh_from_db()
+            _activate_release_suggestions(
+                run=target.calibration_run,
+                note=f"已回滚到模型 v{target.release_version}。",
+            )
             ModelReleaseAudit.objects.create(
                 school=target.school,
                 subject=target.subject,

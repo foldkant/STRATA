@@ -36,7 +36,7 @@ from learning_analytics.services.model_comparison import (
 )
 
 
-MODEL_02_VERSION = "model-02-v2"
+MODEL_02_VERSION = "model-02-v3"
 ADVANCED_MODEL_KEYS = ("CATBOOST", "LIGHTGBM")
 ALL_MODEL_KEYS = (*MODEL_KEYS, *ADVANCED_MODEL_KEYS)
 VALIDATION_KEYS = ("V-A", "V-B", "V-C", "V-D", "V-E")

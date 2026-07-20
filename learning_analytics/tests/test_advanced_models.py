@@ -8,6 +8,7 @@ from learning_analytics.services.advanced_models import (
     predict_advanced_model,
 )
 from learning_analytics.services.model_comparison import ComparisonRow
+from learning_analytics.services.model_comparison import PredictionValue, _metrics
 from learning_analytics.services.class_calibration import friendly_decision_reason
 
 
@@ -69,3 +70,31 @@ class DecisionReasonFormattingTests(SimpleTestCase):
             friendly_decision_reason("依据当前学习记录形成建议。"),
             "依据当前学习记录形成建议。",
         )
+
+
+class ModelMetricTests(SimpleTestCase):
+    def test_continuous_metrics_include_standard_residual_statistics(self):
+        rows = [
+            ComparisonRow(
+                row_id=index,
+                pseudonymous_key=f"{index:064x}",
+                class_key="1",
+                decision_date=date(2026, 1, index),
+                features={},
+                outcome=truth,
+            )
+            for index, truth in enumerate([1.0, 2.0, 3.0], start=1)
+        ]
+        predictions = [
+            PredictionValue(row=rows[0], value=1.0, status="predicted"),
+            PredictionValue(row=rows[1], value=2.5, status="predicted"),
+            PredictionValue(row=rows[2], value=2.5, status="predicted"),
+        ]
+
+        metrics = _metrics(predictions, "continuous")
+
+        self.assertAlmostEqual(metrics["mean_residual"], 0.0)
+        self.assertAlmostEqual(metrics["mse"], 1 / 6)
+        self.assertAlmostEqual(metrics["rmse"], (1 / 6) ** 0.5)
+        self.assertAlmostEqual(metrics["mae"], 1 / 3)
+        self.assertAlmostEqual(metrics["r_squared"], 0.75)

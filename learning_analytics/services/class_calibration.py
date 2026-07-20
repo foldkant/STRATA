@@ -9,7 +9,6 @@ import numpy as np
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.utils import timezone
 
 from learning.models import StratificationDecision
 from learning_analytics.feature_models import (
@@ -28,7 +27,7 @@ from learning_analytics.services.advanced_models import (
 from learning_analytics.services.model_comparison import _dataset_rows, _target_type
 
 
-CALIBRATION_VERSION = "model-03-v3"
+CALIBRATION_VERSION = "model-03-v4"
 CLASS_PRIOR_STRENGTH = 20.0
 FEATURE_LABELS = {
     "prior_due_required_count__7d": "近 7 日到期必做任务数",
@@ -317,15 +316,6 @@ def build_class_calibration_candidate(
 
     rule_version = f"m03-{run_key[:24]}"
     latest_sources = list(latest_by_student.values())
-    StratificationDecision.objects.filter(
-        student_id__in=[item.snapshot.student_id for item in latest_sources],
-        course_id__in=[item.decision_point.course_id for item in latest_sources],
-        status=StratificationDecision.Status.PENDING,
-    ).exclude(rule_version=rule_version).update(
-        status=StratificationDecision.Status.DEFERRED,
-        review_note="已由更新的班级校准候选替代。",
-        reviewed_at=timezone.now(),
-    )
     suggestion_count = 0
     for source in latest_sources:
         score = calibrated_by_row.get(source.id)

@@ -155,6 +155,11 @@ urlpatterns = [
         name="school_admin_class_calibration_create",
     ),
     path(
+        "school-admin/analytics/models/train/",
+        school_admin_views.train_stratification_model,
+        name="school_admin_stratification_model_train",
+    ),
+    path(
         "school-admin/analytics/models/class-calibration/<int:pk>/publish/",
         school_admin_views.publish_class_calibration,
         name="school_admin_class_calibration_publish",

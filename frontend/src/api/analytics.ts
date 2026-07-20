@@ -241,8 +241,13 @@ export type ModelEvaluation = {
   predicted_count: number
   abstained_count: number
   primary_metric: number | null
+  mean_residual: number | null
+  residual_sum: number | null
+  residual_sum_squares: number | null
+  mse: number | null
   rmse: number | null
   mae: number | null
+  r_squared: number | null
   brier_score: number | null
   calibration_intercept: number | null
   calibration_slope: number | null
@@ -424,6 +429,19 @@ export function createAdvancedModelComparison(payload: { dataset_id: number }) {
 export function createClassCalibration(payload: { dataset_id: number }) {
   return apiRequest<{ run: ClassCalibrationRun }>(
     '/api/v1/school-admin/analytics/models/class-calibration/?include_test_data=1',
+    { method: 'POST', body: toJsonBody(payload) }
+  )
+}
+
+export function trainStratificationModel(payload: { dataset_id: number }) {
+  return apiRequest<{
+    dataset: AnalysisDataset
+    longitudinal_run_id: number
+    baseline_run_id: number
+    comparison_run: ModelComparisonRun
+    calibration_run: ClassCalibrationRun
+  }>(
+    '/api/v1/school-admin/analytics/models/train/?include_test_data=1',
     { method: 'POST', body: toJsonBody(payload) }
   )
 }

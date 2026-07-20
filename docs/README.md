@@ -37,6 +37,7 @@
 - [教师试用培训](teacher_training_guide.md)：课程、评价、共同测试、学习情况和隐性建议的培训与通过标准。
 - [研究预注册模板](research_preregistration_template.md)：正式数据采集前锁定问题、设计、样本、结果、分析和偏离处理。
 - [学习分析页面多分辨率验收](responsive_qa_report.md)：学校管理员和教师分析页四档视口验收记录。
+- [校级科研数据分析规划](school_research_analysis_plan.md)：后续描述统计、信效度、组间比较、重复测量、相关和回归分析的独立模块边界。
 - [学习事件新旧记录迁移清单](learning_event_write_inventory.md)：盘点测试、课堂、资源、评价、聊天和小组业务的现有写入入口、新版记录映射与兼容写入验收要求。
 - [学生评价、积分与奖章设计](student_evaluation_incentive_design.md)：规定成绩、五星评价标准、核心素养证据、课堂积分/奖章和 AI 内部建议的隔离、可见性与实施顺序。
 - [行为、特征与评价标准五轮科学审查](student_behavior_ai_stratification_five_round_review.md)：五轮文献复审发现、方案修正和仍需实证的风险。
