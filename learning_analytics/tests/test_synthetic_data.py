@@ -11,6 +11,7 @@ from learning_analytics.models import (
     AnalyticsPipelineRun,
     DataQualityReport,
     LearningEventV2,
+    LearningOpportunity,
     SyntheticDatasetRun,
     SyntheticStudentTruth,
 )
@@ -72,6 +73,11 @@ class SyntheticDataGenerationTests(TestCase):
         self.assertEqual(float(report.unconverted_old_event_rate), 0)
         self.assertEqual(float(report.old_new_event_difference_rate), 0)
         self.assertEqual(report.event_count, events.count())
+        opportunities = LearningOpportunity.objects.filter(
+            release_event__synthetic_run=run
+        )
+        self.assertGreater(opportunities.count(), 0)
+        self.assertFalse(opportunities.filter(available_to__isnull=True).exists())
 
         before = {
             "events": events.count(),

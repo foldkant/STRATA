@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -12,19 +15,43 @@ from courses.models import (
     LessonStep,
     Subject,
 )
-from learning.models import LearningEvent
+from learning.models import LearningEvent, StratificationDecision
 from learning_analytics.models import (
     AnalyticsPipelineRun,
     AnalyticsTaskRun,
     AssessmentResultFact,
+    ClassroomEvaluationStandardUse,
     DataQualityReport,
+    EvaluationCriterionVersion,
+    EvaluationPlan,
+    EvaluationPlanVersion,
+    EvaluationScoringExample,
+    EvaluationStandard,
+    EvaluationStandardVersion,
+    EvaluationSubmissionEvidence,
+    EvaluationTrialRecord,
     EventIngestionDailyCounter,
     LearningEventV2,
     LearningOpportunity,
     LearningOpportunityTransitionFact,
+    LessonStepEvaluationBinding,
     ParticipationPointLedger,
+    StudentLearningSummary,
     SyntheticDatasetRun,
     SyntheticStudentTruth,
+    ClassCalibrationRun,
+    DecisionPoint,
+    DecisionPointStudent,
+    LongitudinalAnalysisRun,
+    LongitudinalFeatureResult,
+    ModelComparisonRun,
+    ModelEvaluationResult,
+    ModelPrediction,
+    NegativeControlResult,
+    OutcomeObservation,
+    StudentFeatureSnapshot,
+    TrainingDatasetRow,
+    TrainingDatasetVersion,
 )
 from school.models import ClassGroup, StudentProfile, TeachingAssignment
 
@@ -52,6 +79,14 @@ def synthetic_cleanup_preview(run: SyntheticDatasetRun) -> dict:
             release_event__synthetic_run=run
         ).count(),
         "quality_reports": DataQualityReport.objects.filter(synthetic_run=run).count(),
+        "decision_points": DecisionPoint.objects.filter(synthetic_run=run).count(),
+        "datasets": TrainingDatasetVersion.objects.filter(synthetic_run=run).count(),
+        "model_runs": ModelComparisonRun.objects.filter(
+            dataset__synthetic_run=run
+        ).count(),
+        "calibration_runs": ClassCalibrationRun.objects.filter(
+            dataset__synthetic_run=run
+        ).count(),
     }
 
 
@@ -96,6 +131,86 @@ def purge_synthetic_dataset(*, run: SyntheticDatasetRun, confirmation_key: str) 
         .values_list("classroom_session_id", flat=True)
         .distinct()
     )
+
+    datasets = TrainingDatasetVersion.objects.filter(synthetic_run=run)
+    dataset_ids = list(datasets.values_list("id", flat=True))
+    point_ids = list(
+        DecisionPoint.objects.filter(synthetic_run=run).values_list("id", flat=True)
+    )
+    comparison_runs = ModelComparisonRun.objects.filter(dataset_id__in=dataset_ids)
+    comparison_ids = list(comparison_runs.values_list("id", flat=True))
+    calibration_runs = ClassCalibrationRun.objects.filter(dataset_id__in=dataset_ids)
+    artifact_paths = list(
+        calibration_runs.exclude(artifact_path="").values_list(
+            "artifact_path", flat=True
+        )
+    )
+    # Test students and their generated courses may have acquired summaries,
+    # teacher-review candidates, or evaluation drafts during acceptance testing.
+    # Remove those derived records before deleting the protected course graph.
+    StratificationDecision.objects.filter(student_id__in=student_ids).delete()
+    StudentLearningSummary.objects.filter(student_id__in=student_ids).delete()
+
+    standard_versions = EvaluationStandardVersion.objects.filter(
+        course_id__in=course_ids
+    )
+    standard_version_ids = list(standard_versions.values_list("id", flat=True))
+    standard_uses = ClassroomEvaluationStandardUse.objects.filter(
+        standard_version_id__in=standard_version_ids
+    )
+    EvaluationSubmissionEvidence.objects.filter(standard_use__in=standard_uses).delete()
+    standard_uses.delete()
+    LessonStepEvaluationBinding.objects.filter(
+        standard_version_id__in=standard_version_ids
+    ).delete()
+    EvaluationTrialRecord.objects.filter(
+        standard_version_id__in=standard_version_ids
+    ).delete()
+    criteria = EvaluationCriterionVersion.objects.filter(
+        standard_version_id__in=standard_version_ids
+    )
+    EvaluationScoringExample.objects.filter(criterion__in=criteria).delete()
+    criteria.delete()
+    standard_versions.delete()
+    EvaluationStandard.objects.filter(course_id__in=course_ids).delete()
+    EvaluationPlanVersion.objects.filter(course_id__in=course_ids).delete()
+    EvaluationPlan.objects.filter(course_id__in=course_ids).delete()
+    calibration_runs.delete()
+    ModelPrediction.objects.filter(run_id__in=comparison_ids).delete()
+    NegativeControlResult.objects.filter(run_id__in=comparison_ids).delete()
+    ModelEvaluationResult.objects.filter(run_id__in=comparison_ids).delete()
+    comparison_runs.delete()
+    longitudinal_runs = LongitudinalAnalysisRun.objects.filter(
+        dataset_id__in=dataset_ids
+    )
+    LongitudinalFeatureResult.objects.filter(run__in=longitudinal_runs).delete()
+    longitudinal_runs.delete()
+    TrainingDatasetRow.objects.filter(dataset_id__in=dataset_ids).delete()
+    datasets.delete()
+    observations = OutcomeObservation.objects.filter(decision_point_id__in=point_ids)
+    observation_versions = list(
+        observations.order_by()
+        .values_list("observation_version", flat=True)
+        .distinct()
+    )
+    for version in sorted(observation_versions, reverse=True):
+        observations.filter(observation_version=version).delete()
+    StudentFeatureSnapshot.objects.filter(decision_point_id__in=point_ids).delete()
+    DecisionPointStudent.objects.filter(decision_point_id__in=point_ids).delete()
+    DecisionPoint.objects.filter(id__in=point_ids).delete()
+    base_dir = Path(settings.BASE_DIR).resolve()
+    model_root = Path(settings.MODEL_ARTIFACT_ROOT).resolve()
+    for artifact_path in artifact_paths:
+        candidate = Path(artifact_path)
+        resolved = (
+            candidate.resolve()
+            if candidate.is_absolute()
+            else (base_dir / candidate).resolve()
+        )
+        if resolved.is_file() and (
+            resolved == model_root or model_root in resolved.parents
+        ):
+            resolved.unlink()
 
     pipeline_runs = AnalyticsPipelineRun.objects.filter(synthetic_run=run)
     DataQualityReport.objects.filter(synthetic_run=run).delete()

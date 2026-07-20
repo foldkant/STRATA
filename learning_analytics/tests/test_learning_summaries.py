@@ -267,3 +267,28 @@ class LearningSummaryTests(TestCase):
         suggestion = build_transparent_suggestion(summary=summary)
         self.assertEqual(suggestion.suggested_layer, "")
         self.assertEqual(suggestion.confidence, 0)
+
+    def test_model_candidate_prevents_parallel_transparent_pending_suggestion(self):
+        summary = build_student_learning_summary(
+            student_profile=self.profile,
+            course=self.course,
+            window_type=StudentLearningSummary.WindowType.DAYS_30,
+            as_of=timezone.localdate(),
+        )
+        model_candidate = StratificationDecision.objects.create(
+            student=self.student,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            previous_layer="B",
+            suggested_layer="B",
+            confidence=0.7,
+            window_start=summary.window_start,
+            window_end=summary.window_end,
+            rule_version="m03-test-candidate",
+        )
+
+        suggestion = build_transparent_suggestion(summary=summary)
+
+        self.assertEqual(suggestion.id, model_candidate.id)
+        self.assertEqual(StratificationDecision.objects.count(), 1)

@@ -152,6 +152,7 @@ export type AnalysisDataset = {
   manifest_hash: string
   created_at: string
   frozen_at: string | null
+  is_test_data: boolean
 }
 
 export type AnalysisPreparation = {
@@ -175,6 +176,7 @@ export type AnalysisPreparation = {
   decision_points: AnalysisDecisionPoint[]
   datasets: AnalysisDataset[]
   blockers: string[]
+  test_data_visible: boolean
   options: {
     classes: Array<{ id: number; name: string; grade: string; student_count: number }>
     courses: Array<{
@@ -293,6 +295,8 @@ export type ModelValidation = {
   datasets: AnalysisDataset[]
   longitudinal_runs: LongitudinalRun[]
   comparison_runs: ModelComparisonRun[]
+  calibration_runs: ClassCalibrationRun[]
+  test_data_visible: boolean
   rules: {
     model_comparison_is_shadow_only: boolean
     minimum_evaluation_n: number
@@ -301,8 +305,30 @@ export type ModelValidation = {
   }
 }
 
+export type ClassCalibrationRun = {
+  id: number
+  run_id: string
+  dataset_id: number
+  dataset_key: string
+  comparison_run_id: number
+  subject: { id: number; name: string }
+  status: string
+  status_label: string
+  calibration_version: string
+  model_key: string
+  global_parameters: Record<string, unknown>
+  class_parameters: Record<string, unknown>
+  model_card: Record<string, unknown>
+  manifest: { blockers?: string[]; [key: string]: unknown }
+  manifest_hash: string
+  artifact_hash: string
+  suggestion_count: number
+  created_at: string
+  finished_at: string | null
+}
+
 export function getAnalysisPreparation() {
-  return apiRequest<AnalysisPreparation>('/api/v1/school-admin/analytics/preparation/')
+  return apiRequest<AnalysisPreparation>('/api/v1/school-admin/analytics/preparation/?include_test_data=1')
 }
 
 export function createAnalysisDecisionPoint(payload: {
@@ -332,19 +358,33 @@ export function createAnalysisDataset(payload: { subject_id: number; outcome_key
 }
 
 export function getModelValidation() {
-  return apiRequest<ModelValidation>('/api/v1/school-admin/analytics/models/')
+  return apiRequest<ModelValidation>('/api/v1/school-admin/analytics/models/?include_test_data=1')
 }
 
 export function createLongitudinalAnalysis(payload: { dataset_id: number }) {
   return apiRequest<{ run: LongitudinalRun }>(
-    '/api/v1/school-admin/analytics/models/longitudinal/',
+    '/api/v1/school-admin/analytics/models/longitudinal/?include_test_data=1',
     { method: 'POST', body: toJsonBody(payload) }
   )
 }
 
 export function createModelComparison(payload: { dataset_id: number }) {
   return apiRequest<{ run: ModelComparisonRun }>(
-    '/api/v1/school-admin/analytics/models/compare/',
+    '/api/v1/school-admin/analytics/models/compare/?include_test_data=1',
+    { method: 'POST', body: toJsonBody(payload) }
+  )
+}
+
+export function createAdvancedModelComparison(payload: { dataset_id: number }) {
+  return apiRequest<{ run: ModelComparisonRun }>(
+    '/api/v1/school-admin/analytics/models/compare-advanced/?include_test_data=1',
+    { method: 'POST', body: toJsonBody(payload) }
+  )
+}
+
+export function createClassCalibration(payload: { dataset_id: number }) {
+  return apiRequest<{ run: ClassCalibrationRun }>(
+    '/api/v1/school-admin/analytics/models/class-calibration/?include_test_data=1',
     { method: 'POST', body: toJsonBody(payload) }
   )
 }

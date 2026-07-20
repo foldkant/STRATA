@@ -371,3 +371,124 @@ class NegativeControlResult(models.Model):
     def clean(self):
         if not isinstance(self.details, dict):
             raise ValidationError({"details": "负对照详情必须是 JSON 对象。"})
+
+
+class ClassCalibrationRun(models.Model):
+    """保存全局模型在班级层面的校准候选，不直接改变学生层级。"""
+
+    class Status(models.TextChoices):
+        BUILDING = "building", "生成中"
+        CANDIDATE = "candidate", "待教师使用"
+        BLOCKED = "blocked", "暂不生成建议"
+        FAILED = "failed", "生成失败"
+        ARCHIVED = "archived", "已归档"
+
+    run_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    run_key = models.CharField(max_length=96, unique=True)
+    dataset = models.ForeignKey(
+        TrainingDatasetVersion,
+        on_delete=models.PROTECT,
+        related_name="class_calibration_runs",
+    )
+    comparison_run = models.ForeignKey(
+        ModelComparisonRun,
+        on_delete=models.PROTECT,
+        related_name="class_calibration_runs",
+    )
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="class_calibration_runs",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="class_calibration_runs",
+    )
+    calibration_version = models.CharField(max_length=32, default="model-03-v1")
+    model_key = models.CharField(max_length=16, blank=True)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.BUILDING,
+    )
+    global_parameters = models.JSONField(default=dict, blank=True)
+    class_parameters = models.JSONField(default=dict, blank=True)
+    model_card = models.JSONField(default=dict, blank=True)
+    manifest = models.JSONField(default=dict, blank=True)
+    manifest_hash = models.CharField(max_length=64, blank=True)
+    artifact_path = models.CharField(max_length=500, blank=True)
+    artifact_hash = models.CharField(max_length=64, blank=True)
+    suggestion_count = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_class_calibration_runs",
+    )
+    error_message = models.CharField(max_length=1000, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dataset", "calibration_version"],
+                name="uniq_class_calibration_dataset_version",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["school", "subject", "status"]),
+            models.Index(fields=["comparison_run", "created_at"]),
+        ]
+        ordering = ["-created_at", "-id"]
+
+    def clean(self):
+        errors = {}
+        if self.dataset_id and self.dataset.status != TrainingDatasetVersion.Status.FROZEN:
+            errors["dataset"] = "班级校准只能读取已冻结的数据版本。"
+        if self.dataset_id and self.dataset.school_id != self.school_id:
+            errors["school"] = "班级校准学校与数据版本不一致。"
+        if self.dataset_id and self.dataset.subject_id != self.subject_id:
+            errors["subject"] = "班级校准学科与数据版本不一致。"
+        if self.comparison_run_id and self.comparison_run.dataset_id != self.dataset_id:
+            errors["comparison_run"] = "班级校准与模型比较数据版本不一致。"
+        if not isinstance(self.global_parameters, dict):
+            errors["global_parameters"] = "全局校准参数必须是 JSON 对象。"
+        if not isinstance(self.class_parameters, dict):
+            errors["class_parameters"] = "班级校准参数必须是 JSON 对象。"
+        if not isinstance(self.model_card, dict) or not isinstance(self.manifest, dict):
+            errors["manifest"] = "模型卡和运行清单必须是 JSON 对象。"
+        if self.status in {self.Status.CANDIDATE, self.Status.BLOCKED}:
+            if not self.finished_at:
+                errors["finished_at"] = "已结束的班级校准必须记录完成时间。"
+            if not self.manifest_hash:
+                errors["manifest_hash"] = "已结束的班级校准必须保存清单摘要。"
+        for field_name in ("manifest_hash", "artifact_hash"):
+            value = getattr(self, field_name)
+            if value and not HASH_PATTERN.fullmatch(value):
+                errors[field_name] = "摘要必须是 64 位小写 SHA-256。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        previous = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        if previous and previous.status in {
+            self.Status.CANDIDATE,
+            self.Status.BLOCKED,
+            self.Status.ARCHIVED,
+        }:
+            raise ValidationError("已结束的班级校准不可修改。")
+        if self.status in {self.Status.CANDIDATE, self.Status.BLOCKED}:
+            if not self.finished_at:
+                self.finished_at = timezone.now()
+            if not self.manifest_hash:
+                self.manifest_hash = canonical_hash(self.manifest)
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        if self.status != self.Status.BUILDING:
+            raise ValidationError("已结束的班级校准不可直接删除。")
+        return super().delete(*args, **kwargs)

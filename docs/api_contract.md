@@ -896,6 +896,8 @@ POST /api/v1/teacher/analytics/stratification/{id}/review/
 
 `review` 请求的 `action` 为 `accept|keep|adjust|defer`；`adjust` 另传 `layer=A|B|C`。教师只能读取本人课程和任教班级。采纳和调整只保存教师审核结果，不直接改写学生档案层级。学生不能访问这些接口，学生响应不包含层级、参考强度、原因或排名。
 
+建议响应同时返回 `rule_version` 和 `source_label`，用于区分“透明规则建议”和“班级校准候选”。模型内部指标键不会直接展示给教师，旧记录会在响应层转换成“近 30 日资源完成率：25%”等可读依据。存在待处理班级校准候选时，同一学生、课程不再并行产生透明规则待办；透明规则仍保留为模型比较基线和历史记录。
+
 ### 公告
 
 ```text
@@ -1575,10 +1577,12 @@ GET  /api/v1/school-admin/analytics/preparation/datasets/{id}/export/
 GET  /api/v1/school-admin/analytics/models/
 POST /api/v1/school-admin/analytics/models/longitudinal/
 POST /api/v1/school-admin/analytics/models/compare/
+POST /api/v1/school-admin/analytics/models/compare-advanced/
+POST /api/v1/school-admin/analytics/models/class-calibration/
 GET  /api/v1/school-admin/analytics/models/{id}/export/
 ```
 
-查询接口返回本校正式冻结数据版本、LONG-01 重复测量结果和 MODEL-01 比较结果。结果包含个人内/学生间/班级描述、M00-M03、V-A 至 V-E、覆盖率、拒绝预测数、负对照和模型卡；不返回学生姓名、账号、学号、内部匿名编号或个人预测。
+查询接口返回本校正式冻结数据版本、LONG-01、MODEL-01、MODEL-02 和 MODEL-03 结果。内容包括个人内/学生间/班级描述、M00-M03、CatBoost、LightGBM、V-A 至 V-E、覆盖率、拒绝预测数、校准、稳定性、班级差异、负对照、模型卡和班级校准候选汇总；不返回学生姓名、账号、学号、内部匿名编号或个人预测。
 
 建立重复测量统计或模型比较的请求体为：
 
@@ -1588,7 +1592,9 @@ GET  /api/v1/school-admin/analytics/models/{id}/export/
 
 相同数据版本和分析版本重复请求返回已有记录。只有已冻结、属于当前学校且不是模拟批次的数据版本可通过学校管理员接口使用。测试样本少于 30 条只返回“数据不足”；不能通过页面参数绕过样本门槛。
 
-模型比较始终是影子结果。`shadow_only` 表示工程比较完成，`blocked` 表示存在数据不足或负对照问题；两者都不能直接生成学生层级、改变课堂内容或向学生展示。导出 XLSX 包含模型卡、模型比较、重复测量和负对照四张表。
+模型比较始终是影子结果。`shadow_only` 表示工程比较完成，`blocked` 表示存在数据不足、实际预测数不足或防误判问题。MODEL-03 的 `candidate` 只表示已生成教师待确认候选，不会自动修改学生层级。导出 XLSX 包含模型卡、模型比较、重复测量、防误判检查、稳定性、班级差异、班级校准和班级参数八张表。
+
+`include_test_data=1` 仅在 `DEBUG=true` 时允许学校管理员查看和导出本校模拟批次；生产环境忽略该参数。正式接口和正式夜间任务始终排除模拟数据。
 
 ## 教师评价标准管理
 

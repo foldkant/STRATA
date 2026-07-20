@@ -73,6 +73,8 @@ export type StratificationSuggestionRow = {
   missing_data: string[]
   learning_summary: { summary_id?: number; data_status?: string; metrics?: LearningSummaryMetrics; index?: number | null }
   support_suggestion: string
+  rule_version: string
+  source_label: string
   window_start: string | null
   window_end: string | null
   status: string

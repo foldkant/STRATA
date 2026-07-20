@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
+  createAdvancedModelComparison,
   createAnalysisDataset,
   createAnalysisDecisionPoint,
+  createClassCalibration,
   createLongitudinalAnalysis,
   createModelComparison,
   getAnalysisPreparation,
@@ -24,6 +26,7 @@ const loading = ref(true)
 const working = ref(false)
 const pointModalOpen = ref(false)
 const datasetModalOpen = ref(false)
+const showAllDecisionPoints = ref(false)
 const notice = ref('')
 const noticeTone = ref<'success' | 'warning' | 'error' | 'info'>('info')
 
@@ -54,6 +57,11 @@ const subjects = computed(() => {
 const selectedOutcome = computed(() =>
   data.value?.outcome_definitions.find((item) => item.key === datasetForm.outcome_key)
 )
+
+const visibleDecisionPoints = computed(() => {
+  const points = data.value?.decision_points || []
+  return showAllDecisionPoints.value ? points : points.slice(0, 8)
+})
 
 const controlLabels: Record<string, string> = {
   label_permutation: '结果打乱检查',
@@ -118,11 +126,18 @@ async function loadData(showLoading = true) {
   }
 }
 
-function datasetHasRun(dataset: AnalysisDataset, type: 'longitudinal' | 'comparison') {
+function datasetHasRun(dataset: AnalysisDataset, type: 'longitudinal' | 'comparison' | 'advanced' | 'calibration') {
   if (!validation.value) return false
-  return type === 'longitudinal'
-    ? validation.value.longitudinal_runs.some((run) => run.dataset_id === dataset.id)
-    : validation.value.comparison_runs.some((run) => run.dataset_id === dataset.id)
+  if (type === 'longitudinal') {
+    return validation.value.longitudinal_runs.some((run) => run.dataset_id === dataset.id)
+  }
+  if (type === 'calibration') {
+    return validation.value.calibration_runs.some((run) => run.dataset_id === dataset.id)
+  }
+  const version = type === 'advanced' ? 'model-02' : 'model-01'
+  return validation.value.comparison_runs.some(
+    (run) => run.dataset_id === dataset.id && run.comparison_version.startsWith(version)
+  )
 }
 
 function latestComparison(datasetId: number) {
@@ -145,6 +160,30 @@ async function runValidation(dataset: AnalysisDataset, type: 'longitudinal' | 'c
     await loadData(false)
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '验证任务生成失败。'
+    noticeTone.value = 'error'
+  } finally {
+    working.value = false
+  }
+}
+
+async function runAdvancedValidation(dataset: AnalysisDataset, type: 'advanced' | 'calibration') {
+  if (working.value) return
+  working.value = true
+  notice.value = ''
+  try {
+    if (type === 'advanced') {
+      await createAdvancedModelComparison({ dataset_id: dataset.id })
+      notice.value = 'CatBoost、LightGBM 与四种基础方法的同范围比较已生成。'
+    } else {
+      const result = await createClassCalibration({ dataset_id: dataset.id })
+      notice.value = result.run.status === 'candidate'
+        ? `已生成 ${result.run.suggestion_count} 条教师审核候选，学生层级没有自动改变。`
+        : '班级校准暂未生成建议，页面已保留阻塞原因。'
+    }
+    noticeTone.value = 'success'
+    await loadData(false)
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '模型任务生成失败。'
     noticeTone.value = 'error'
   } finally {
     working.value = false
@@ -249,6 +288,11 @@ onMounted(loadData)
     </section>
 
     <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" />
+    <NoticeLine
+      v-if="data?.test_data_visible"
+      message="当前为本地测试环境，页面会显示带测试标记的数据；正式部署默认排除。"
+      tone="warning"
+    />
 
     <section v-if="loading" class="panel analysis-loading" aria-live="polite">
       <strong>正在加载分析准备情况</strong>
@@ -331,7 +375,7 @@ onMounted(loadData)
               </tr>
             </thead>
             <tbody>
-              <tr v-for="point in data.decision_points" :key="point.id">
+              <tr v-for="point in visibleDecisionPoints" :key="point.id">
                 <td data-label="班级与课程">
                   <strong>{{ point.class_group.name }} · {{ point.course?.title || point.subject.name }}</strong>
                   <small>{{ point.subject.name }} · {{ point.purpose_label }}</small>
@@ -354,7 +398,12 @@ onMounted(loadData)
             </tbody>
           </table>
         </div>
-        <p v-else class="analysis-empty-copy">尚未建立分析时间点。</p>
+        <div v-if="data.decision_points.length > 8" class="analysis-table-more">
+          <button class="secondary-button" type="button" @click="showAllDecisionPoints = !showAllDecisionPoints">
+            {{ showAllDecisionPoints ? '收起较早记录' : `显示全部 ${data.decision_points.length} 个时间点` }}
+          </button>
+        </div>
+        <p v-if="!data.decision_points.length" class="analysis-empty-copy">尚未建立分析时间点。</p>
       </section>
 
       <section class="panel analysis-table-panel">
@@ -380,7 +429,9 @@ onMounted(loadData)
               <tr v-for="dataset in data.datasets" :key="dataset.id">
                 <td data-label="学科与结果">
                   <strong>{{ dataset.subject.name }} · {{ dataset.outcome.label }}</strong>
-                  <small :title="dataset.manifest_hash">版本 {{ dataset.feature_set.version }} · {{ shortHash(dataset.manifest_hash) }}</small>
+                  <small :title="dataset.manifest_hash">
+                    {{ dataset.is_test_data ? '测试数据 · ' : '' }}版本 {{ dataset.feature_set.version }} · {{ shortHash(dataset.manifest_hash) }}
+                  </small>
                 </td>
                 <td data-label="范围">
                   <span>{{ formatDateTime(dataset.decision_start) }}</span>
@@ -399,7 +450,7 @@ onMounted(loadData)
                   </small>
                 </td>
                 <td data-label="操作">
-                  <a class="secondary-button compact-action" :href="`/api/v1/school-admin/analytics/preparation/datasets/${dataset.id}/export/`">
+                  <a class="secondary-button compact-action" :href="`/api/v1/school-admin/analytics/preparation/datasets/${dataset.id}/export/?include_test_data=1`">
                     导出 XLSX
                   </a>
                 </td>
@@ -414,7 +465,7 @@ onMounted(loadData)
         <header class="analysis-validation-heading">
           <div>
             <h2>统计验证</h2>
-            <p>先检查重复测量和透明基线，再考虑后续机器学习。结果不会自动改变学生层级。</p>
+            <p>依次检查重复测量、透明基线、结构化模型和班级校准。所有结果均需教师确认。</p>
           </div>
           <span class="analysis-validation-badge">M00-M03 · 影子比较</span>
         </header>
@@ -448,6 +499,22 @@ onMounted(loadData)
               >
                 {{ datasetHasRun(dataset, 'comparison') ? '已生成模型比较' : '运行 M00-M03' }}
               </button>
+              <button
+                class="secondary-button compact-action"
+                type="button"
+                :disabled="working || datasetHasRun(dataset, 'advanced') || !dataset.comparison_ready"
+                @click="runAdvancedValidation(dataset, 'advanced')"
+              >
+                {{ datasetHasRun(dataset, 'advanced') ? '结构化模型已比较' : '比较 CatBoost / LightGBM' }}
+              </button>
+              <button
+                class="primary-button compact-action"
+                type="button"
+                :disabled="working || datasetHasRun(dataset, 'calibration') || !datasetHasRun(dataset, 'advanced')"
+                @click="runAdvancedValidation(dataset, 'calibration')"
+              >
+                {{ datasetHasRun(dataset, 'calibration') ? '班级候选已生成' : '生成班级校准候选' }}
+              </button>
             </div>
             <p v-if="latestComparison(dataset.id)?.manifest.blockers?.length" class="analysis-validation-note">
               {{ latestComparison(dataset.id)?.manifest.blockers?.[0] }}
@@ -475,20 +542,28 @@ onMounted(loadData)
                     <small>{{ run.row_count }} 条已观察结果 · {{ run.status_label }}</small>
                   </td>
                   <td data-label="检查方式"><span>{{ run.validation_keys.join('、') }}</span><small>测试样本不足时不输出指标</small></td>
-                  <td data-label="基础方法">
+                  <td data-label="比较方法">
                     <strong>{{ run.evaluations.filter((item) => item.status === 'ready').length }} 个可报告单元</strong>
-                    <small>已保存拒绝预测和覆盖率</small>
+                    <small>{{ run.model_keys.join('、') }}</small>
                   </td>
                   <td data-label="防误判检查">
                     <span v-for="control in run.negative_controls" :key="control.control_key" class="analysis-control-chip" :class="toneClass(control.status === 'passed' ? 'success' : control.status === 'failed' ? 'warning' : 'info')">
                       {{ controlLabels[control.control_key] || control.control_key }} · {{ control.status_label }}
                     </span>
                   </td>
-                  <td data-label="操作"><a class="secondary-button compact-action" :href="`/api/v1/school-admin/analytics/models/${run.id}/export/`">导出 XLSX</a></td>
+                  <td data-label="操作"><a class="secondary-button compact-action" :href="`/api/v1/school-admin/analytics/models/${run.id}/export/?include_test_data=1`">导出 XLSX</a></td>
                 </tr>
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div v-if="validation?.calibration_runs.length" class="analysis-calibration-results">
+          <header><div><h3>班级校准候选</h3><p>只生成教师审核建议，不改写学生当前层级。</p></div></header>
+          <article v-for="run in validation.calibration_runs" :key="run.id">
+            <div><strong>{{ run.subject.name }} · {{ run.model_key || '暂未选择模型' }}</strong><small>{{ run.calibration_version }} · {{ run.status_label }}</small></div>
+            <div><span>班级参数 {{ Object.keys(run.class_parameters).length }} 组</span><strong>教师候选 {{ run.suggestion_count }} 条</strong></div>
+          </article>
         </div>
       </section>
     </template>

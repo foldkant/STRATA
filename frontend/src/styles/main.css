@@ -257,6 +257,7 @@ textarea {
 
 .analysis-table {
   width: 100%;
+  min-width: 0;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -267,6 +268,14 @@ textarea {
   padding: 12px 14px;
   text-align: left;
   vertical-align: middle;
+  white-space: normal;
+}
+
+.analysis-table-more {
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid var(--line);
+  padding: 12px 16px;
 }
 
 .analysis-table th {
@@ -530,6 +539,54 @@ textarea {
   font-size: 16px;
 }
 
+.analysis-calibration-results {
+  overflow: hidden;
+  border: 1px solid #b9d8ca;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.analysis-calibration-results > header,
+.analysis-calibration-results > article {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  padding: 13px 14px;
+}
+
+.analysis-calibration-results > article:last-child {
+  border-bottom: 0;
+}
+
+.analysis-calibration-results h3,
+.analysis-calibration-results p,
+.analysis-calibration-results strong,
+.analysis-calibration-results small,
+.analysis-calibration-results span {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.analysis-calibration-results p,
+.analysis-calibration-results small,
+.analysis-calibration-results span {
+  color: var(--muted);
+}
+
+.analysis-calibration-results article > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.analysis-calibration-results article > div:last-child {
+  justify-items: end;
+  text-align: right;
+}
+
 .analysis-control-chip {
   display: inline-flex;
   margin: 2px 4px 2px 0;
@@ -544,8 +601,15 @@ textarea {
   }
 
   .analysis-validation-heading,
-  .analysis-validation-card-head {
+  .analysis-validation-card-head,
+  .analysis-calibration-results > header,
+  .analysis-calibration-results > article {
     display: grid;
+  }
+
+  .analysis-calibration-results article > div:last-child {
+    justify-items: start;
+    text-align: left;
   }
 
   .analysis-validation-badge {

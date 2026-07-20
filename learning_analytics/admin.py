@@ -26,6 +26,7 @@ from .models import (
     SensitiveInferenceAccessLog,
     StudentLearningSummary,
     SyntheticDatasetRun,
+    ClassCalibrationRun,
     LongitudinalAnalysisRun,
     LongitudinalFeatureResult,
     ModelComparisonRun,
@@ -653,3 +654,19 @@ class NegativeControlResultAdmin(ReadOnlyAnalyticsAdmin):
     list_filter = ("status", "control_key")
     search_fields = ("run__run_key", "control_key")
     readonly_fields = tuple(field.name for field in NegativeControlResult._meta.fields)
+
+
+@admin.register(ClassCalibrationRun)
+class ClassCalibrationRunAdmin(ReadOnlyAnalyticsAdmin):
+    list_display = (
+        "dataset",
+        "school",
+        "subject",
+        "model_key",
+        "status",
+        "suggestion_count",
+        "created_at",
+    )
+    list_filter = ("status", "school", "subject", "model_key")
+    search_fields = ("run_key", "dataset__dataset_key", "subject__name")
+    readonly_fields = tuple(field.name for field in ClassCalibrationRun._meta.fields)

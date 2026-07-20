@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import Count, Prefetch, Q
@@ -23,6 +24,7 @@ from learning_analytics.models import (
     OutcomeObservation,
     StudentFeatureSnapshot,
     TrainingDatasetVersion,
+    ClassCalibrationRun,
     LongitudinalAnalysisRun,
     ModelComparisonRun,
 )
@@ -36,6 +38,10 @@ from learning_analytics.services.outcomes import (
 )
 from learning_analytics.services.longitudinal import build_longitudinal_analysis
 from learning_analytics.services.model_comparison import build_model_comparison
+from learning_analytics.services.advanced_models import build_model_02_comparison
+from learning_analytics.services.class_calibration import (
+    build_class_calibration_candidate,
+)
 from learning_analytics.services.quality import (
     QUALITY_THRESHOLDS,
     latest_quality_report,
@@ -60,6 +66,14 @@ TASK_LABELS = {
     "compare_old_new_records": "核对新旧记录",
     "save_data_check_report": "保存检查报告",
 }
+
+
+def _include_test_data(request) -> bool:
+    return bool(
+        settings.DEBUG
+        and str(request.query_params.get("include_test_data") or "").lower()
+        in {"1", "true", "yes"}
+    )
 
 
 def _task_row(task: AnalyticsTaskRun) -> dict:
@@ -508,6 +522,7 @@ def _dataset_row(dataset: TrainingDatasetVersion) -> dict:
         "manifest_hash": dataset.manifest_hash,
         "created_at": dataset.created_at,
         "frozen_at": dataset.frozen_at,
+        "is_test_data": bool(dataset.synthetic_run_id),
     }
 
 
@@ -516,6 +531,7 @@ def _dataset_row(dataset: TrainingDatasetVersion) -> dict:
 def analysis_preparation(request):
     sync_feature_and_outcome_definitions()
     school = request.user.school
+    include_test_data = _include_test_data(request)
     feature_set = FeatureSetVersion.objects.filter(
         status=FeatureSetVersion.Status.ACTIVE
     ).first()
@@ -525,11 +541,11 @@ def analysis_preparation(request):
             status=OutcomeDefinition.Status.ACTIVE
         ).order_by("outcome_key")
     )
+    point_query = DecisionPoint.objects.filter(school=school)
+    if not include_test_data:
+        point_query = point_query.filter(synthetic_run__isnull=True)
     points = list(
-        DecisionPoint.objects.filter(
-            school=school,
-            synthetic_run__isnull=True,
-        )
+        point_query
         .select_related("class_group", "subject", "course", "feature_set")
         .prefetch_related(
             Prefetch(
@@ -551,25 +567,28 @@ def analysis_preparation(request):
         )
         .order_by("-scheduled_for")[:30]
     )
+    dataset_query = TrainingDatasetVersion.objects.filter(school=school)
+    if not include_test_data:
+        dataset_query = dataset_query.filter(synthetic_run__isnull=True)
     datasets = list(
-        TrainingDatasetVersion.objects.filter(
-            school=school,
-            synthetic_run__isnull=True,
-        )
+        dataset_query
         .select_related("subject", "feature_set", "outcome_definition")
         .order_by("-created_at")[:30]
     )
-    current_outcomes = _current_outcomes(
-        OutcomeObservation.objects.filter(
-            decision_point__school=school,
-            decision_point__synthetic_run__isnull=True,
+    outcome_query = OutcomeObservation.objects.filter(decision_point__school=school)
+    if not include_test_data:
+        outcome_query = outcome_query.filter(
+            decision_point__synthetic_run__isnull=True
         )
-    )
+    current_outcomes = _current_outcomes(outcome_query)
     snapshot_query = StudentFeatureSnapshot.objects.filter(
         school=school,
-        decision_point__synthetic_run__isnull=True,
         view_type=StudentFeatureSnapshot.ViewType.OPERATIONAL,
     )
+    if not include_test_data:
+        snapshot_query = snapshot_query.filter(
+            decision_point__synthetic_run__isnull=True
+        )
     quality_report = latest_quality_report(school=school)
     blockers = []
     if quality_report is None:
@@ -610,6 +629,7 @@ def analysis_preparation(request):
     return ok(
         {
             "school": {"id": school.id, "name": school.name, "code": school.code},
+            "test_data_visible": include_test_data,
             "summary": {
                 "feature_definition_count": features.count(),
                 "model_input_feature_count": features.filter(
@@ -824,12 +844,14 @@ def create_training_dataset(request):
 @api_view(["GET"])
 @permission_classes([IsSchoolAdmin])
 def export_training_dataset(request, pk: int):
+    dataset_query = TrainingDatasetVersion.objects.filter(
+        pk=pk,
+        school=request.user.school,
+    )
+    if not _include_test_data(request):
+        dataset_query = dataset_query.filter(synthetic_run__isnull=True)
     dataset = (
-        TrainingDatasetVersion.objects.filter(
-            pk=pk,
-            school=request.user.school,
-            synthetic_run__isnull=True,
-        )
+        dataset_query
         .select_related("school", "subject", "feature_set", "outcome_definition")
         .first()
     )
@@ -1029,36 +1051,74 @@ def _model_comparison_row(run: ModelComparisonRun, detail=False):
     }
 
 
+def _class_calibration_row(run: ClassCalibrationRun):
+    return {
+        "id": run.id,
+        "run_id": str(run.run_id),
+        "dataset_id": run.dataset_id,
+        "dataset_key": run.dataset.dataset_key,
+        "comparison_run_id": run.comparison_run_id,
+        "subject": {"id": run.subject_id, "name": run.subject.name},
+        "status": run.status,
+        "status_label": run.get_status_display(),
+        "calibration_version": run.calibration_version,
+        "model_key": run.model_key,
+        "global_parameters": run.global_parameters,
+        "class_parameters": run.class_parameters,
+        "model_card": run.model_card,
+        "manifest": run.manifest,
+        "manifest_hash": run.manifest_hash,
+        "artifact_hash": run.artifact_hash,
+        "suggestion_count": run.suggestion_count,
+        "created_at": run.created_at,
+        "finished_at": run.finished_at,
+    }
+
+
 @api_view(["GET"])
 @permission_classes([IsSchoolAdmin])
 def model_validation(request):
     school = request.user.school
-    longitudinal_runs = list(
-        LongitudinalAnalysisRun.objects.filter(
-            school=school,
-            dataset__synthetic_run__isnull=True,
+    include_test_data = _include_test_data(request)
+    longitudinal_query = LongitudinalAnalysisRun.objects.filter(school=school)
+    comparison_query = ModelComparisonRun.objects.filter(school=school)
+    dataset_query = TrainingDatasetVersion.objects.filter(
+        school=school,
+        status=TrainingDatasetVersion.Status.FROZEN,
+    )
+    calibration_query = ClassCalibrationRun.objects.filter(school=school)
+    if not include_test_data:
+        longitudinal_query = longitudinal_query.filter(
+            dataset__synthetic_run__isnull=True
         )
+        comparison_query = comparison_query.filter(
+            dataset__synthetic_run__isnull=True
+        )
+        dataset_query = dataset_query.filter(synthetic_run__isnull=True)
+        calibration_query = calibration_query.filter(
+            dataset__synthetic_run__isnull=True
+        )
+    longitudinal_runs = list(
+        longitudinal_query
         .select_related("dataset", "subject")
         .prefetch_related("feature_results")
         .order_by("-created_at")[:20]
     )
     comparison_runs = list(
-        ModelComparisonRun.objects.filter(
-            school=school,
-            dataset__synthetic_run__isnull=True,
-        )
+        comparison_query
         .select_related("dataset", "subject")
         .prefetch_related("evaluations", "negative_controls")
         .order_by("-created_at")[:20]
     )
     datasets = list(
-        TrainingDatasetVersion.objects.filter(
-            school=school,
-            synthetic_run__isnull=True,
-            status=TrainingDatasetVersion.Status.FROZEN,
-        )
+        dataset_query
         .select_related("subject", "outcome_definition")
         .order_by("-created_at")[:50]
+    )
+    calibration_runs = list(
+        calibration_query.select_related(
+            "dataset", "comparison_run", "subject"
+        ).order_by("-created_at")[:20]
     )
     return ok(
         {
@@ -1069,6 +1129,10 @@ def model_validation(request):
             "comparison_runs": [
                 _model_comparison_row(item) for item in comparison_runs
             ],
+            "calibration_runs": [
+                _class_calibration_row(item) for item in calibration_runs
+            ],
+            "test_data_visible": include_test_data,
             "rules": {
                 "model_comparison_is_shadow_only": True,
                 "minimum_evaluation_n": 30,
@@ -1084,13 +1148,15 @@ def _dataset_for_school(request, request_data):
         dataset_id = int(request_data.get("dataset_id") or 0)
     except (TypeError, ValueError):
         raise ValidationError("数据版本编号不正确。")
+    dataset_query = TrainingDatasetVersion.objects.filter(
+        pk=dataset_id,
+        school=request.user.school,
+        status=TrainingDatasetVersion.Status.FROZEN,
+    )
+    if not _include_test_data(request):
+        dataset_query = dataset_query.filter(synthetic_run__isnull=True)
     dataset = (
-        TrainingDatasetVersion.objects.filter(
-            pk=dataset_id,
-            school=request.user.school,
-            synthetic_run__isnull=True,
-            status=TrainingDatasetVersion.Status.FROZEN,
-        )
+        dataset_query
         .select_related("school", "subject", "feature_set", "outcome_definition")
         .first()
     )
@@ -1137,15 +1203,65 @@ def create_model_comparison(request):
     )
 
 
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def create_model_02_comparison(request):
+    try:
+        dataset = _dataset_for_school(request, request.data)
+        run = build_model_02_comparison(
+            dataset=dataset,
+            created_by=request.user,
+            include_test_data=_include_test_data(request),
+        )
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    run = ModelComparisonRun.objects.select_related(
+        "dataset", "subject"
+    ).prefetch_related("evaluations", "negative_controls").get(pk=run.pk)
+    return ok(
+        {"run": _model_comparison_row(run, detail=True)},
+        "MODEL-02 结构化模型比较已生成。"
+        if run.status == ModelComparisonRun.Status.SHADOW_ONLY
+        else "MODEL-02 已运行，但当前结果暂不生成教学建议。",
+        status=201,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def create_class_calibration(request):
+    try:
+        dataset = _dataset_for_school(request, request.data)
+        run = build_class_calibration_candidate(
+            dataset=dataset,
+            created_by=request.user,
+            include_test_data=_include_test_data(request),
+        )
+    except ValidationError as exc:
+        return fail(_validation_message(exc), status=409)
+    run = ClassCalibrationRun.objects.select_related(
+        "dataset", "comparison_run", "subject"
+    ).get(pk=run.pk)
+    return ok(
+        {"run": _class_calibration_row(run)},
+        "班级校准候选已生成，学生层级没有被自动修改。"
+        if run.status == ClassCalibrationRun.Status.CANDIDATE
+        else "班级校准暂未生成建议，请查看阻塞原因。",
+        status=201,
+    )
+
+
 @api_view(["GET"])
 @permission_classes([IsSchoolAdmin])
 def export_model_validation(request, pk: int):
+    run_query = ModelComparisonRun.objects.filter(
+        pk=pk,
+        school=request.user.school,
+    )
+    if not _include_test_data(request):
+        run_query = run_query.filter(dataset__synthetic_run__isnull=True)
     run = (
-        ModelComparisonRun.objects.filter(
-            pk=pk,
-            school=request.user.school,
-            dataset__synthetic_run__isnull=True,
-        )
+        run_query
         .select_related("dataset", "subject")
         .prefetch_related("evaluations", "negative_controls")
         .first()
@@ -1156,6 +1272,66 @@ def export_model_validation(request, pk: int):
     longitudinal_results = list(
         longitudinal.feature_results.order_by("feature_key") if longitudinal else []
     )
+    stability_rows = []
+    class_difference_rows = []
+    for item in run.evaluations.all():
+        stability = item.metrics.get("stability") or {}
+        if stability:
+            stability_rows.append(
+                [
+                    item.model_key,
+                    item.validation_key,
+                    stability.get("status"),
+                    stability.get("shared_prediction_count"),
+                    stability.get("max_absolute_delta"),
+                    stability.get("rule"),
+                ]
+            )
+        fairness = item.metrics.get("fairness") or {}
+        for group in fairness.get("groups") or []:
+            class_difference_rows.append(
+                [
+                    item.model_key,
+                    item.validation_key,
+                    group.get("class_key"),
+                    group.get("status"),
+                    group.get("n"),
+                    group.get("coverage"),
+                    group.get("mae"),
+                    fairness.get("mae_gap"),
+                ]
+            )
+    calibration = ClassCalibrationRun.objects.filter(
+        dataset=run.dataset,
+        comparison_run=run,
+    ).first()
+    calibration_rows = []
+    if calibration:
+        calibration_rows.extend(
+            [
+                ["状态", calibration.get_status_display()],
+                ["模型", calibration.model_key],
+                ["建议数量", calibration.suggestion_count],
+                ["模型文件", calibration.artifact_path],
+                ["文件校验码", calibration.artifact_hash],
+            ]
+        )
+        calibration_rows.extend(
+            [f"全局参数.{key}", value]
+            for key, value in calibration.global_parameters.items()
+        )
+    class_calibration_rows = [
+        [
+            class_key,
+            values.get("n"),
+            values.get("raw_residual_mean"),
+            values.get("shrinkage_weight"),
+            values.get("calibration_correction"),
+        ]
+        for class_key, values in (
+            calibration.class_parameters.items() if calibration else []
+        )
+    ]
     workbook = build_workbook(
         [
             {
@@ -1243,6 +1419,48 @@ def export_model_validation(request, pk: int):
                     ]
                     for item in run.negative_controls.all()
                 ],
+            },
+            {
+                "title": "稳定性",
+                "headers": [
+                    "模型",
+                    "验证方式",
+                    "状态",
+                    "共同预测数",
+                    "最大差异",
+                    "检查规则",
+                ],
+                "rows": stability_rows,
+            },
+            {
+                "title": "班级差异",
+                "headers": [
+                    "模型",
+                    "验证方式",
+                    "班级编号",
+                    "状态",
+                    "记录数",
+                    "覆盖率",
+                    "MAE",
+                    "班级间 MAE 差",
+                ],
+                "rows": class_difference_rows,
+            },
+            {
+                "title": "班级校准",
+                "headers": ["项目", "内容"],
+                "rows": calibration_rows,
+            },
+            {
+                "title": "班级参数",
+                "headers": [
+                    "班级编号",
+                    "记录数",
+                    "原始残差均值",
+                    "收缩权重",
+                    "校准修正值",
+                ],
+                "rows": class_calibration_rows,
             },
         ]
     )

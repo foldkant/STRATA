@@ -26,6 +26,9 @@ const refreshing = ref(false)
 const reviewing = ref(false)
 const notice = ref('')
 const activeView = ref<'summaries' | 'suggestions'>('summaries')
+const suggestionScope = ref<'pending' | 'history'>('pending')
+const suggestionPage = ref(1)
+const suggestionPageSize = 20
 const windowType = ref<'day' | '7d' | '30d' | 'unit'>('7d')
 const classGroup = ref<number | string>('')
 const course = ref<number | string>('')
@@ -55,6 +58,13 @@ const averageScore = computed(() => {
   return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) * 100 / values.length) : null
 })
 const pendingSuggestions = computed(() => suggestions.value.filter((item) => item.status === 'pending'))
+const historicalSuggestions = computed(() => suggestions.value.filter((item) => item.status !== 'pending'))
+const scopedSuggestions = computed(() => suggestionScope.value === 'pending' ? pendingSuggestions.value : historicalSuggestions.value)
+const suggestionPageCount = computed(() => Math.max(1, Math.ceil(scopedSuggestions.value.length / suggestionPageSize)))
+const visibleSuggestions = computed(() => {
+  const start = (suggestionPage.value - 1) * suggestionPageSize
+  return scopedSuggestions.value.slice(start, start + suggestionPageSize)
+})
 const exportUrl = computed(() => learningSummariesExportUrl({
   window: windowType.value,
   class_group: classGroup.value,
@@ -73,6 +83,17 @@ function dataStatusClass(value: string) {
   return `summary-status-${value}`
 }
 
+function formatDateTime(value: string | null) {
+  if (!value) return '-'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? '-' : parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+function setSuggestionScope(value: 'pending' | 'history') {
+  suggestionScope.value = value
+  suggestionPage.value = 1
+}
+
 async function load() {
   loading.value = true
   notice.value = ''
@@ -83,6 +104,7 @@ async function load() {
     ])
     summaries.value = summaryResult.rows
     suggestions.value = suggestionResult
+    suggestionPage.value = 1
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '学习情况加载失败。'
   } finally {
@@ -189,16 +211,16 @@ onMounted(async () => {
             <thead><tr><th>学生</th><th>班级</th><th>课程</th><th>材料状态</th><th>有效任务</th><th>完成率</th><th>得分率</th><th>资源学习</th><th>教师评价</th><th>详情</th></tr></thead>
             <tbody>
               <tr v-for="row in summaries" :key="row.id">
-                <td><strong>{{ row.student.display_name }}</strong><small>{{ row.student.student_no || row.student.username }}</small></td>
-                <td>{{ row.student.class_group.name }}</td>
-                <td><strong>{{ row.course.title }}</strong><small>{{ row.subject.name }}</small></td>
-                <td><span class="summary-status-pill" :class="dataStatusClass(row.data_status)">{{ row.data_status_label }}</span></td>
-                <td>{{ row.metrics.opportunities.eligible_count }}<small>分配 {{ row.metrics.opportunities.assigned_count }}</small></td>
-                <td>{{ percent(row.metrics.completion_rate) }}</td>
-                <td>{{ percent(row.metrics.score.score_rate) }}<small>{{ row.metrics.score.graded_item_count }} 项已评分</small></td>
-                <td>{{ row.metrics.resources.opened_count }} / {{ row.metrics.resources.assigned_count }}</td>
-                <td>{{ stars(row.metrics.evaluation.teacher.average_stars) }}</td>
-                <td><button class="assessment-row-review" type="button" @click="detail = row">查看</button></td>
+                <td data-label="学生"><strong>{{ row.student.display_name }}</strong><small>{{ row.student.student_no || row.student.username }}</small></td>
+                <td data-label="班级">{{ row.student.class_group.name }}</td>
+                <td data-label="课程"><strong>{{ row.course.title }}</strong><small>{{ row.subject.name }}</small></td>
+                <td data-label="材料状态"><span class="summary-status-pill" :class="dataStatusClass(row.data_status)">{{ row.data_status_label }}</span></td>
+                <td data-label="有效任务">{{ row.metrics.opportunities.eligible_count }}<small>分配 {{ row.metrics.opportunities.assigned_count }}</small></td>
+                <td data-label="完成率">{{ percent(row.metrics.completion_rate) }}</td>
+                <td data-label="得分率">{{ percent(row.metrics.score.score_rate) }}<small>{{ row.metrics.score.graded_item_count }} 项已评分</small></td>
+                <td data-label="资源学习">{{ row.metrics.resources.opened_count }} / {{ row.metrics.resources.assigned_count }}</td>
+                <td data-label="教师评价">{{ stars(row.metrics.evaluation.teacher.average_stars) }}</td>
+                <td data-label="详情"><button class="assessment-row-review" type="button" @click="detail = row">查看</button></td>
               </tr>
             </tbody>
           </table>
@@ -209,26 +231,40 @@ onMounted(async () => {
     </template>
 
     <section v-else class="panel stratification-suggestion-panel">
-      <header class="suggestion-list-head"><div><strong>教师审核</strong><span>学生端不显示层级、参考强度和判断原因。</span></div><span>{{ pendingSuggestions.length }} 条待处理</span></header>
+      <header class="suggestion-list-head">
+        <div><strong>教师审核</strong><span>学生端不显示层级、参考强度和判断原因。</span></div>
+        <div class="suggestion-scope-tabs" aria-label="建议状态">
+          <button type="button" :class="{ active: suggestionScope === 'pending' }" @click="setSuggestionScope('pending')">待处理 {{ pendingSuggestions.length }}</button>
+          <button type="button" :class="{ active: suggestionScope === 'history' }" @click="setSuggestionScope('history')">历史记录 {{ historicalSuggestions.length }}</button>
+        </div>
+      </header>
       <div class="assessment-table-wrap">
         <table class="assessment-table suggestion-table">
-          <thead><tr><th>学生</th><th>班级</th><th>课程</th><th>当前</th><th>建议</th><th>参考强度</th><th>主要依据</th><th>状态</th><th>操作</th></tr></thead>
+          <thead><tr><th>学生</th><th>班级</th><th>课程</th><th>来源</th><th>当前</th><th>建议</th><th>参考强度</th><th>主要依据</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>
-            <tr v-for="row in suggestions" :key="row.id">
-              <td><strong>{{ row.student.display_name }}</strong><small>{{ row.student.student_no || row.student.username }}</small></td>
-              <td>{{ row.class_group.name }}</td>
-              <td>{{ row.course?.title || '-' }}</td>
-              <td>{{ row.previous_layer || '未设置' }}</td>
-              <td><strong>{{ row.suggested_layer || '暂不建议调整' }}</strong></td>
-              <td>{{ row.suggested_layer ? `${Math.round(row.confidence * 100)}%` : '-' }}</td>
-              <td><span class="suggestion-reason">{{ row.reasons[0] || '材料不足' }}</span></td>
-              <td><span class="summary-status-pill" :class="row.status === 'pending' ? 'summary-status-insufficient' : 'summary-status-available'">{{ row.status_label }}</span></td>
-              <td><button class="assessment-row-review" type="button" @click="openReview(row)">{{ row.status === 'pending' ? '处理' : '查看' }}</button></td>
+            <tr v-for="row in visibleSuggestions" :key="row.id">
+              <td data-label="学生"><strong>{{ row.student.display_name }}</strong><small>{{ row.student.student_no || row.student.username }}</small></td>
+              <td data-label="班级">{{ row.class_group.name }}</td>
+              <td data-label="课程">{{ row.course?.title || '-' }}</td>
+              <td data-label="来源"><span class="suggestion-source">{{ row.source_label }}</span></td>
+              <td data-label="当前">{{ row.previous_layer || '未设置' }}</td>
+              <td data-label="建议"><strong>{{ row.suggested_layer || '暂不建议调整' }}</strong></td>
+              <td data-label="参考强度">{{ row.suggested_layer ? `${Math.round(row.confidence * 100)}%` : '-' }}</td>
+              <td data-label="主要依据"><span class="suggestion-reason">{{ row.reasons[0] || '材料不足' }}</span></td>
+              <td data-label="状态"><span class="summary-status-pill" :class="row.status === 'pending' ? 'summary-status-insufficient' : 'summary-status-available'">{{ row.status_label }}</span></td>
+              <td data-label="操作"><button class="assessment-row-review" type="button" @click="openReview(row)">{{ row.status === 'pending' ? '处理' : '查看' }}</button></td>
             </tr>
           </tbody>
         </table>
-        <p v-if="!loading && !suggestions.length" class="empty">当前没有学习安排建议。</p>
+        <p v-if="!loading && !scopedSuggestions.length" class="empty">
+          {{ suggestionScope === 'pending' ? '当前没有待处理建议。' : '当前没有历史记录。' }}
+        </p>
       </div>
+      <footer v-if="suggestionPageCount > 1" class="suggestion-pagination">
+        <button class="secondary-button" type="button" :disabled="suggestionPage <= 1" @click="suggestionPage -= 1">上一页</button>
+        <span>第 {{ suggestionPage }} / {{ suggestionPageCount }} 页</span>
+        <button class="secondary-button" type="button" :disabled="suggestionPage >= suggestionPageCount" @click="suggestionPage += 1">下一页</button>
+      </footer>
     </section>
 
     <div v-if="detail" class="modal-backdrop" role="presentation" @click.self="detail = null">
@@ -259,11 +295,23 @@ onMounted(async () => {
           <div class="suggestion-band-line"><span>当前 {{ reviewTarget.previous_layer || '未设置' }}</span><strong>{{ reviewTarget.suggested_layer ? `建议 ${reviewTarget.suggested_layer}` : '暂不建议调整' }}</strong></div>
           <ul class="suggestion-reasons"><li v-for="item in reviewTarget.reasons" :key="item">{{ item }}</li></ul>
           <p class="support-suggestion">{{ reviewTarget.support_suggestion }}</p>
-          <fieldset class="suggestion-actions"><legend>处理方式</legend><label><input v-model="reviewForm.action" type="radio" value="accept" :disabled="!reviewTarget.suggested_layer" />采纳建议</label><label><input v-model="reviewForm.action" type="radio" value="keep" />保持当前</label><label><input v-model="reviewForm.action" type="radio" value="adjust" />教师调整</label><label><input v-model="reviewForm.action" type="radio" value="defer" />暂缓处理</label></fieldset>
-          <label v-if="reviewForm.action === 'adjust'" class="adjust-layer-field"><span>调整为</span><select v-model="reviewForm.layer"><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
-          <label class="review-note-field"><span>处理说明</span><textarea v-model.trim="reviewForm.note" rows="3" maxlength="1000" placeholder="可选，记录后续任务安排或观察重点"></textarea></label>
+          <template v-if="reviewTarget.status === 'pending'">
+            <fieldset class="suggestion-actions"><legend>处理方式</legend><label><input v-model="reviewForm.action" type="radio" value="accept" :disabled="!reviewTarget.suggested_layer" />采纳建议</label><label><input v-model="reviewForm.action" type="radio" value="keep" />保持当前</label><label><input v-model="reviewForm.action" type="radio" value="adjust" />教师调整</label><label><input v-model="reviewForm.action" type="radio" value="defer" />暂缓处理</label></fieldset>
+            <label v-if="reviewForm.action === 'adjust'" class="adjust-layer-field"><span>调整为</span><select v-model="reviewForm.layer"><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
+            <label class="review-note-field"><span>处理说明</span><textarea v-model.trim="reviewForm.note" rows="3" maxlength="1000" placeholder="可选，记录后续任务安排或观察重点"></textarea></label>
+          </template>
+          <dl v-else class="suggestion-history-detail">
+            <div><dt>处理结果</dt><dd>{{ reviewTarget.status_label }}</dd></div>
+            <div><dt>教师选择</dt><dd>{{ reviewTarget.teacher_selected_layer || '未调整层级' }}</dd></div>
+            <div><dt>处理教师</dt><dd>{{ reviewTarget.reviewed_by || '-' }}</dd></div>
+            <div><dt>处理时间</dt><dd>{{ formatDateTime(reviewTarget.reviewed_at) }}</dd></div>
+            <div class="wide"><dt>处理说明</dt><dd>{{ reviewTarget.review_note || '无' }}</dd></div>
+          </dl>
         </div>
-        <footer class="modal-actions"><button class="secondary-button" type="button" @click="reviewTarget = null">取消</button><button class="primary-button" type="button" :disabled="reviewing" @click="submitReview">{{ reviewing ? '保存中' : '确认' }}</button></footer>
+        <footer class="modal-actions">
+          <button :class="reviewTarget.status === 'pending' ? 'secondary-button' : 'primary-button'" type="button" @click="reviewTarget = null">{{ reviewTarget.status === 'pending' ? '取消' : '关闭' }}</button>
+          <button v-if="reviewTarget.status === 'pending'" class="primary-button" type="button" :disabled="reviewing" @click="submitReview">{{ reviewing ? '保存中' : '确认' }}</button>
+        </footer>
       </section>
     </div>
   </AppShell>
@@ -302,6 +350,17 @@ onMounted(async () => {
 .learning-summary-table-panel, .stratification-suggestion-panel { overflow: hidden; }
 .learning-summary-table td strong, .learning-summary-table td small, .suggestion-table td strong, .suggestion-table td small { display: block; }
 .learning-summary-table td small, .suggestion-table td small { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.suggestion-table { min-width: 0; table-layout: fixed; }
+.suggestion-table th, .suggestion-table td { padding: 10px 8px; white-space: normal; overflow-wrap: anywhere; }
+.suggestion-table th:nth-child(1) { width: 13%; }
+.suggestion-table th:nth-child(2) { width: 14%; }
+.suggestion-table th:nth-child(3) { width: 15%; }
+.suggestion-table th:nth-child(4) { width: 10%; }
+.suggestion-table th:nth-child(5), .suggestion-table th:nth-child(6) { width: 6%; }
+.suggestion-table th:nth-child(7) { width: 7%; }
+.suggestion-table th:nth-child(8) { width: 15%; }
+.suggestion-table th:nth-child(9) { width: 8%; }
+.suggestion-table th:nth-child(10) { width: 6%; }
 .summary-status-pill { display: inline-flex; align-items: center; min-height: 28px; padding: 0 9px; border-radius: 4px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .summary-status-available { background: #e8f7ef; color: #17633a; }
 .summary-status-insufficient { background: #fff4dd; color: #8a4b08; }
@@ -310,7 +369,13 @@ onMounted(async () => {
 .suggestion-list-head { padding: 16px 18px; border-bottom: 1px solid var(--line); }
 .suggestion-list-head div strong, .suggestion-list-head div span { display: block; }
 .suggestion-list-head div span { margin-top: 4px; color: var(--muted); font-size: 13px; }
-.suggestion-reason { display: block; max-width: 320px; line-height: 1.5; }
+.suggestion-scope-tabs { display: flex; gap: 4px; }
+.suggestion-scope-tabs button { min-height: 38px; border: 1px solid #d5deea; background: #fff; color: #475569; padding: 0 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.suggestion-scope-tabs button.active { border-color: #8ab7ea; background: #eaf3ff; color: #1557a6; }
+.suggestion-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; border-top: 1px solid var(--line); padding: 12px 16px; }
+.suggestion-pagination span { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.suggestion-reason { display: block; max-width: 100%; line-height: 1.5; }
+.suggestion-source { display: inline-flex; min-height: 26px; align-items: center; border: 1px solid #c9d9e8; border-radius: 4px; background: #f5f9fd; color: #24527d; padding: 0 8px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 
 .learning-summary-detail { width: min(780px, calc(100vw - 24px)); }
 .summary-detail-body, .suggestion-review-body { padding: 18px; overflow-y: auto; }
@@ -336,6 +401,11 @@ onMounted(async () => {
 .suggestion-actions label { display: flex; align-items: center; min-height: 40px; gap: 8px; }
 .adjust-layer-field, .review-note-field { display: grid; gap: 7px; margin-top: 12px; }
 .adjust-layer-field select { width: 160px; }
+.suggestion-history-detail { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 16px 0 0; border: 1px solid var(--line); background: var(--line); }
+.suggestion-history-detail div { padding: 12px; background: #fff; }
+.suggestion-history-detail .wide { grid-column: 1 / -1; }
+.suggestion-history-detail dt { color: var(--muted); font-size: 12px; }
+.suggestion-history-detail dd { margin: 5px 0 0; color: var(--ink); line-height: 1.5; }
 
 @media (max-width: 760px) {
   .learning-summary-heading { align-items: flex-start; }
@@ -346,7 +416,78 @@ onMounted(async () => {
   .learning-view-tabs button { flex: 1; }
   .learning-window-tabs { overflow-x: auto; }
   .learning-window-tabs button { flex: 0 0 auto; }
+  .suggestion-list-head { align-items: flex-start; flex-direction: column; }
+  .suggestion-scope-tabs { width: 100%; }
+  .suggestion-scope-tabs button { flex: 1; }
+  .suggestion-pagination { justify-content: space-between; }
+  .learning-summary-table,
+  .suggestion-table,
+  .learning-summary-table tbody,
+  .suggestion-table tbody,
+  .learning-summary-table tr,
+  .suggestion-table tr,
+  .learning-summary-table td,
+  .suggestion-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+  .learning-summary-table thead,
+  .suggestion-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .learning-summary-table tbody,
+  .suggestion-table tbody {
+    display: grid;
+    gap: 10px;
+    padding: 10px;
+  }
+  .learning-summary-table tr,
+  .suggestion-table tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 10px;
+    background: #fff;
+  }
+  .learning-summary-table td,
+  .suggestion-table td {
+    border: 0;
+    padding: 7px 4px;
+    overflow-wrap: anywhere;
+  }
+  .learning-summary-table td::before,
+  .suggestion-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .learning-summary-table td:first-child,
+  .learning-summary-table td:nth-child(3),
+  .learning-summary-table td:last-child,
+  .suggestion-table td:first-child,
+  .suggestion-table td:nth-child(8),
+  .suggestion-table td:last-child {
+    grid-column: 1 / -1;
+  }
+  .learning-summary-table .assessment-row-review,
+  .suggestion-table .assessment-row-review {
+    width: 100%;
+    min-height: 40px;
+  }
   .summary-detail-grid, .summary-evaluation-grid { grid-template-columns: 1fr; }
+  .suggestion-history-detail { grid-template-columns: 1fr; }
+  .suggestion-history-detail .wide { grid-column: auto; }
   .suggestion-actions { grid-template-columns: 1fr; }
 }
 </style>

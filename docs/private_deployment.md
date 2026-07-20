@@ -25,13 +25,13 @@ Python 3.12 对 Django、Celery、Channels、PostgreSQL 驱动、NumPy、pandas�
 
 ## Windows 局域网安装建议
 
-当前机器没有 PostgreSQL、Redis、Docker，但存在 Chocolatey。联网准备机可用：
+系统服务默认不包含 PostgreSQL、Redis 或 Docker。开发工作区已使用 PostgreSQL 17.10 官方便携包完成迁移和测试，并使用 Redis 兼容便携服务完成协议验证；便携实例只用于开发验收。联网准备机可用：
 
 ```powershell
-choco install postgresql redis-64 -y
+choco install postgresql17 -y
 ```
 
-离线环境建议提前下载 PostgreSQL 和 Redis 安装包，放入内网软件库。安装完成后创建数据库：
+Windows 上的 `redis-64` Chocolatey 包版本过旧，不作为生产建议。离线环境应提前准备 PostgreSQL 16/17 和可生产授权的 Redis 7.x；也可以在 Linux/WSL 中运行 Redis。Memurai Developer 仅可用于开发测试，禁止用于生产。安装完成后创建数据库：
 
 ```sql
 CREATE USER xlzxedu WITH PASSWORD 'your-private-password';
@@ -221,7 +221,9 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 
 再由学校管理员访问 `/app/school-admin/data-quality` 手动检查最近完整 7 日。报告未通过不代表服务故障；应先查看待处理问题和 XLSX，不得直接修改报告状态。进入后续分析前，必须保存一份最新通过报告及对应检查记录。
 
-便携验证实例可使用非默认端口，但 Web、worker 和 beat 的数据库与 Redis 配置必须一致。2026-07-19 最新全量测试使用 PostgreSQL `5432`；Redis 兼容服务此前使用 `56379` 完成任务队列验证。这些仅为本机验证端口，不是学校生产默认端口。
+便携验证实例可使用非默认端口，但 Web、worker 和 beat 的数据库与 Redis 配置必须一致。2026-07-20 使用 PostgreSQL 17.10 的 `55432` 临时端口完成全新数据库迁移和 8 项模型专项测试；Redis 兼容服务使用 `56379` 完成 Redis Channel Layer、Celery broker、结果后端和真实 worker 任务。上述端口仅用于本机验收，不是学校生产默认端口。
+
+模型离线依赖至少包括 CatBoost 1.2.10、LightGBM 4.7.0、scikit-learn 1.8.0、NumPy 2.5.1、pandas 3.0.3 和 SciPy 1.18.0。联网准备机更新 `requirements/base.txt` 后必须重新执行 `scripts/make_wheelhouse.ps1`，并在断网环境运行 `scripts/install_offline.ps1` 验证 wheel 完整性。
 
 ## 模拟数据部署边界
 

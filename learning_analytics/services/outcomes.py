@@ -33,7 +33,7 @@ from learning_analytics.services.quality import latest_quality_report
 
 
 OUTCOME_GENERATOR_VERSION = "outcome-v1"
-DATASET_GENERATOR_VERSION = "training-dataset-v1"
+DATASET_GENERATOR_VERSION = "training-dataset-v3"
 SPLIT_STRATEGY = "fixed_group_and_time_v1"
 TERMINAL_STATES = {
     LearningOpportunityTransitionFact.State.WITHDRAWN,
@@ -511,6 +511,7 @@ def build_training_dataset(
             "subject_id": subject.id,
             "feature_set": feature_set.manifest_hash,
             "outcome": outcome_definition.definition_hash,
+            "generator_version": DATASET_GENERATOR_VERSION,
             "decision_start": decision_points[0].scheduled_for,
             "decision_end": decision_points[-1].scheduled_for,
             "source_hash": source_hash,
@@ -549,15 +550,24 @@ def build_training_dataset(
             status=FeatureDefinition.Status.ACTIVE,
         )
     )
-    model_keys = {
-        definition.feature_key
+    allowed_by_key = {
+        definition.feature_key: definition.model_input_allowed
         for definition in feature_definitions
-        if definition.model_input_allowed
+    }
+    concrete_keys = [
+        (f"{item['feature_key']}__{window}", item["feature_key"])
+        for item in feature_set.definition_manifest
+        for window in item.get("windows", [])
+    ]
+    model_keys = {
+        concrete_key
+        for concrete_key, base_key in concrete_keys
+        if allowed_by_key.get(base_key, False)
     }
     audit_keys = {
-        definition.feature_key
-        for definition in feature_definitions
-        if not definition.model_input_allowed
+        concrete_key
+        for concrete_key, base_key in concrete_keys
+        if not allowed_by_key.get(base_key, False)
     }
     split_counts = defaultdict(int)
     time_split_counts = defaultdict(int)
@@ -640,6 +650,11 @@ def build_training_dataset(
         "data_scope": "synthetic" if synthetic_run else "formal",
         "school_id": school.id,
         "subject_id": subject.id,
+        "subject_comparison_key": (
+            "information_technology"
+            if synthetic_run
+            else subject.code.strip().lower()
+        ),
         "feature_set": {
             "key": feature_set.set_key,
             "version": feature_set.version,

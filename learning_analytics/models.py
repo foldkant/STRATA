@@ -48,6 +48,7 @@ from .feature_models import (  # noqa: F401
     TrainingDatasetVersion,
 )
 from .model_models import (  # noqa: F401
+    ClassCalibrationRun,
     LongitudinalAnalysisRun,
     LongitudinalFeatureResult,
     ModelComparisonRun,

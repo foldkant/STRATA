@@ -145,6 +145,16 @@ urlpatterns = [
         name="school_admin_model_comparison_create",
     ),
     path(
+        "school-admin/analytics/models/compare-advanced/",
+        school_admin_views.create_model_02_comparison,
+        name="school_admin_model_02_comparison_create",
+    ),
+    path(
+        "school-admin/analytics/models/class-calibration/",
+        school_admin_views.create_class_calibration,
+        name="school_admin_class_calibration_create",
+    ),
+    path(
         "school-admin/analytics/models/<int:pk>/export/",
         school_admin_views.export_model_validation,
         name="school_admin_model_validation_export",

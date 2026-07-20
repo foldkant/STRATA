@@ -356,11 +356,19 @@ class FeatureOutcomeDatasetTests(TestCase):
         self.assertEqual(dataset.unobserved_count, 1)
         self.assertFalse(dataset.manifest["comparison_ready"])
         self.assertIn(
-            "event_quality_flag_rate",
+            "event_quality_flag_rate__7d",
             dataset.manifest["audit_only_feature_keys"],
         )
         self.assertNotIn(
-            "event_quality_flag_rate",
+            "event_quality_flag_rate__7d",
+            dataset.manifest["model_input_feature_keys"],
+        )
+        self.assertIn(
+            "opp_completion_rate__7d",
+            dataset.manifest["model_input_feature_keys"],
+        )
+        self.assertNotIn(
+            "opp_completion_rate",
             dataset.manifest["model_input_feature_keys"],
         )
         self.assertEqual(TrainingDatasetVersion.objects.count(), 1)

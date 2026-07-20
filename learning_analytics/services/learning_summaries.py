@@ -408,6 +408,23 @@ def build_transparent_suggestion(*, summary: StudentLearningSummary):
         window_end=summary.window_end,
         rule_version=RULE_VERSION,
     ).first()
+    model_candidate = (
+        StratificationDecision.objects.filter(
+            student=summary.student,
+            course=summary.course,
+            status=StratificationDecision.Status.PENDING,
+            rule_version__startswith="m03-",
+        )
+        .order_by("-window_end", "-created_at")
+        .first()
+    )
+    if model_candidate:
+        if existing and existing.status == StratificationDecision.Status.PENDING:
+            existing.status = StratificationDecision.Status.DEFERRED
+            existing.review_note = "已有班级校准候选，透明规则仅保留为比较记录。"
+            existing.reviewed_at = timezone.now()
+            existing.save(update_fields=["status", "review_note", "reviewed_at"])
+        return model_candidate
     if existing and existing.status != StratificationDecision.Status.PENDING:
         return existing
     suggested_layer, index = ("", None)

@@ -348,10 +348,12 @@
 
 - `LongitudinalAnalysisRun`：某个冻结数据版本的一次重复测量统计，保存学生内外差异、班级数量、指标数量、计算版本和清单摘要。
 - `LongitudinalFeatureResult`：一个指标的观测数、学生数、班级数、总差异、学生间差异、个人内差异、ICC 描述值、总体/个人内/学生间关联方向和近似范围。样本不足时状态为 `insufficient_n`。
-- `ModelComparisonRun`：某个冻结数据版本的一次 M00-M03 比较，保存目标、模型清单、验证折、模型卡、负对照状态和阻塞原因。正式结果只允许 `shadow_only` 或 `blocked`，不代表生产模型。
+- `ModelComparisonRun`：某个冻结数据版本的一次模型比较。MODEL-01 保存 M00-M03；MODEL-02 在相同验证折加入 CatBoost 和 LightGBM，并保存依赖版本、跨校数据版本及阻塞原因。结果只允许 `shadow_only` 或 `blocked`，不代表生产模型。
 - `ModelEvaluationResult`：一个模型在一个验证折上的训练记录数、测试记录数、预测数、拒绝数、主要指标、RMSE/MAE/Brier、覆盖率和说明。
 - `ModelPrediction`：匿名的逐行预测事实，只保存冻结数据行、模型、验证折、预测/拒绝状态、预测值和拒绝原因；不向教师和学生 API 返回。
 - `NegativeControlResult`：标签打乱、随机匿名编号、未来哨兵、数据可用性和班级身份五类负对照结果。失败时模型比较保留记录但不得继续输出建议。
+- `ClassCalibrationRun`：绑定冻结数据版本和 MODEL-02 比较，保存全局模型类型、全局参数、每班残差收缩参数、模型文件、SHA-256、候选数量和模型卡。状态为 `building/candidate/blocked/retired`。
+- `StratificationDecision.rule_version=m03-*`：MODEL-03 生成的教师审核候选。新模型版本会把旧的待处理候选标记为 `deferred`，但不会修改 `StudentProfile.current_layer`。
 
 重复测量和模型比较均只读取 `TrainingDatasetVersion.status=frozen` 且 `view_type=operational_available` 的数据。模拟批次通过 `synthetic_run` 隔离，不进入学校管理员正式接口和正式夜间任务。
 

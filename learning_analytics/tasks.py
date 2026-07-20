@@ -25,6 +25,10 @@ from learning_analytics.services.feature_snapshots import (
 from learning_analytics.services.outcomes import mature_due_outcomes
 from learning_analytics.services.longitudinal import build_longitudinal_analysis
 from learning_analytics.services.model_comparison import build_model_comparison
+from learning_analytics.services.advanced_models import build_model_02_comparison
+from learning_analytics.services.class_calibration import (
+    build_class_calibration_candidate,
+)
 from learning_analytics.feature_models import TrainingDatasetVersion
 from school.models import School
 
@@ -229,17 +233,47 @@ def run_nightly_feature_outcomes():
 
 
 @shared_task
-def run_nightly_model_validation():
+def run_nightly_model_validation(include_test_data: bool = False):
     """对已冻结正式数据做重复测量和基线比较；结果始终是影子结果。"""
     rows = []
     datasets = TrainingDatasetVersion.objects.filter(
-        synthetic_run__isnull=True,
         status=TrainingDatasetVersion.Status.FROZEN,
     ).select_related("school", "subject")
-    for dataset in datasets.iterator():
+    if not include_test_data:
+        datasets = datasets.filter(
+            synthetic_run__isnull=True,
+            school__is_synthetic=False,
+        )
+    latest_datasets = {}
+    for dataset in datasets.order_by(
+        "school_id",
+        "subject_id",
+        "feature_set_id",
+        "outcome_definition_id",
+        "-frozen_at",
+        "-id",
+    ).iterator():
+        scope_key = (
+            dataset.school_id,
+            dataset.subject_id,
+            dataset.feature_set_id,
+            dataset.outcome_definition_id,
+            dataset.synthetic_run_id if include_test_data else None,
+        )
+        latest_datasets.setdefault(scope_key, dataset)
+    for dataset in latest_datasets.values():
         try:
             longitudinal = build_longitudinal_analysis(dataset=dataset)
             comparison = build_model_comparison(dataset=dataset)
+            advanced = build_model_02_comparison(
+                dataset=dataset,
+                include_test_data=include_test_data,
+            )
+            calibration = build_class_calibration_candidate(
+                dataset=dataset,
+                comparison_run=advanced,
+                include_test_data=include_test_data,
+            )
         except Exception as exc:
             rows.append(
                 {
@@ -258,6 +292,11 @@ def run_nightly_model_validation():
                     "longitudinal_run_id": longitudinal.id,
                     "comparison_run_id": comparison.id,
                     "comparison_status": comparison.status,
+                    "advanced_comparison_run_id": advanced.id,
+                    "advanced_comparison_status": advanced.status,
+                    "calibration_run_id": calibration.id,
+                    "calibration_status": calibration.status,
+                    "suggestion_count": calibration.suggestion_count,
                 }
             )
     return rows

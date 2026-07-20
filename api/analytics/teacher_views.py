@@ -17,6 +17,7 @@ from learning_analytics.services.learning_summaries import (
     build_student_learning_summary,
     build_transparent_suggestion,
 )
+from learning_analytics.services.class_calibration import friendly_decision_reason
 from ops.xlsx import build_workbook, workbook_response
 from school.models import StudentProfile, TeachingAssignment
 
@@ -124,10 +125,16 @@ def _decision_row(decision):
         "previous_layer": decision.previous_layer,
         "suggested_layer": decision.suggested_layer,
         "confidence": decision.confidence,
-        "reasons": decision.reasons,
+        "reasons": [friendly_decision_reason(item) for item in decision.reasons],
         "missing_data": decision.missing_data,
         "learning_summary": decision.learning_summary,
         "support_suggestion": decision.support_suggestion,
+        "rule_version": decision.rule_version,
+        "source_label": (
+            "班级校准候选"
+            if decision.rule_version.startswith("m03-")
+            else "透明规则建议"
+        ),
         "window_start": decision.window_start,
         "window_end": decision.window_end,
         "status": decision.status,

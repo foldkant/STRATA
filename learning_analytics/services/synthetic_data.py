@@ -36,7 +36,7 @@ from learning_analytics.services.quality import (
 from learning_analytics.services.schema_registry import sync_event_schema_definitions
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
-GENERATOR_VERSION = "synthetic-v1"
+GENERATOR_VERSION = "synthetic-v2"
 EVENT_NAMESPACE = uuid.UUID("d2fe154f-7aaf-46e5-8c8f-a037584854f1")
 
 
@@ -582,6 +582,9 @@ def generate_synthetic_dataset(
                             "content_type": "document",
                             "required": True,
                             "target_layers": ["all"],
+                            "available_to": (
+                                class_start + timedelta(days=5)
+                            ).isoformat(),
                         },
                         legacy_event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
                         class_group=class_group,
@@ -608,6 +611,9 @@ def generate_synthetic_dataset(
                             "content_type": "question",
                             "required": True,
                             "target_layers": ["all"],
+                            "available_to": (
+                                class_start + timedelta(days=5)
+                            ).isoformat(),
                         },
                         legacy_event_type=LearningEvent.EventType.TEACHER_INTERVENTION,
                         class_group=class_group,
