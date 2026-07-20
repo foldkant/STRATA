@@ -1,6 +1,9 @@
+import hashlib
+import json
 import uuid
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -86,6 +89,20 @@ class StudentFeatureSnapshot(models.Model):
 
 
 class StratificationDecision(models.Model):
+    class DecisionKind(models.TextChoices):
+        SUPPORT = "support", "学习支持"
+        CONTENT_BAND = "content_band", "学习内容层级"
+        LEGACY = "legacy", "兼容记录"
+
+    class SupportPriority(models.TextChoices):
+        ROUTINE = "routine", "常规关注"
+        WATCH = "watch", "持续关注"
+        HIGH = "high", "优先支持"
+
+    class BoundaryBand(models.TextChoices):
+        AB = "A/B", "A/B 边界"
+        BC = "B/C", "B/C 边界"
+
     class Status(models.TextChoices):
         PENDING = "pending", "待教师确认"
         ACCEPTED = "accepted", "已采纳"
@@ -113,6 +130,38 @@ class StratificationDecision(models.Model):
     missing_data = models.JSONField(default=list, blank=True)
     learning_summary = models.JSONField(default=dict, blank=True)
     support_suggestion = models.TextField(blank=True)
+    decision_kind = models.CharField(
+        max_length=16,
+        choices=DecisionKind.choices,
+        default=DecisionKind.SUPPORT,
+    )
+    support_priority = models.CharField(
+        max_length=16,
+        choices=SupportPriority.choices,
+        blank=True,
+    )
+    boundary_band = models.CharField(
+        max_length=3,
+        choices=BoundaryBand.choices,
+        blank=True,
+    )
+    policy_version = models.CharField(max_length=32, default="support-policy-v2")
+    policy = models.ForeignKey(
+        "ContentBandPolicyVersion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="decisions",
+    )
+    mastery_snapshot = models.ForeignKey(
+        "StudentMasterySnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="decisions",
+    )
+    abstain_reason = models.CharField(max_length=64, blank=True)
+    transition_checks = models.JSONField(default=dict, blank=True)
     window_start = models.DateTimeField(null=True, blank=True)
     window_end = models.DateTimeField(null=True, blank=True)
     rule_version = models.CharField(max_length=32, default="transparent-rules-v1")
@@ -151,7 +200,362 @@ class StratificationDecision(models.Model):
         indexes = [
             models.Index(fields=["class_group", "status", "created_at"]),
             models.Index(fields=["subject", "status", "created_at"]),
+            models.Index(fields=["decision_kind", "status", "created_at"]),
         ]
+
+
+class StudentSubjectBand(models.Model):
+    class Band(models.TextChoices):
+        A = "A", "拓展挑战层"
+        B = "B", "核心发展层"
+        C = "C", "基础提升层"
+
+    class BoundaryBand(models.TextChoices):
+        AB = "A/B", "A/B 边界"
+        BC = "B/C", "B/C 边界"
+
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="subject_bands",
+    )
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="student_subject_bands",
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="student_subject_bands",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="student_bands",
+    )
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="student_bands",
+    )
+    band = models.CharField(max_length=1, choices=Band.choices)
+    boundary_band = models.CharField(
+        max_length=3,
+        choices=BoundaryBand.choices,
+        blank=True,
+    )
+    valid_from = models.DateTimeField()
+    valid_until = models.DateTimeField(null=True, blank=True)
+    source_decision = models.ForeignKey(
+        StratificationDecision,
+        on_delete=models.PROTECT,
+        related_name="applied_bands",
+    )
+    policy_version = models.CharField(max_length=32)
+    evidence_snapshot = models.JSONField(default=dict, blank=True)
+    mastery_snapshot = models.ForeignKey(
+        "StudentMasterySnapshot",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="applied_bands",
+    )
+    confirmed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="confirmed_student_subject_bands",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "subject"],
+                condition=models.Q(course__isnull=True, valid_until__isnull=True),
+                name="uniq_active_student_subject_band",
+            ),
+            models.UniqueConstraint(
+                fields=["student", "subject", "course"],
+                condition=models.Q(course__isnull=False, valid_until__isnull=True),
+                name="uniq_active_student_course_band",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["student", "subject", "valid_from"]),
+            models.Index(fields=["class_group", "subject", "valid_until"]),
+        ]
+        ordering = ["-valid_from", "-id"]
+
+
+class ContentBandPolicyVersion(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "草稿"
+        ACTIVE = "active", "启用"
+        RETIRED = "retired", "停用"
+
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.CASCADE,
+        related_name="content_band_policies",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="content_band_policies",
+    )
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="content_band_policies",
+    )
+    name = models.CharField(max_length=128)
+    version_no = models.PositiveIntegerField(default=1)
+    policy_version = models.CharField(max_length=32)
+    a_min = models.FloatField(default=0.8)
+    b_min = models.FloatField(default=0.6)
+    boundary_margin = models.FloatField(default=0.03)
+    hysteresis_margin = models.FloatField(default=0.03)
+    max_measurement_error = models.FloatField(default=0.18)
+    min_common_items = models.PositiveSmallIntegerField(default=5)
+    min_answered_ratio = models.FloatField(default=0.8)
+    required_consecutive_windows = models.PositiveSmallIntegerField(default=2)
+    cooldown_days = models.PositiveSmallIntegerField(default=14)
+    max_step_change = models.PositiveSmallIntegerField(default=1)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.DRAFT,
+    )
+    content_hash = models.CharField(max_length=64, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="created_content_band_policies",
+    )
+    published_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="published_content_band_policies",
+    )
+    published_at = models.DateTimeField(null=True, blank=True)
+    retired_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "subject", "version_no"],
+                condition=models.Q(course__isnull=True),
+                name="uniq_subject_band_policy_version",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "subject", "course", "version_no"],
+                condition=models.Q(course__isnull=False),
+                name="uniq_course_band_policy_version",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "subject"],
+                condition=models.Q(course__isnull=True, status="active"),
+                name="uniq_active_subject_band_policy",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "subject", "course"],
+                condition=models.Q(course__isnull=False, status="active"),
+                name="uniq_active_course_band_policy",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["school", "subject", "status"]),
+            models.Index(fields=["course", "status", "version_no"]),
+        ]
+        ordering = ["subject_id", "course_id", "-version_no", "-id"]
+
+    def semantic_definition(self) -> dict:
+        return {
+            "school_id": self.school_id,
+            "subject_id": self.subject_id,
+            "course_id": self.course_id,
+            "version_no": self.version_no,
+            "policy_version": self.policy_version,
+            "a_min": self.a_min,
+            "b_min": self.b_min,
+            "boundary_margin": self.boundary_margin,
+            "hysteresis_margin": self.hysteresis_margin,
+            "max_measurement_error": self.max_measurement_error,
+            "min_common_items": self.min_common_items,
+            "min_answered_ratio": self.min_answered_ratio,
+            "required_consecutive_windows": self.required_consecutive_windows,
+            "cooldown_days": self.cooldown_days,
+            "max_step_change": self.max_step_change,
+        }
+
+    def clean(self):
+        errors = {}
+        if self.course_id and self.course.subject_id != self.subject_id:
+            errors["course"] = "课程与学科不一致。"
+        if self.subject_id and self.subject.school_id != self.school_id:
+            errors["subject"] = "学科与学校不一致。"
+        if not 0 <= self.b_min < self.a_min <= 1:
+            errors["a_min"] = "层级标准必须满足 0 <= B < A <= 1。"
+        for field in (
+            "boundary_margin",
+            "hysteresis_margin",
+            "max_measurement_error",
+            "min_answered_ratio",
+        ):
+            if not 0 <= getattr(self, field) <= 1:
+                errors[field] = "该值必须在 0 至 1 之间。"
+        if self.max_step_change != 1:
+            errors["max_step_change"] = "当前正式策略只允许单次调整一个层级。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        previous = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        payload = json.dumps(
+            self.semantic_definition(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.content_hash = hashlib.sha256(payload).hexdigest()
+        if previous and previous.status in {self.Status.ACTIVE, self.Status.RETIRED}:
+            if previous.content_hash != self.content_hash:
+                raise ValidationError("已启用的层级标准不能原地修改，请创建新版本。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.name} v{self.version_no}"
+
+
+class StudentMasterySnapshot(models.Model):
+    class DataStatus(models.TextChoices):
+        AVAILABLE = "available", "可用"
+        INSUFFICIENT = "insufficient", "数据不足"
+        NOT_COMPARABLE = "not_comparable", "不可比较"
+        PENDING_GRADING = "pending_grading", "等待评分"
+
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="mastery_snapshots",
+    )
+    school = models.ForeignKey(
+        "school.School",
+        on_delete=models.PROTECT,
+        related_name="student_mastery_snapshots",
+    )
+    class_group = models.ForeignKey(
+        "school.ClassGroup",
+        on_delete=models.PROTECT,
+        related_name="student_mastery_snapshots",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="student_mastery_snapshots",
+    )
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="student_mastery_snapshots",
+    )
+    assessment = models.ForeignKey(
+        "TestAssessment",
+        on_delete=models.PROTECT,
+        related_name="mastery_snapshots",
+    )
+    attempt = models.OneToOneField(
+        "TestAttempt",
+        on_delete=models.PROTECT,
+        related_name="mastery_snapshot",
+    )
+    common_question_set = models.ForeignKey(
+        "CommonQuestionSet",
+        on_delete=models.PROTECT,
+        related_name="mastery_snapshots",
+    )
+    measurement_series = models.CharField(max_length=96, db_index=True)
+    assessment_version = models.CharField(max_length=32)
+    data_status = models.CharField(max_length=24, choices=DataStatus.choices)
+    score_obtained = models.FloatField(default=0)
+    score_max = models.FloatField(default=0)
+    mastery_score = models.FloatField(null=True, blank=True)
+    measurement_error = models.FloatField(null=True, blank=True)
+    common_item_count = models.PositiveIntegerField(default=0)
+    answered_item_count = models.PositiveIntegerField(default=0)
+    answered_ratio = models.FloatField(default=0)
+    knowledge_results = models.JSONField(default=list, blank=True)
+    comparability_evidence = models.JSONField(default=dict, blank=True)
+    source_hash = models.CharField(max_length=64, db_index=True)
+    is_test_data = models.BooleanField(default=False)
+    observed_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "subject", "observed_at"]),
+            models.Index(fields=["school", "subject", "data_status"]),
+            models.Index(fields=["measurement_series", "assessment_version"]),
+        ]
+        ordering = ["-observed_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.student_id}:{self.measurement_series}:{self.assessment_version}"
+
+
+class BandTransitionAudit(models.Model):
+    decision = models.ForeignKey(
+        StratificationDecision,
+        on_delete=models.PROTECT,
+        related_name="transition_audits",
+    )
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="band_transition_audits",
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="band_transition_audits",
+    )
+    course = models.ForeignKey(
+        "courses.Course",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="band_transition_audits",
+    )
+    previous_band = models.CharField(max_length=1, blank=True)
+    raw_candidate_band = models.CharField(max_length=1, blank=True)
+    guarded_candidate_band = models.CharField(max_length=1, blank=True)
+    checks = models.JSONField(default=dict)
+    action = models.CharField(max_length=24)
+    final_band = models.CharField(max_length=1, blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="recorded_band_transition_audits",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["student", "subject", "created_at"]),
+            models.Index(fields=["decision", "action"]),
+        ]
+        ordering = ["-created_at", "-id"]
 
 
 class PretestPaper(models.Model):
@@ -649,7 +1053,9 @@ class CommonQuestionSet(models.Model):
         ]
         indexes = [
             models.Index(fields=["school", "subject", "status", "updated_at"]),
-            models.Index(fields=["school", "subject", "measurement_series", "version_no"]),
+            models.Index(
+                fields=["school", "subject", "measurement_series", "version_no"]
+            ),
         ]
         ordering = ["subject_id", "grade_scope", "term", "-version_no"]
 

@@ -5,18 +5,22 @@ import {
   createAnalysisDataset,
   createAnalysisDecisionPoint,
   createClassCalibration,
+  createContentBandPolicy,
   createLongitudinalAnalysis,
   createModelComparison,
   getAnalysisPreparation,
+  getContentBandPolicies,
   getModelValidation,
   modelReleasePackageUrl,
   publishClassCalibration,
+  publishContentBandPolicy,
   refreshAnalysisOutcomes,
   rollbackModelRelease,
   trainStratificationModel,
   verifyModelRelease,
   type AnalysisDataset,
   type AnalysisPreparation,
+  type ContentBandPolicy,
   type ModelValidation
 } from '@/api/analytics'
 import { ApiError } from '@/api/client'
@@ -28,14 +32,16 @@ import { schoolAdminNav } from './nav'
 const navItems = schoolAdminNav('/school-admin/models')
 const data = ref<AnalysisPreparation | null>(null)
 const validation = ref<ModelValidation | null>(null)
+const contentBandPolicies = ref<ContentBandPolicy[]>([])
 const loading = ref(true)
 const working = ref(false)
 const pointModalOpen = ref(false)
 const datasetModalOpen = ref(false)
+const policyModalOpen = ref(false)
 const showAllDecisionPoints = ref(false)
 const notice = ref('')
 const noticeTone = ref<'success' | 'warning' | 'error' | 'info'>('info')
-const activeSection = ref<'overview' | 'data' | 'research'>('overview')
+const activeSection = ref<'overview' | 'data' | 'standards' | 'research'>('overview')
 
 const pointForm = reactive({
   class_id: 0,
@@ -45,6 +51,19 @@ const pointForm = reactive({
 const datasetForm = reactive({
   subject_id: 0,
   outcome_key: ''
+})
+const policyForm = reactive({
+  subject: 0,
+  name: '',
+  a_min: 0.8,
+  b_min: 0.6,
+  boundary_margin: 0.03,
+  hysteresis_margin: 0.03,
+  max_measurement_error: 0.18,
+  min_common_items: 5,
+  min_answered_ratio: 0.8,
+  required_consecutive_windows: 2,
+  cooldown_days: 14
 })
 
 const availableCourses = computed(() =>
@@ -119,9 +138,10 @@ function toneClass(tone: string) {
 async function loadData(showLoading = true) {
   if (showLoading) loading.value = true
   try {
-    const [preparation, modelValidation] = await Promise.all([
+    const [preparation, modelValidation, policies] = await Promise.all([
       getAnalysisPreparation(),
-      getModelValidation()
+      getModelValidation(),
+      getContentBandPolicies()
     ])
     data.value = preparation
     validation.value = {
@@ -133,6 +153,7 @@ async function loadData(showLoading = true) {
       releases: modelValidation.releases || [],
       release_audits: modelValidation.release_audits || []
     }
+    contentBandPolicies.value = policies
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '分析准备情况加载失败。'
     noticeTone.value = 'error'
@@ -295,6 +316,56 @@ function openDatasetModal() {
   datasetModalOpen.value = true
 }
 
+function openPolicyModal() {
+  policyForm.subject = subjects.value[0]?.id || 0
+  policyForm.name = subjects.value[0] ? `${subjects.value[0].name}学习内容层级标准` : ''
+  policyForm.a_min = 0.8
+  policyForm.b_min = 0.6
+  policyForm.boundary_margin = 0.03
+  policyForm.hysteresis_margin = 0.03
+  policyForm.max_measurement_error = 0.18
+  policyForm.min_common_items = 5
+  policyForm.min_answered_ratio = 0.8
+  policyForm.required_consecutive_windows = 2
+  policyForm.cooldown_days = 14
+  policyModalOpen.value = true
+}
+
+async function saveContentBandPolicy() {
+  if (!policyForm.subject || working.value) return
+  working.value = true
+  notice.value = ''
+  try {
+    await createContentBandPolicy({ ...policyForm })
+    policyModalOpen.value = false
+    notice.value = '层级标准草稿已保存，启用前可继续核对参数。'
+    noticeTone.value = 'success'
+    await loadData(false)
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '层级标准保存失败。'
+    noticeTone.value = 'error'
+  } finally {
+    working.value = false
+  }
+}
+
+async function activateContentBandPolicy(policy: ContentBandPolicy) {
+  if (working.value || !window.confirm(`确认启用“${policy.name} v${policy.version_no}”？原有启用版本将转为历史记录。`)) return
+  working.value = true
+  notice.value = ''
+  try {
+    await publishContentBandPolicy(policy.id)
+    notice.value = '层级标准已启用。后续共同测试将按这个版本生成教师审核建议。'
+    noticeTone.value = 'success'
+    await loadData(false)
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '层级标准启用失败。'
+    noticeTone.value = 'error'
+  } finally {
+    working.value = false
+  }
+}
+
 async function saveDecisionPoint() {
   if (!pointForm.class_id || !pointForm.course_id || working.value) return
   working.value = true
@@ -375,6 +446,11 @@ onMounted(loadData)
           建立分析时间点
         </button>
       </div>
+      <div v-else-if="activeSection === 'standards'" class="analysis-page-actions">
+        <button class="primary-button" type="button" :disabled="working || !subjects.length" @click="openPolicyModal">
+          新建层级标准
+        </button>
+      </div>
     </section>
 
     <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" />
@@ -387,6 +463,7 @@ onMounted(loadData)
     <nav v-if="!loading && data" class="analysis-section-tabs" aria-label="分层分析页面">
       <button type="button" :class="{ active: activeSection === 'overview' }" @click="activeSection = 'overview'">运行概览</button>
       <button type="button" :class="{ active: activeSection === 'data' }" @click="activeSection = 'data'">数据准备</button>
+      <button type="button" :class="{ active: activeSection === 'standards' }" @click="activeSection = 'standards'">层级标准</button>
       <button type="button" :class="{ active: activeSection === 'research' }" @click="activeSection = 'research'">详细检查</button>
     </nav>
 
@@ -568,6 +645,56 @@ onMounted(loadData)
         <p v-else class="analysis-empty-copy">随后学习结果到期后，才能生成冻结数据版本。</p>
       </section>
       </template>
+
+      <section v-if="activeSection === 'standards'" class="panel analysis-table-panel">
+        <div class="panel-heading split">
+          <div>
+            <h2>学习内容层级标准</h2>
+            <p>按学科设置共同测试的 A、B、C 参考范围；完成率和逾期情况只用于安排学习支持。</p>
+          </div>
+          <button class="primary-button" type="button" :disabled="working || !subjects.length" @click="openPolicyModal">新建</button>
+        </div>
+        <div v-if="contentBandPolicies.length" class="analysis-table-wrap">
+          <table class="analysis-table content-band-policy-table">
+            <thead>
+              <tr><th>学科与版本</th><th>层级范围</th><th>变化保护</th><th>状态</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="policy in contentBandPolicies" :key="policy.id">
+                <td data-label="学科与版本">
+                  <strong>{{ policy.subject.name }} · v{{ policy.version_no }}</strong>
+                  <small>{{ policy.course?.title || '本学科通用' }}</small>
+                </td>
+                <td data-label="层级范围">
+                  <strong>A ≥ {{ Math.round(policy.a_min * 100) }}% · B ≥ {{ Math.round(policy.b_min * 100) }}%</strong>
+                  <small>边界范围 ±{{ Math.round(policy.boundary_margin * 100) }}%</small>
+                </td>
+                <td data-label="变化保护">
+                  <span>连续 {{ policy.required_consecutive_windows }} 次 · 冷却 {{ policy.cooldown_days }} 天</span>
+                  <small>至少 {{ policy.min_common_items }} 道共同题 · 完成 {{ Math.round(policy.min_answered_ratio * 100) }}%</small>
+                </td>
+                <td data-label="状态">
+                  <span class="analysis-status" :class="toneClass(policy.status === 'active' ? 'success' : policy.status === 'draft' ? 'warning' : 'info')">
+                    {{ policy.status_label }}
+                  </span>
+                  <small>{{ formatDateTime(policy.published_at) }}</small>
+                </td>
+                <td data-label="操作">
+                  <button
+                    v-if="policy.status === 'draft'"
+                    class="primary-button compact-action"
+                    type="button"
+                    :disabled="working"
+                    @click="activateContentBandPolicy(policy)"
+                  >启用</button>
+                  <span v-else>{{ policy.status === 'active' ? '当前使用' : '历史版本' }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p v-else class="analysis-empty-copy">尚未建立层级标准。新建后先核对，再手动启用。</p>
+      </section>
 
       <section v-if="activeSection === 'research'" class="analysis-validation-section" aria-label="详细模型检查">
         <header class="analysis-validation-heading">
@@ -813,10 +940,105 @@ onMounted(loadData)
         </footer>
       </form>
     </div>
+
+    <div v-if="policyModalOpen" class="modal-backdrop" role="presentation" @click.self="policyModalOpen = false">
+      <form class="entity-modal analysis-policy-modal" role="dialog" aria-modal="true" aria-labelledby="analysis-policy-title" @submit.prevent="saveContentBandPolicy">
+        <header class="modal-header">
+          <div>
+            <h2 id="analysis-policy-title">新建学习内容层级标准</h2>
+            <p>新版本保存为草稿，核对后再启用。</p>
+          </div>
+          <button class="icon-button" type="button" aria-label="关闭" @click="policyModalOpen = false">×</button>
+        </header>
+        <div class="form-grid analysis-policy-form">
+          <label>
+            <span>学科 <b>*</b></span>
+            <select v-model.number="policyForm.subject" required>
+              <option :value="0" disabled>请选择学科</option>
+              <option v-for="item in subjects" :key="item.id" :value="item.id">{{ item.name }}</option>
+            </select>
+          </label>
+          <label>
+            <span>名称 <b>*</b></span>
+            <input v-model.trim="policyForm.name" maxlength="128" required />
+          </label>
+          <label>
+            <span>A 层起点 <b>*</b></span>
+            <input v-model.number="policyForm.a_min" type="number" min="0.01" max="1" step="0.01" required />
+            <small>0.80 表示 80%</small>
+          </label>
+          <label>
+            <span>B 层起点 <b>*</b></span>
+            <input v-model.number="policyForm.b_min" type="number" min="0" max="0.99" step="0.01" required />
+            <small>低于此值进入 C 层建议范围</small>
+          </label>
+          <label>
+            <span>边界范围</span>
+            <input v-model.number="policyForm.boundary_margin" type="number" min="0" max="0.1" step="0.01" />
+          </label>
+          <label>
+            <span>变化缓冲</span>
+            <input v-model.number="policyForm.hysteresis_margin" type="number" min="0" max="0.1" step="0.01" />
+          </label>
+          <label>
+            <span>最多测量误差</span>
+            <input v-model.number="policyForm.max_measurement_error" type="number" min="0" max="1" step="0.01" />
+          </label>
+          <label>
+            <span>最少共同题</span>
+            <input v-model.number="policyForm.min_common_items" type="number" min="1" max="100" step="1" />
+          </label>
+          <label>
+            <span>最低作答比例</span>
+            <input v-model.number="policyForm.min_answered_ratio" type="number" min="0" max="1" step="0.05" />
+          </label>
+          <label>
+            <span>连续材料次数</span>
+            <input v-model.number="policyForm.required_consecutive_windows" type="number" min="1" max="10" step="1" />
+          </label>
+          <label>
+            <span>变化冷却天数</span>
+            <input v-model.number="policyForm.cooldown_days" type="number" min="0" max="365" step="1" />
+          </label>
+        </div>
+        <footer class="modal-actions">
+          <button class="secondary-button" type="button" :disabled="working" @click="policyModalOpen = false">取消</button>
+          <button class="primary-button" type="submit" :disabled="working || !policyForm.subject || !policyForm.name">保存草稿</button>
+        </footer>
+      </form>
+    </div>
   </AppShell>
 </template>
 
 <style scoped>
+.analysis-policy-modal {
+  width: min(820px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.analysis-policy-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: auto;
+  padding: 18px;
+}
+
+.analysis-policy-form label {
+  min-width: 0;
+}
+
+.analysis-policy-form input,
+.analysis-policy-form select {
+  min-width: 0;
+  width: 100%;
+}
+
+.content-band-policy-table td strong,
+.content-band-policy-table td span,
+.content-band-policy-table td small {
+  overflow-wrap: anywhere;
+}
+
 .analysis-calibration-row {
   grid-template-columns: minmax(190px, 1.2fr) minmax(180px, 0.8fr) minmax(220px, auto);
   align-items: center;
@@ -875,6 +1097,15 @@ onMounted(loadData)
 }
 
 @media (max-width: 640px) {
+  .analysis-policy-modal {
+    width: calc(100vw - 18px);
+    max-height: calc(100dvh - 18px);
+  }
+
+  .analysis-policy-form {
+    grid-template-columns: 1fr;
+  }
+
   .analysis-calibration-row {
     grid-template-columns: 1fr;
   }

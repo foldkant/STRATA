@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date
 
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -12,13 +14,21 @@ from api.permissions import IsTeacher
 from api.responses import fail, ok
 from api.services import write_audit
 from courses.models import Course, CourseClass
-from learning.models import StratificationDecision
+from learning.models import StratificationDecision, StudentMasterySnapshot, TestAssessment
+from learning.services.bands import (
+    apply_student_subject_band,
+    resolve_student_band,
+)
 from learning_analytics.models import StudentLearningSummary
 from learning_analytics.services.learning_summaries import (
     build_student_learning_summary,
     build_transparent_suggestion,
 )
 from learning_analytics.services.class_calibration import friendly_decision_reason
+from learning.services.mastery import (
+    build_assessment_mastery_candidates,
+    record_band_transition_review,
+)
 from ops.xlsx import build_workbook, workbook_response
 from school.models import StudentProfile, TeachingAssignment
 
@@ -63,6 +73,44 @@ def _summary_row(summary):
     }
 
 
+def _mastery_row(snapshot: StudentMasterySnapshot) -> dict:
+    return {
+        "id": snapshot.id,
+        "student": {
+            "id": snapshot.student_id,
+            "username": snapshot.student.username,
+            "display_name": snapshot.student.display_name or snapshot.student.username,
+        },
+        "class_group": {
+            "id": snapshot.class_group_id,
+            "name": snapshot.class_group.name,
+            "grade": snapshot.class_group.grade,
+        },
+        "subject": {"id": snapshot.subject_id, "name": snapshot.subject.name},
+        "course": (
+            {"id": snapshot.course_id, "title": snapshot.course.title}
+            if snapshot.course_id
+            else None
+        ),
+        "assessment": {
+            "id": snapshot.assessment_id,
+            "title": snapshot.assessment.title,
+        },
+        "measurement_series": snapshot.measurement_series,
+        "assessment_version": snapshot.assessment_version,
+        "data_status": snapshot.data_status,
+        "data_status_label": snapshot.get_data_status_display(),
+        "mastery_score": snapshot.mastery_score,
+        "measurement_error": snapshot.measurement_error,
+        "common_item_count": snapshot.common_item_count,
+        "answered_item_count": snapshot.answered_item_count,
+        "answered_ratio": snapshot.answered_ratio,
+        "knowledge_results": snapshot.knowledge_results,
+        "comparability_evidence": snapshot.comparability_evidence,
+        "observed_at": snapshot.observed_at,
+    }
+
+
 def _learning_summary_queryset(user, query_params):
     window_type = str(query_params.get("window") or "7d")
     if window_type not in dict(StudentLearningSummary.WindowType.choices):
@@ -100,6 +148,15 @@ def _rate_for_export(value, *, empty_text="数据不足"):
 
 def _decision_row(decision):
     profile = decision.student.student_profile
+    current_layer = (
+        resolve_student_band(
+            student=decision.student,
+            subject=decision.subject,
+            course=decision.course,
+        )
+        if decision.subject_id
+        else None
+    )
     return {
         "id": decision.id,
         "student": {
@@ -124,12 +181,23 @@ def _decision_row(decision):
             else None
         ),
         "previous_layer": decision.previous_layer,
+        "current_layer": current_layer or "",
+        "current_layer_label": (
+            dict(StudentProfile.Layer.choices).get(current_layer, "")
+        ),
         "suggested_layer": decision.suggested_layer,
         "confidence": decision.confidence,
         "reasons": [friendly_decision_reason(item) for item in decision.reasons],
         "missing_data": decision.missing_data,
         "learning_summary": decision.learning_summary,
         "support_suggestion": decision.support_suggestion,
+        "decision_kind": decision.decision_kind,
+        "support_priority": decision.support_priority,
+        "boundary_band": decision.boundary_band,
+        "policy_version": decision.policy_version,
+        "abstain_reason": decision.abstain_reason,
+        "transition_checks": decision.transition_checks,
+        "mastery_snapshot_id": decision.mastery_snapshot_id,
         "rule_version": decision.rule_version,
         "source_label": (
             "班级校准候选"
@@ -149,6 +217,216 @@ def _decision_row(decision):
         ),
         "reviewed_at": decision.reviewed_at,
         "created_at": decision.created_at,
+    }
+
+
+def _visible_stratification_decisions(user, class_ids):
+    return (
+        StratificationDecision.objects.filter(
+            class_group_id__in=class_ids,
+            course__teacher=user,
+        )
+        .select_related(
+            "student__student_profile",
+            "class_group",
+            "subject",
+            "course",
+            "reviewed_by",
+        )
+        .filter(
+            ~Q(rule_version__startswith="m03-")
+            | Q(calibration_run__releases__status="active")
+        )
+        .exclude(decision_kind=StratificationDecision.DecisionKind.LEGACY)
+        .distinct()
+    )
+
+
+def _stratification_scope(user, query_params):
+    class_ids = set(_teacher_class_ids(user))
+    selected_class = str(query_params.get("class_group") or "").strip()
+    if selected_class:
+        try:
+            selected_class_id = int(selected_class)
+        except ValueError as exc:
+            raise ValidationError("班级筛选条件不正确。") from exc
+        if selected_class_id not in class_ids:
+            raise ValidationError("无权查看该班级的分层情况。")
+        class_ids = {selected_class_id}
+
+    selected_course = str(query_params.get("course") or "").strip()
+    course = None
+    if selected_course:
+        try:
+            selected_course_id = int(selected_course)
+        except ValueError as exc:
+            raise ValidationError("课程筛选条件不正确。") from exc
+        course = Course.objects.filter(
+            pk=selected_course_id,
+            teacher=user,
+            subject__school=user.school,
+        ).first()
+        if course is None:
+            raise ValidationError("无权查看该课程的分层情况。")
+    else:
+        course = (
+            Course.objects.filter(
+                teacher=user,
+                subject__school=user.school,
+                is_active=True,
+            )
+            .order_by("title", "id")
+            .first()
+        )
+    if course:
+        course_class_ids = set(
+            CourseClass.objects.filter(course=course).values_list(
+                "class_group_id", flat=True
+            )
+        )
+        class_ids &= course_class_ids
+    return class_ids, course
+
+
+def _stratification_overview_data(user, query_params):
+    class_ids, course = _stratification_scope(user, query_params)
+    profiles = list(
+        StudentProfile.objects.filter(
+            user__school=user.school,
+            user__is_active=True,
+            class_group_id__in=class_ids,
+        )
+        .select_related("user", "class_group")
+        .order_by(
+            "class_group__grade",
+            "class_group__name",
+            "student_no",
+            "user__display_name",
+            "user__username",
+        )
+    )
+    student_ids = [profile.user_id for profile in profiles]
+    decisions = _visible_stratification_decisions(user, class_ids).filter(
+        student_id__in=student_ids
+    )
+    if course:
+        decisions = decisions.filter(course=course)
+    decision_rows = list(decisions.order_by("student_id", "-created_at", "-id"))
+    latest_decision_by_student = {}
+    for decision in decision_rows:
+        existing = latest_decision_by_student.get(decision.student_id)
+        if existing is None or (
+            decision.status == StratificationDecision.Status.PENDING
+            and existing.status != StratificationDecision.Status.PENDING
+        ):
+            latest_decision_by_student[decision.student_id] = decision
+
+    summaries = StudentLearningSummary.objects.filter(
+        school=user.school,
+        student_id__in=student_ids,
+        class_group_id__in=class_ids,
+        course__teacher=user,
+        window_type=StudentLearningSummary.WindowType.DAYS_30,
+    ).select_related("course")
+    if course:
+        summaries = summaries.filter(course=course)
+    latest_summary_by_student = {}
+    for summary in summaries.order_by("student_id", "-window_end", "-id"):
+        latest_summary_by_student.setdefault(summary.student_id, summary)
+
+    rows = []
+    layer_counts = Counter()
+    class_counts = {}
+    for profile in profiles:
+        decision = latest_decision_by_student.get(profile.user_id)
+        summary = latest_summary_by_student.get(profile.user_id)
+        band_course = course or (decision.course if decision else None) or (
+            summary.course if summary else None
+        )
+        layer = (
+            resolve_student_band(
+                student=profile.user,
+                subject=band_course.subject,
+                course=band_course,
+            )
+            if band_course and band_course.subject_id
+            else None
+        )
+        layer_key = layer or "unassigned"
+        layer_counts[layer_key] += 1
+        per_class = class_counts.setdefault(
+            profile.class_group_id,
+            {
+                "id": profile.class_group_id,
+                "name": profile.class_group.name,
+                "grade": profile.class_group.grade,
+                "A": 0,
+                "B": 0,
+                "C": 0,
+                "unassigned": 0,
+            },
+        )
+        per_class[layer_key] += 1
+        metrics = summary.metrics if summary else {}
+        rows.append(
+            {
+                "id": profile.id,
+                "student": {
+                    "id": profile.user_id,
+                    "username": profile.user.username,
+                    "display_name": (
+                        profile.user.display_name or profile.user.username
+                    ),
+                    "student_no": profile.student_no,
+                },
+                "class_group": {
+                    "id": profile.class_group_id,
+                    "name": profile.class_group.name,
+                    "grade": profile.class_group.grade,
+                },
+                "current_layer": layer or "",
+                "current_layer_label": (
+                    dict(StudentProfile.Layer.choices).get(layer, "未分层")
+                ),
+                "learning": (
+                    {
+                        "data_status": summary.data_status,
+                        "data_status_label": summary.get_data_status_display(),
+                        "completion_rate": metrics.get("completion_rate"),
+                        "score_rate": (metrics.get("score") or {}).get("score_rate"),
+                        "window_end": summary.window_end,
+                        "course": {
+                            "id": summary.course_id,
+                            "title": summary.course.title,
+                        },
+                    }
+                    if summary
+                    else None
+                ),
+                "latest_decision": _decision_row(decision) if decision else None,
+            }
+        )
+
+    pending_count = decisions.filter(
+        status=StratificationDecision.Status.PENDING
+    ).count()
+    return {
+        "scope": {
+            "class_group_ids": sorted(class_ids),
+            "course": (
+                {"id": course.id, "title": course.title} if course else None
+            ),
+        },
+        "counts": {
+            "total": len(profiles),
+            "A": layer_counts["A"],
+            "B": layer_counts["B"],
+            "C": layer_counts["C"],
+            "unassigned": layer_counts["unassigned"],
+            "pending": pending_count,
+        },
+        "class_distribution": list(class_counts.values()),
+        "rows": rows,
     }
 
 
@@ -318,26 +596,88 @@ def refresh_learning_summaries(request):
 
 @api_view(["GET"])
 @permission_classes([IsTeacher])
+def stratification_overview(request):
+    try:
+        data = _stratification_overview_data(request.user, request.query_params)
+    except ValidationError as exc:
+        return fail("；".join(exc.messages), status=400)
+    return ok(data)
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def export_stratification_overview(request):
+    try:
+        data = _stratification_overview_data(request.user, request.query_params)
+    except ValidationError as exc:
+        return fail("；".join(exc.messages), status=400)
+    rows = []
+    for item in data["rows"]:
+        learning = item["learning"] or {}
+        decision = item["latest_decision"] or {}
+        rows.append(
+            [
+                item["student"]["display_name"],
+                item["student"]["username"],
+                item["student"]["student_no"],
+                f'{item["class_group"]["grade"]} {item["class_group"]["name"]}'.strip(),
+                item["current_layer"] or "未分层",
+                item["current_layer_label"],
+                _rate_for_export(learning.get("completion_rate")),
+                _rate_for_export(learning.get("score_rate")),
+                (learning.get("course") or {}).get("title", ""),
+                decision.get("suggested_layer", ""),
+                (
+                    f'{round(float(decision.get("confidence") or 0) * 100)}%'
+                    if decision.get("suggested_layer")
+                    else ""
+                ),
+                decision.get("status_label", ""),
+                "；".join(decision.get("reasons") or []),
+                decision.get("support_suggestion", ""),
+                decision.get("reviewed_by", ""),
+                decision.get("reviewed_at") or "",
+            ]
+        )
+    workbook = build_workbook(
+        [
+            {
+                "title": "当前分层",
+                "headers": [
+                    "学生",
+                    "账号",
+                    "学号",
+                    "班级",
+                    "当前层级",
+                    "层级说明",
+                    "近30日完成率",
+                    "近30日得分率",
+                    "学习情况课程",
+                    "最新建议",
+                    "参考强度",
+                    "建议状态",
+                    "主要依据",
+                    "教学支持建议",
+                    "处理教师",
+                    "处理时间",
+                ],
+                "rows": rows,
+            }
+        ]
+    )
+    return workbook_response(
+        workbook,
+        f"{request.user.school.code}-当前学生分层-{timezone.localdate().isoformat()}.xlsx",
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
 def stratification_suggestions(request):
     class_ids = _teacher_class_ids(request.user)
-    rows = (
-        StratificationDecision.objects.filter(
-            class_group_id__in=class_ids,
-            course__teacher=request.user,
-        )
-        .select_related(
-            "student__student_profile",
-            "class_group",
-            "subject",
-            "course",
-            "reviewed_by",
-        )
-        .order_by("status", "class_group__name", "student__username", "-created_at")
+    rows = _visible_stratification_decisions(request.user, class_ids).order_by(
+        "status", "class_group__name", "student__username", "-created_at"
     )
-    rows = rows.filter(
-        ~Q(rule_version__startswith="m03-")
-        | Q(calibration_run__releases__status="active")
-    ).distinct()
     status_value = str(request.query_params.get("status") or "")
     if status_value:
         rows = rows.filter(status=status_value)
@@ -345,7 +685,51 @@ def stratification_suggestions(request):
         rows = rows.filter(class_group_id=request.query_params["class_group"])
     if request.query_params.get("course"):
         rows = rows.filter(course_id=request.query_params["course"])
+    decision_kind = str(request.query_params.get("decision_kind") or "").strip()
+    if decision_kind in StratificationDecision.DecisionKind.values:
+        rows = rows.filter(decision_kind=decision_kind)
     return ok([_decision_row(row) for row in rows[:1000]])
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def mastery_snapshots(request):
+    class_ids = _teacher_class_ids(request.user)
+    rows = (
+        StudentMasterySnapshot.objects.filter(
+            school=request.user.school,
+            class_group_id__in=class_ids,
+            assessment__teacher=request.user,
+        )
+        .select_related(
+            "student", "class_group", "subject", "course", "assessment"
+        )
+        .order_by("-observed_at", "class_group__name", "student__username")
+    )
+    if request.query_params.get("class_group"):
+        rows = rows.filter(class_group_id=request.query_params["class_group"])
+    if request.query_params.get("course"):
+        rows = rows.filter(course_id=request.query_params["course"])
+    return ok([_mastery_row(row) for row in rows[:1000]])
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def refresh_mastery_snapshots(request):
+    assessment = TestAssessment.objects.select_related(
+        "school", "subject", "course", "common_question_set"
+    ).filter(
+        pk=request.data.get("assessment"),
+        school=request.user.school,
+        teacher=request.user,
+    ).first()
+    if assessment is None:
+        return fail("测试不存在或无权处理。", status=404)
+    try:
+        result = build_assessment_mastery_candidates(assessment=assessment)
+    except ValidationError as exc:
+        return fail(str(exc.messages[0]), status=400)
+    return ok(result, "共同测试掌握结果已更新。")
 
 
 @api_view(["POST"])
@@ -353,7 +737,9 @@ def stratification_suggestions(request):
 def review_stratification_suggestion(request, pk: int):
     class_ids = _teacher_class_ids(request.user)
     decision = (
-        StratificationDecision.objects.select_related("student", "class_group", "course")
+        StratificationDecision.objects.select_related(
+            "student", "class_group", "subject", "course"
+        )
         .filter(
             pk=pk,
             class_group_id__in=class_ids,
@@ -363,6 +749,8 @@ def review_stratification_suggestion(request, pk: int):
     )
     if decision is None:
         return fail("学习安排建议不存在或无权处理。", status=404)
+    if decision.decision_kind == StratificationDecision.DecisionKind.LEGACY:
+        return fail("该记录仅用于历史兼容，不能继续处理。", status=409)
     action = str(request.data.get("action") or "").strip()
     status_map = {
         "accept": StratificationDecision.Status.ACCEPTED,
@@ -373,19 +761,35 @@ def review_stratification_suggestion(request, pk: int):
     if action not in status_map:
         return fail("处理方式不正确。", status=400)
     selected_layer = ""
-    if action == "accept":
+    is_content_band = (
+        decision.decision_kind == StratificationDecision.DecisionKind.CONTENT_BAND
+    )
+    if action == "accept" and is_content_band:
         if not decision.suggested_layer:
             return fail("当前材料不足，不能采纳层级变化。", status=400)
         selected_layer = decision.suggested_layer
-    elif action == "keep":
-        selected_layer = decision.previous_layer
-    elif action == "adjust":
+    elif action == "keep" and is_content_band:
+        selected_layer = (
+            resolve_student_band(
+                student=decision.student,
+                subject=decision.subject,
+                course=decision.course,
+            )
+            or ""
+        )
+    elif action == "adjust" and is_content_band:
         selected_layer = str(request.data.get("layer") or "").upper()
         if selected_layer not in {"A", "B", "C"}:
             return fail("请选择 A、B 或 C。", status=400)
     note = str(request.data.get("note") or "").strip()[:1000]
     with transaction.atomic():
         decision = StratificationDecision.objects.select_for_update().get(pk=decision.pk)
+        if is_content_band and action in {"accept", "adjust"}:
+            apply_student_subject_band(
+                decision=decision,
+                selected_band=selected_layer,
+                confirmed_by=request.user,
+            )
         decision.status = status_map[action]
         decision.teacher_selected_layer = selected_layer
         decision.review_note = note
@@ -400,13 +804,24 @@ def review_stratification_suggestion(request, pk: int):
                 "reviewed_at",
             ]
         )
+        if is_content_band:
+            record_band_transition_review(
+                decision=decision,
+                action=action,
+                final_band=selected_layer,
+                actor=request.user,
+            )
     write_audit(
         request,
         "teacher.stratification.review",
         school=request.user.school,
         target_type="stratification_decision",
         target_id=decision.id,
-        detail={"action": action, "selected_layer": selected_layer},
+        detail={
+            "action": action,
+            "selected_layer": selected_layer,
+            "layer_applied": is_content_band and action in {"accept", "adjust"},
+        },
     )
     decision = StratificationDecision.objects.select_related(
         "student__student_profile", "class_group", "subject", "course", "reviewed_by"

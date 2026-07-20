@@ -26,6 +26,8 @@ from learning.models import (
     KnowledgeComponent,
     LearningEvent,
     QuestionBankItem,
+    StratificationDecision,
+    StudentSubjectBand,
     TestAssessment,
     TestAssessmentQuestion,
     TestAttempt,
@@ -956,6 +958,27 @@ class AssessmentWorkflowTests(TestCase):
         self.client.post(f"/api/v1/teacher/assessments/{assessment['id']}/open/")
 
         StudentProfile.objects.filter(user=self.student).update(current_layer="A")
+        a_band_decision = StratificationDecision.objects.create(
+            student=self.student,
+            class_group=self.class_group,
+            subject=self.subject,
+            suggested_layer="A",
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+            policy_version="assessment-test-v1",
+            rule_version="assessment-test-a-v1",
+            status=StratificationDecision.Status.ACCEPTED,
+        )
+        StudentSubjectBand.objects.create(
+            student=self.student,
+            school=self.school,
+            class_group=self.class_group,
+            subject=self.subject,
+            band="A",
+            valid_from=timezone.now(),
+            source_decision=a_band_decision,
+            policy_version="assessment-test-v1",
+            confirmed_by=self.teacher,
+        )
         c_student = User.objects.create_user(
             username="student_c",
             password="123456",
@@ -968,6 +991,27 @@ class AssessmentWorkflowTests(TestCase):
             class_group=self.class_group,
             current_layer="C",
             is_first_use=False,
+        )
+        c_band_decision = StratificationDecision.objects.create(
+            student=c_student,
+            class_group=self.class_group,
+            subject=self.subject,
+            suggested_layer="C",
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+            policy_version="assessment-test-v1",
+            rule_version="assessment-test-c-v1",
+            status=StratificationDecision.Status.ACCEPTED,
+        )
+        StudentSubjectBand.objects.create(
+            student=c_student,
+            school=self.school,
+            class_group=self.class_group,
+            subject=self.subject,
+            band="C",
+            valid_from=timezone.now(),
+            source_decision=c_band_decision,
+            policy_version="assessment-test-v1",
+            confirmed_by=self.teacher,
         )
         self.client.force_authenticate(self.student)
         self.client.post(f"/api/v1/student/assessments/{assessment['id']}/start/")

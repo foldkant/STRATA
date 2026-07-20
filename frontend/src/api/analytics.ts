@@ -371,6 +371,46 @@ export type ModelReleaseAudit = {
   created_at: string
 }
 
+export type ContentBandPolicy = {
+  id: number
+  name: string
+  school: number
+  subject: { id: number; name: string; code: string }
+  course: { id: number; title: string } | null
+  version_no: number
+  policy_version: string
+  a_min: number
+  b_min: number
+  boundary_margin: number
+  hysteresis_margin: number
+  max_measurement_error: number
+  min_common_items: number
+  min_answered_ratio: number
+  required_consecutive_windows: number
+  cooldown_days: number
+  max_step_change: number
+  status: 'draft' | 'active' | 'retired'
+  status_label: string
+  content_hash: string
+  published_at: string | null
+  created_at: string
+}
+
+export type ContentBandPolicyPayload = {
+  subject: number
+  course?: number | null
+  name: string
+  a_min: number
+  b_min: number
+  boundary_margin: number
+  hysteresis_margin: number
+  max_measurement_error: number
+  min_common_items: number
+  min_answered_ratio: number
+  required_consecutive_windows: number
+  cooldown_days: number
+}
+
 export function getAnalysisPreparation() {
   return apiRequest<AnalysisPreparation>('/api/v1/school-admin/analytics/preparation/?include_test_data=1')
 }
@@ -403,6 +443,24 @@ export function createAnalysisDataset(payload: { subject_id: number; outcome_key
 
 export function getModelValidation() {
   return apiRequest<ModelValidation>('/api/v1/school-admin/analytics/models/?include_test_data=1')
+}
+
+export function getContentBandPolicies() {
+  return apiRequest<ContentBandPolicy[]>('/api/v1/school-admin/analytics/content-band-policies/')
+}
+
+export function createContentBandPolicy(payload: ContentBandPolicyPayload) {
+  return apiRequest<ContentBandPolicy>('/api/v1/school-admin/analytics/content-band-policies/', {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function publishContentBandPolicy(id: number) {
+  return apiRequest<ContentBandPolicy>(`/api/v1/school-admin/analytics/content-band-policies/${id}/publish/`, {
+    method: 'POST',
+    body: toJsonBody({})
+  })
 }
 
 export function createLongitudinalAnalysis(payload: { dataset_id: number }) {

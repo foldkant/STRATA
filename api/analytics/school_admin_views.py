@@ -13,7 +13,13 @@ from rest_framework.decorators import api_view, permission_classes
 
 from api.permissions import IsSchoolAdmin
 from api.responses import fail, ok
+from api.services import write_audit
 from courses.models import Course, CourseClass, Subject
+from learning.models import ContentBandPolicyVersion, TestAssessment
+from learning.services.mastery import (
+    build_assessment_mastery_candidates,
+    publish_content_band_policy,
+)
 from learning_analytics.models import (
     AnalyticsPipelineRun,
     AnalyticsTaskRun,
@@ -75,6 +81,49 @@ TASK_LABELS = {
     "compare_old_new_records": "核对新旧记录",
     "save_data_check_report": "保存检查报告",
 }
+
+
+def _content_band_policy_row(policy: ContentBandPolicyVersion) -> dict:
+    return {
+        "id": policy.id,
+        "name": policy.name,
+        "school": policy.school_id,
+        "subject": {
+            "id": policy.subject_id,
+            "name": policy.subject.name,
+            "code": policy.subject.code,
+        },
+        "course": (
+            {"id": policy.course_id, "title": policy.course.title}
+            if policy.course_id
+            else None
+        ),
+        "version_no": policy.version_no,
+        "policy_version": policy.policy_version,
+        "a_min": policy.a_min,
+        "b_min": policy.b_min,
+        "boundary_margin": policy.boundary_margin,
+        "hysteresis_margin": policy.hysteresis_margin,
+        "max_measurement_error": policy.max_measurement_error,
+        "min_common_items": policy.min_common_items,
+        "min_answered_ratio": policy.min_answered_ratio,
+        "required_consecutive_windows": policy.required_consecutive_windows,
+        "cooldown_days": policy.cooldown_days,
+        "max_step_change": policy.max_step_change,
+        "status": policy.status,
+        "status_label": policy.get_status_display(),
+        "content_hash": policy.content_hash,
+        "published_at": policy.published_at,
+        "created_at": policy.created_at,
+    }
+
+
+def _number(data, key: str, default, *, integer=False):
+    value = data.get(key, default)
+    try:
+        return int(value) if integer else float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError({key: "请输入有效数值。"}) from exc
 
 
 def _include_test_data(request) -> bool:
@@ -1741,3 +1790,120 @@ def export_model_validation(request, pk: int):
         workbook,
         f"{run.school.code}-{run.subject.code}-模型验证-{run.run_key[:8]}.xlsx",
     )
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsSchoolAdmin])
+def content_band_policies(request):
+    school = request.user.school
+    if request.method == "GET":
+        rows = (
+            ContentBandPolicyVersion.objects.filter(school=school)
+            .select_related("subject", "course")
+            .order_by("subject__name", "course__title", "-version_no")
+        )
+        return ok([_content_band_policy_row(row) for row in rows])
+
+    subject = Subject.objects.filter(
+        pk=request.data.get("subject"), school=school, is_active=True
+    ).first()
+    if subject is None:
+        return fail("请选择本校启用的学科。", status=400)
+    course = None
+    if request.data.get("course") not in (None, ""):
+        course = Course.objects.filter(
+            pk=request.data.get("course"), subject=subject
+        ).first()
+        if course is None:
+            return fail("课程与学科不一致。", status=400)
+    scope = ContentBandPolicyVersion.objects.filter(
+        school=school, subject=subject, course=course
+    )
+    version_no = (
+        scope.order_by("-version_no").values_list("version_no", flat=True).first()
+        or 0
+    ) + 1
+    try:
+        policy = ContentBandPolicyVersion(
+            school=school,
+            subject=subject,
+            course=course,
+            name=str(request.data.get("name") or f"{subject.name}学习内容层级标准")[
+                :128
+            ],
+            version_no=version_no,
+            policy_version=str(
+                request.data.get("policy_version") or f"criterion-v{version_no}"
+            )[:32],
+            a_min=_number(request.data, "a_min", 0.8),
+            b_min=_number(request.data, "b_min", 0.6),
+            boundary_margin=_number(request.data, "boundary_margin", 0.03),
+            hysteresis_margin=_number(request.data, "hysteresis_margin", 0.03),
+            max_measurement_error=_number(
+                request.data, "max_measurement_error", 0.18
+            ),
+            min_common_items=_number(
+                request.data, "min_common_items", 5, integer=True
+            ),
+            min_answered_ratio=_number(request.data, "min_answered_ratio", 0.8),
+            required_consecutive_windows=_number(
+                request.data, "required_consecutive_windows", 2, integer=True
+            ),
+            cooldown_days=_number(request.data, "cooldown_days", 14, integer=True),
+            max_step_change=1,
+            created_by=request.user,
+        )
+        policy.save()
+    except ValidationError as exc:
+        return fail("层级标准校验失败。", errors=exc.message_dict, status=400)
+    write_audit(
+        request,
+        "school_admin.content_band_policy.create",
+        school=school,
+        target_type="content_band_policy",
+        target_id=policy.id,
+    )
+    return ok(_content_band_policy_row(policy), "层级标准草稿已创建。", status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def publish_content_band_policy_view(request, pk: int):
+    policy = (
+        ContentBandPolicyVersion.objects.select_related("school", "subject", "course")
+        .filter(pk=pk, school=request.user.school)
+        .first()
+    )
+    if policy is None:
+        return fail("层级标准不存在。", status=404)
+    try:
+        policy = publish_content_band_policy(policy=policy, actor=request.user)
+    except ValidationError as exc:
+        return fail(str(exc.messages[0]), status=400)
+    write_audit(
+        request,
+        "school_admin.content_band_policy.publish",
+        school=request.user.school,
+        target_type="content_band_policy",
+        target_id=policy.id,
+    )
+    return ok(_content_band_policy_row(policy), "层级标准已启用。")
+
+
+@api_view(["POST"])
+@permission_classes([IsSchoolAdmin])
+def refresh_assessment_mastery(request):
+    assessment = (
+        TestAssessment.objects.select_related(
+            "school", "subject", "course", "common_question_set"
+        )
+        .filter(pk=request.data.get("assessment"), school=request.user.school)
+        .first()
+    )
+    if assessment is None:
+        return fail("测试不存在。", status=404)
+    try:
+        result = build_assessment_mastery_candidates(assessment=assessment)
+    except ValidationError as exc:
+        return fail(str(exc.messages[0]), status=400)
+    return ok(result, "共同测试掌握结果已更新。")

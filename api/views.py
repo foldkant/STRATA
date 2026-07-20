@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import random
 import urllib.request
 import zipfile
 from io import BytesIO
@@ -20,6 +19,7 @@ from django.contrib.auth import (
     update_session_auth_hash,
 )
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.db import connection, transaction
 from django.http import JsonResponse
@@ -60,6 +60,7 @@ from courses.models import (
     ResourceFile,
     Subject,
 )
+from courses.grouping import build_grouping_plan
 from learning.models import (
     Feedback,
     LearningEvent,
@@ -74,6 +75,7 @@ from learning.models import (
     TestAssessment,
     TestAttempt,
 )
+from learning.services.bands import resolve_student_band
 from learning_analytics.services.classroom_events import (
     ClassroomEventError,
     classroom_question,
@@ -114,16 +116,22 @@ from learning_analytics.services.evaluation_events import (
 )
 from learning_analytics.models import (
     ClassroomEvaluationStandardUse,
+    GroupingCandidateRun,
     LessonStepEvaluationBinding,
 )
 from learning_analytics.services.group_collaboration_events import (
     GroupCollaborationEventError,
-    group_collaboration_has_student_activity,
     record_group_document_opened,
     record_group_document_saved,
     record_group_file_shared,
     release_group_collaboration_opportunities,
     withdraw_group_collaboration_opportunities,
+)
+from learning_analytics.services.grouping_plans import (
+    capture_grouping_outcomes,
+    confirm_grouping_candidate,
+    generate_grouping_candidate_run,
+    record_confirmed_plan_evidence,
 )
 from learning_analytics.services.operational_events import (
     record_classroom_interaction_response,
@@ -137,6 +145,7 @@ from learning_analytics.services.operational_events import (
 from ops.models import AuditLog, ExportBatch, ImportBatch
 from ops.xlsx import export_rows, template_response
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
+from realtime.events import publish_chat_event, session_group, teacher_group
 
 from .permissions import IsSchoolAdmin, IsStudent, IsSuperAdmin, IsTeacher
 from .protected_files import signed_protected_file_url
@@ -3468,7 +3477,9 @@ def teacher_learning_web_page_responses(request, pk):
                     "status": (
                         "completed"
                         if completed
-                        else "started" if started else "pending"
+                        else "started"
+                        if started
+                        else "pending"
                     ),
                     "status_label": (
                         "已完成" if completed else "进行中" if started else "未开始"
@@ -3984,7 +3995,11 @@ def _ensure_group_document(group: ClassroomGroup) -> ClassroomGroup:
 
 def _classroom_group_queryset(collaboration: ClassroomGroupCollaboration):
     return (
-        collaboration.groups.annotate(
+        collaboration.groups.filter(
+            is_active=True,
+            plan_version=collaboration.active_plan_version,
+        )
+        .annotate(
             used_storage_bytes=Sum("files__file_size"),
             file_count=Count("files", distinct=True),
         )
@@ -4018,100 +4033,39 @@ def _student_profiles_for_grouping(session: ClassroomSession) -> list[StudentPro
     return list(
         StudentProfile.objects.select_related("user")
         .filter(class_group=session.class_group, user__is_active=True)
-        .order_by(
-            "current_layer", "student_no", "user__display_name", "user__username", "id"
-        )
+        .order_by("student_no", "user__display_name", "user__username", "id")
     )
 
 
-def _profile_chunks(
-    profiles: list[StudentProfile], group_size: int
-) -> list[list[StudentProfile]]:
-    return [
-        profiles[index : index + group_size]
-        for index in range(0, len(profiles), group_size)
-    ]
+def _archive_active_classroom_groups(
+    collaboration: ClassroomGroupCollaboration,
+) -> None:
+    ClassroomGroup.objects.filter(
+        collaboration=collaboration,
+        is_active=True,
+    ).update(is_active=False, closed_at=timezone.now())
 
 
-def _default_group_chunks(
-    profiles: list[StudentProfile],
+def _generate_classroom_groups(
+    collaboration: ClassroomGroupCollaboration,
     *,
-    group_size: int,
-    strategy: str,
-    seed: int,
-) -> list[tuple[str, list[StudentProfile]]]:
-    rows = list(profiles)
-    if strategy == ClassroomGroupCollaboration.GroupingStrategy.RANDOM:
-        rng = random.Random(seed)
-        rng.shuffle(rows)
-        return [("", chunk) for chunk in _profile_chunks(rows, group_size)]
-
-    buckets = {"A": [], "B": [], "C": [], "": []}
-    for profile in rows:
-        layer = (
-            profile.current_layer if profile.current_layer in {"A", "B", "C"} else ""
-        )
-        buckets[layer].append(profile)
-
-    chunks: list[tuple[str, list[StudentProfile]]] = []
-    for layer in ["A", "B", "C"]:
-        chunks.extend(
-            (layer, chunk) for chunk in _profile_chunks(buckets[layer], group_size)
-        )
-
-    unlayered = buckets[""]
-    if (
-        strategy
-        in {
-            ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER,
-            ClassroomGroupCollaboration.GroupingStrategy.AI_LAYER,
-        }
-        and chunks
-    ):
-        index = 0
-        for profile in unlayered:
-            placed = False
-            for _ in range(len(chunks)):
-                layer, chunk = chunks[index % len(chunks)]
-                index += 1
-                if len(chunk) < group_size:
-                    chunk.append(profile)
-                    placed = True
-                    break
-            if not placed:
-                chunks.append(("", [profile]))
-        return chunks
-
-    chunks.extend(("", chunk) for chunk in _profile_chunks(unlayered, group_size))
-    return chunks
-
-
-def _delete_existing_group_files(collaboration: ClassroomGroupCollaboration) -> None:
-    for file in ClassroomGroupFile.objects.filter(group__collaboration=collaboration):
-        if file.attachment:
-            file.attachment.delete(save=False)
-    for group in collaboration.groups.all():
-        for version in group.document_versions.all():
-            if version.file:
-                version.file.delete(save=False)
-        if group.collaboration_document:
-            group.collaboration_document.delete(save=False)
-    collaboration.groups.all().delete()
-
-
-def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> None:
+    plan_version: int,
+) -> None:
     profiles = _student_profiles_for_grouping(collaboration.session)
     if not profiles:
         raise ServiceError("当前班级没有可分组的启用学生。", status=400)
 
-    _delete_existing_group_files(collaboration)
-    chunks = _default_group_chunks(
-        profiles,
+    plan = build_grouping_plan(
+        session=collaboration.session,
+        profiles=profiles,
         group_size=collaboration.group_size,
         strategy=collaboration.grouping_strategy,
-        seed=collaboration.session_id,
+        seed=collaboration.session_id * 1000 + plan_version,
+        plan_version=plan_version,
     )
-    for group_no, (layer_hint, members) in enumerate(chunks, start=1):
+    collaboration.generation_metadata = plan.metadata
+    collaboration.save(update_fields=["generation_metadata", "updated_at"])
+    for group_no, members in enumerate(plan.chunks, start=1):
         if not members:
             continue
         group_name = f"第{group_no}组"
@@ -4119,8 +4073,8 @@ def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> No
         group = ClassroomGroup.objects.create(
             collaboration=collaboration,
             group_no=group_no,
+            plan_version=plan_version,
             name=group_name,
-            layer_hint=layer_hint,
             leader=leader,
         )
         ClassroomGroupMember.objects.bulk_create(
@@ -4130,6 +4084,7 @@ def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> No
                     group=group,
                     student=profile.user,
                     student_profile=profile,
+                    plan_version=plan_version,
                     role=(
                         ClassroomGroupMember.Role.LEADER
                         if index == 0
@@ -4142,6 +4097,115 @@ def _generate_classroom_groups(collaboration: ClassroomGroupCollaboration) -> No
         _ensure_group_document(group)
 
 
+def _generate_classroom_groups_from_assignments(
+    collaboration: ClassroomGroupCollaboration,
+    *,
+    assignments: list[dict],
+    plan_version: int,
+) -> None:
+    profiles = {
+        profile.user_id: profile
+        for profile in _student_profiles_for_grouping(collaboration.session)
+    }
+    valid_roles = set(ClassroomGroupMember.Role.values)
+    for group_row in sorted(assignments, key=lambda row: int(row["group_no"])):
+        group_no = int(group_row["group_no"])
+        members = list(group_row.get("members") or [])
+        if not members:
+            continue
+        leader_id = next(
+            (
+                int(member["student_id"])
+                for member in members
+                if member.get("role")
+                in {
+                    ClassroomGroupMember.Role.COORDINATOR,
+                    ClassroomGroupMember.Role.LEADER,
+                }
+            ),
+            int(members[0]["student_id"]),
+        )
+        group = ClassroomGroup.objects.create(
+            collaboration=collaboration,
+            group_no=group_no,
+            plan_version=plan_version,
+            name=f"第{group_no}组",
+            leader_id=leader_id,
+        )
+        member_rows = []
+        for member in members:
+            student_id = int(member["student_id"])
+            profile = profiles.get(student_id)
+            if profile is None:
+                raise ServiceError("分组中包含不属于当前班级的学生。", status=400)
+            role = str(member.get("role") or ClassroomGroupMember.Role.MEMBER)
+            if role not in valid_roles:
+                raise ServiceError("小组角色不正确。", status=400)
+            member_rows.append(
+                ClassroomGroupMember(
+                    collaboration=collaboration,
+                    group=group,
+                    student_id=student_id,
+                    student_profile=profile,
+                    plan_version=plan_version,
+                    role=role,
+                )
+            )
+        ClassroomGroupMember.objects.bulk_create(member_rows)
+        _ensure_group_document(group)
+
+
+def _grouping_candidate_run_row(run: GroupingCandidateRun) -> dict:
+    student_ids = [int(value) for value in run.input_snapshot.get("student_ids", [])]
+    students = {
+        profile.user_id: {
+            "student_id": profile.user_id,
+            "username": profile.user.username,
+            "display_name": profile.user.display_name or profile.user.username,
+            "student_no": profile.student_no,
+        }
+        for profile in StudentProfile.objects.select_related("user").filter(
+            user_id__in=student_ids,
+            class_group=run.decision_point.class_group,
+        )
+    }
+    candidates = []
+    for candidate in run.candidates or []:
+        row = dict(candidate)
+        assignments = []
+        for group in candidate.get("assignments") or []:
+            group_row = {"group_no": group.get("group_no"), "members": []}
+            for member in group.get("members") or []:
+                student = students.get(int(member.get("student_id") or 0), {})
+                group_row["members"].append({**member, **student})
+            assignments.append(group_row)
+        row["assignments"] = assignments
+        candidates.append(row)
+    return {
+        "id": run.id,
+        "run_id": str(run.run_id),
+        "status": run.status,
+        "status_label": run.get_status_display(),
+        "algorithm_version": run.algorithm_version,
+        "policy": {
+            "id": run.policy_id,
+            "name": run.policy.name,
+            "strategy": run.policy.strategy,
+            "strategy_label": run.policy.get_strategy_display(),
+            "min_group_size": run.policy.min_group_size,
+            "max_group_size": run.policy.max_group_size,
+            "roles": run.policy.role_scheme,
+        },
+        "students": list(students.values()),
+        "locked_assignments": run.input_snapshot.get("locked_assignments") or {},
+        "candidates": candidates,
+        "conflicts": run.conflict_explanations,
+        "selected_candidate_key": run.selected_candidate_key,
+        "created_at": run.created_at,
+        "finished_at": run.finished_at,
+    }
+
+
 def _setup_classroom_group_collaboration(
     request, session: ClassroomSession, data
 ) -> ClassroomGroupCollaboration:
@@ -4151,7 +4215,7 @@ def _setup_classroom_group_collaboration(
     storage_quota_mb = _int_in_range(data.get("storage_quota_mb"), 100, 10, 2048)
     strategy = str(
         data.get("grouping_strategy")
-        or ClassroomGroupCollaboration.GroupingStrategy.BALANCED_LAYER
+        or ClassroomGroupCollaboration.GroupingStrategy.RANDOM
     ).strip()
     if strategy not in {
         item.value for item in ClassroomGroupCollaboration.GroupingStrategy
@@ -4198,16 +4262,10 @@ def _setup_classroom_group_collaboration(
                 "allow_onlyoffice_edit": allow_onlyoffice_edit,
             },
         )
-        has_groups = collaboration.groups.exists()
-        if (
-            regenerate
-            and has_groups
-            and group_collaboration_has_student_activity(collaboration)
-        ):
-            raise ServiceError(
-                "已有打开、保存或上传记录，不能重新分组；请保留本次课堂证据。",
-                status=409,
-            )
+        has_groups = collaboration.groups.filter(
+            is_active=True,
+            plan_version=collaboration.active_plan_version,
+        ).exists()
         grouping_configuration_changed = has_groups and (
             collaboration.group_size != group_size
             or collaboration.grouping_strategy != strategy
@@ -4233,6 +4291,15 @@ def _setup_classroom_group_collaboration(
         if not collaboration_was_open:
             collaboration.opened_at = timezone.now()
         collaboration.closed_at = None
+        if (regenerate and has_groups) or (not created and not has_groups):
+            latest_plan_version = (
+                collaboration.groups.order_by("-plan_version")
+                .values_list("plan_version", flat=True)
+                .first()
+            )
+            collaboration.active_plan_version = (
+                latest_plan_version + 1 if latest_plan_version else 1
+            )
         collaboration.save()
 
         if regenerate and has_groups:
@@ -4246,9 +4313,16 @@ def _setup_classroom_group_collaboration(
                 raise ServiceError(exc.message, status=400) from exc
 
         if created or regenerate or not has_groups:
-            _generate_classroom_groups(collaboration)
+            _archive_active_classroom_groups(collaboration)
+            _generate_classroom_groups(
+                collaboration,
+                plan_version=collaboration.active_plan_version,
+            )
         else:
-            for group in collaboration.groups.all():
+            for group in collaboration.groups.filter(
+                is_active=True,
+                plan_version=collaboration.active_plan_version,
+            ):
                 _ensure_group_document(group)
         try:
             release_group_collaboration_opportunities(
@@ -4284,6 +4358,10 @@ def _teacher_classroom_group(
                 "collaboration", "collaboration__session", "leader"
             )
             .filter(pk=int(group_id), collaboration__session=session)
+            .filter(
+                is_active=True,
+                plan_version=F("collaboration__active_plan_version"),
+            )
             .first()
         )
     except (TypeError, ValueError):
@@ -4390,6 +4468,231 @@ def teacher_classroom_group_collaboration_setup(request, pk):
     return ok(classroom_group_collaboration_row(collaboration), "小组合作已开启")
 
 
+@api_view(["GET", "POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_grouping_candidates(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if request.method == "GET":
+        run = (
+            GroupingCandidateRun.objects.select_related(
+                "policy",
+                "decision_point",
+                "decision_point__class_group",
+            )
+            .filter(decision_point__classroom_session=session)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        return ok(_grouping_candidate_run_row(run) if run else None)
+
+    collaboration = ClassroomGroupCollaboration.objects.filter(session=session).first()
+    if collaboration is None or not collaboration.is_enabled:
+        return fail("请先保存并开启小组合作设置。", status=409)
+    raw_locks = request.data.get("locked_assignments") or {}
+    if not isinstance(raw_locks, dict):
+        return fail("锁定学生格式不正确。", status=400)
+    document_type = str(
+        request.data.get("document_type") or collaboration.document_type
+    ).lower()
+    if document_type not in ClassroomGroupCollaboration.DocumentType.values:
+        return fail("协作文档类型不正确。", status=400)
+    try:
+        storage_quota_mb = _int_in_range(
+            request.data.get("storage_quota_mb"),
+            collaboration.storage_quota_mb,
+            10,
+            2048,
+        )
+        run = generate_grouping_candidate_run(
+            session=session,
+            actor=request.user,
+            group_size=request.data.get("group_size") or collaboration.group_size,
+            requested_strategy=str(
+                request.data.get("grouping_strategy") or collaboration.grouping_strategy
+            ),
+            locked_assignments=raw_locks,
+            runtime_settings={
+                "document_type": document_type,
+                "storage_quota_mb": storage_quota_mb,
+                "allow_student_upload": str(
+                    request.data.get(
+                        "allow_student_upload", collaboration.allow_student_upload
+                    )
+                ).lower()
+                not in {"0", "false", "no"},
+                "allow_onlyoffice_edit": str(
+                    request.data.get(
+                        "allow_onlyoffice_edit", collaboration.allow_onlyoffice_edit
+                    )
+                ).lower()
+                not in {"0", "false", "no"},
+            },
+        )
+    except (ValidationError, ValueError) as exc:
+        message = exc.messages[0] if isinstance(exc, ValidationError) else str(exc)
+        return fail(message, status=400)
+    write_audit(
+        request,
+        "teacher.classroom.grouping.candidates",
+        school=session.school,
+        target_type="grouping_candidate_run",
+        target_id=run.id,
+        detail={
+            "candidate_count": run.candidate_count,
+            "locked_student_count": len(raw_locks),
+        },
+    )
+    return ok(_grouping_candidate_run_row(run), "分组候选已生成。", status=201)
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_grouping_confirm(request, pk, run_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    run = (
+        GroupingCandidateRun.objects.select_related(
+            "policy",
+            "decision_point",
+            "decision_point__classroom_session",
+        )
+        .filter(pk=run_id, decision_point__classroom_session=session)
+        .first()
+    )
+    if run is None:
+        return fail("分组候选不存在。", status=404)
+    collaboration = ClassroomGroupCollaboration.objects.filter(
+        session=session,
+        is_enabled=True,
+        status=ClassroomGroupCollaboration.Status.OPEN,
+    ).first()
+    if collaboration is None:
+        return fail("小组合作尚未开启。", status=409)
+    candidate_key = str(request.data.get("candidate_key") or "").strip()
+    existing_plan = run.plans.filter(collaboration=collaboration).first()
+    if existing_plan is not None:
+        if existing_plan.candidate_key != candidate_key:
+            return fail("该候选运行已经确认，不能改选其他方案。", status=409)
+        return ok(
+            classroom_group_collaboration_row(_with_prefetched_groups(collaboration)),
+            "该分组已经生效。",
+        )
+    adjustments = request.data.get("adjustments") or {}
+    if not isinstance(adjustments, dict):
+        return fail("分组调整格式不正确。", status=400)
+    try:
+        with transaction.atomic():
+            withdraw_group_collaboration_opportunities(
+                collaboration=collaboration,
+                actor=request.user,
+                reason_code="group_plan_replaced",
+            )
+            plan, assignments = confirm_grouping_candidate(
+                run=run,
+                candidate_key=candidate_key,
+                collaboration=collaboration,
+                actor=request.user,
+                adjustments=adjustments,
+                note=str(request.data.get("note") or ""),
+            )
+            _archive_active_classroom_groups(collaboration)
+            collaboration.active_plan_version = plan.plan_version
+            collaboration.group_size = int(
+                run.input_snapshot.get("group_size") or collaboration.group_size
+            )
+            collaboration.grouping_strategy = str(
+                run.input_snapshot.get("requested_strategy")
+                or collaboration.grouping_strategy
+            )
+            collaboration.strategy_version = run.algorithm_version
+            runtime_settings = run.input_snapshot.get("runtime_settings") or {}
+            collaboration.document_type = str(
+                runtime_settings.get("document_type") or collaboration.document_type
+            )
+            collaboration.storage_quota_mb = int(
+                runtime_settings.get("storage_quota_mb")
+                or collaboration.storage_quota_mb
+            )
+            collaboration.allow_student_upload = bool(
+                runtime_settings.get(
+                    "allow_student_upload", collaboration.allow_student_upload
+                )
+            )
+            collaboration.allow_onlyoffice_edit = bool(
+                runtime_settings.get(
+                    "allow_onlyoffice_edit", collaboration.allow_onlyoffice_edit
+                )
+            )
+            collaboration.generation_metadata = {
+                "candidate_run_id": run.id,
+                "candidate_key": candidate_key,
+                "policy_id": run.policy_id,
+                "policy_hash": run.policy.content_hash,
+                "plan_id": str(plan.plan_id),
+            }
+            collaboration.save(
+                update_fields=[
+                    "active_plan_version",
+                    "group_size",
+                    "grouping_strategy",
+                    "strategy_version",
+                    "generation_metadata",
+                    "document_type",
+                    "storage_quota_mb",
+                    "allow_student_upload",
+                    "allow_onlyoffice_edit",
+                    "updated_at",
+                ]
+            )
+            _generate_classroom_groups_from_assignments(
+                collaboration,
+                assignments=assignments,
+                plan_version=plan.plan_version,
+            )
+            record_confirmed_plan_evidence(plan=plan)
+            release_group_collaboration_opportunities(
+                collaboration=collaboration,
+                actor=request.user,
+            )
+    except ValidationError as exc:
+        return fail(exc.messages[0], status=400)
+    except (GroupCollaborationEventError, ServiceError) as exc:
+        if isinstance(exc, ServiceError):
+            return _service_fail(exc)
+        return fail(exc.message, status=400)
+    write_audit(
+        request,
+        "teacher.classroom.grouping.confirm",
+        school=session.school,
+        target_type="grouping_plan_version",
+        target_id=plan.id,
+        detail={
+            "candidate_run_id": run.id,
+            "candidate_key": candidate_key,
+            "plan_version": plan.plan_version,
+            "adjusted": bool(adjustments),
+        },
+    )
+    publish_chat_event(
+        [session_group(session.id), teacher_group(session.id)],
+        {
+            "type": "grouping.updated",
+            "session_id": session.id,
+            "plan_version": plan.plan_version,
+        },
+    )
+    collaboration = ClassroomGroupCollaboration.objects.get(pk=collaboration.pk)
+    return ok(
+        classroom_group_collaboration_row(_with_prefetched_groups(collaboration)),
+        "新分组已生效。",
+    )
+
+
 @api_view(["POST"])
 @permission_classes([IsTeacher])
 def teacher_classroom_group_collaboration_close(request, pk):
@@ -4414,6 +4717,7 @@ def teacher_classroom_group_collaboration_close(request, pk):
             collaboration.save(
                 update_fields=["is_enabled", "status", "closed_at", "updated_at"]
             )
+            capture_grouping_outcomes(collaboration=collaboration)
     except ServiceError as exc:
         return _service_fail(exc)
     except GroupCollaborationEventError as exc:
@@ -4648,18 +4952,21 @@ def _validate_evaluation_response(
                 errors.append(f"{criterion['title']}需要选择暂不评价原因。")
                 continue
             if len(note) > 200:
-                errors.append(f"{criterion['title']}的暂不评价说明不能超过 200 个字符。")
+                errors.append(
+                    f"{criterion['title']}的暂不评价说明不能超过 200 个字符。"
+                )
                 continue
-            if reason == ClassroomEvaluationSubmission.NotAssessedReason.OTHER and not note:
+            if (
+                reason == ClassroomEvaluationSubmission.NotAssessedReason.OTHER
+                and not note
+            ):
                 errors.append(f"{criterion['title']}选择其他原因时需要填写说明。")
                 continue
             cleaned_not_assessed[criterion_id] = {"reason": reason, "note": note}
             continue
         errors.append(f"{criterion['title']}需要选择 1-5 星或暂不评价。")
     extra = [
-        key
-        for key in set(ratings) | set(not_assessed)
-        if str(key) not in criterion_ids
+        key for key in set(ratings) | set(not_assessed) if str(key) not in criterion_ids
     ]
     if extra:
         errors.append("评价结果包含无效评价项。")
@@ -4714,9 +5021,7 @@ def _evaluation_submission_average(
         "average": round(sum(values) / len(values), 2) if values else None,
         "rated_item_count": rated_items,
         "not_assessed_item_count": not_assessed_total,
-        "unanswered_item_count": max(
-            total_items - rated_items - not_assessed_total, 0
-        ),
+        "unanswered_item_count": max(total_items - rated_items - not_assessed_total, 0),
         "total_item_count": total_items,
         "criteria": criterion_rows,
     }
@@ -4746,7 +5051,10 @@ def _peer_possible_count(session: ClassroomSession) -> int:
     if collaboration is None:
         return 0
     count = 0
-    for group in collaboration.groups.prefetch_related("members").all():
+    for group in collaboration.groups.filter(
+        is_active=True,
+        plan_version=collaboration.active_plan_version,
+    ).prefetch_related("members"):
         member_count = group.members.count()
         count += member_count * max(member_count - 1, 0)
     return count
@@ -5113,9 +5421,11 @@ def teacher_classroom_evaluation_ai_generate(request, pk):
 def teacher_classroom_evaluation_submit(request, pk):
     try:
         session = _teacher_classroom_session(request, pk)
-        standard_use = ClassroomEvaluationStandardUse.objects.select_related(
-            "standard_version"
-        ).filter(session=session).first()
+        standard_use = (
+            ClassroomEvaluationStandardUse.objects.select_related("standard_version")
+            .filter(session=session)
+            .first()
+        )
         if not session.evaluation_enabled or standard_use is None:
             raise ServiceError("本课堂尚未开启评价。", status=400)
         config_row = classroom_evaluation_config_row(standard_use)
@@ -5225,7 +5535,12 @@ def _student_evaluation_context(request, session_id):
     if collaboration is not None:
         member = (
             ClassroomGroupMember.objects.select_related("group")
-            .filter(collaboration=collaboration, student=request.user)
+            .filter(
+                collaboration=collaboration,
+                student=request.user,
+                plan_version=collaboration.active_plan_version,
+                group__is_active=True,
+            )
             .first()
         )
         group = member.group if member else None
@@ -5472,9 +5787,13 @@ def _group_document_access(request, group: ClassroomGroup) -> tuple[bool, bool]:
     if not user.is_authenticated:
         return False, False
     session = group.collaboration.session
+    is_current_group = (
+        group.is_active
+        and group.plan_version == group.collaboration.active_plan_version
+    )
     if user.role == "teacher":
         can_open = session.teacher_id == user.id and session.school_id == user.school_id
-        return can_open, can_open
+        return can_open, can_open and is_current_group
     if user.role == "student":
         try:
             profile = user.student_profile
@@ -5488,13 +5807,15 @@ def _group_document_access(request, group: ClassroomGroup) -> tuple[bool, bool]:
         is_member = ClassroomGroupMember.objects.filter(
             group=group, student=user
         ).exists()
-        can_open = (
-            is_member
+        can_open = is_member
+        can_edit = (
+            can_open
+            and is_current_group
             and session.status == ClassroomSession.Status.RUNNING
             and group.collaboration.is_enabled
             and group.collaboration.status == ClassroomGroupCollaboration.Status.OPEN
+            and group.collaboration.allow_onlyoffice_edit
         )
-        can_edit = can_open and group.collaboration.allow_onlyoffice_edit
         return can_open, can_edit
     if user.role == "school_admin":
         return user.school_id == session.school_id, False
@@ -5506,7 +5827,11 @@ def _group_document_access(request, group: ClassroomGroup) -> tuple[bool, bool]:
 def _write_group_document_open_event(
     request, group: ClassroomGroup, *, presentation: str, editor_mode: str
 ) -> None:
-    if request.user.role != "student":
+    if (
+        request.user.role != "student"
+        or not group.is_active
+        or group.plan_version != group.collaboration.active_plan_version
+    ):
         return
     record_group_document_opened(
         group=group,
@@ -5977,7 +6302,7 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
         questions = normalize_lesson_question_items(
             step.question_items,
             include_answer=True,
-            student_layer=profile.current_layer,
+            student_layer=_student_course_band(profile, session.course),
             apply_layering=apply_layering,
         )
         attempt = latest_attempt_by_student.get(profile.user_id)
@@ -6030,7 +6355,9 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
                 "submitted_at": (
                     attempt.submitted_at
                     if attempt
-                    else event.occurred_at if event else None
+                    else event.occurred_at
+                    if event
+                    else None
                 ),
                 "event_id": event.id if event else None,
                 "attempt_id": str(attempt.attempt_id) if attempt else None,
@@ -6980,6 +7307,16 @@ def _student_profile(request) -> StudentProfile:
     return profile
 
 
+def _student_course_band(profile: StudentProfile, course: Course | None) -> str | None:
+    if course is None or course.subject_id is None:
+        return None
+    return resolve_student_band(
+        student=profile.user,
+        subject=course.subject,
+        course=course,
+    )
+
+
 def _student_teachers(profile: StudentProfile):
     if not profile.class_group_id:
         return get_user_model().objects.none()
@@ -7555,7 +7892,10 @@ def _student_dashboard_data(request, profile: StudentProfile) -> dict:
         "profile": student_profile_summary(profile),
         "current_classroom": student_classroom_row(
             current_classroom,
-            student_layer=profile.current_layer,
+            student_layer=_student_course_band(
+                profile,
+                current_classroom.course if current_classroom else None,
+            ),
             student_user=request.user,
         ),
         "metrics": [
@@ -7594,13 +7934,17 @@ def student_me(request):
         profile = _student_profile(request)
     except ServiceError as exc:
         return _service_fail(exc)
+    current_classroom = _student_current_classroom(profile)
     return ok(
         {
             "user": user_summary(request.user),
             "profile": student_profile_summary(profile),
             "current_classroom": student_classroom_row(
-                _student_current_classroom(profile),
-                student_layer=profile.current_layer,
+                current_classroom,
+                student_layer=_student_course_band(
+                    profile,
+                    current_classroom.course if current_classroom else None,
+                ),
                 student_user=request.user,
             ),
             "teachers": [
@@ -8411,7 +8755,7 @@ def _student_step_question(
     questions = normalize_lesson_question_items(
         step.question_items,
         include_answer=False,
-        student_layer=profile.current_layer,
+        student_layer=_student_course_band(profile, step.lesson.course),
         apply_layering=lesson_step_has_layered_questions(step),
     )
     question = next(
@@ -8563,7 +8907,7 @@ def student_lesson_step_answer(request, step_id):
     questions = normalize_lesson_question_items(
         step.question_items,
         include_answer=True,
-        student_layer=profile.current_layer,
+        student_layer=_student_course_band(profile, step.lesson.course),
         apply_layering=lesson_step_has_layered_questions(step),
     )
     progress = _lesson_step_answer_progress(questions, answer)
@@ -8675,10 +9019,14 @@ def student_current_classroom(request):
         profile = _student_profile(request)
     except ServiceError as exc:
         return _service_fail(exc)
+    session = _student_current_classroom(profile)
     return ok(
         student_classroom_row(
-            _student_current_classroom(profile),
-            student_layer=profile.current_layer,
+            session,
+            student_layer=_student_course_band(
+                profile,
+                session.course if session else None,
+            ),
             student_user=request.user,
         )
     )
@@ -8710,7 +9058,9 @@ def student_classroom_detail(request, pk):
         return fail("课堂尚未开始，暂不能进入。", status=403)
     return ok(
         student_classroom_row(
-            session, student_layer=profile.current_layer, student_user=request.user
+            session,
+            student_layer=_student_course_band(profile, session.course),
+            student_user=request.user,
         )
     )
 
@@ -8887,7 +9237,12 @@ def _student_group_collaboration_context(request, session_id):
         ClassroomGroupMember.objects.select_related(
             "group", "group__collaboration", "student_profile", "student"
         )
-        .filter(collaboration=collaboration, student=request.user)
+        .filter(
+            collaboration=collaboration,
+            student=request.user,
+            plan_version=collaboration.active_plan_version,
+            group__is_active=True,
+        )
         .first()
     )
     return profile, session, collaboration, member.group if member else None

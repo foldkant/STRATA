@@ -10,6 +10,7 @@ from django.utils import timezone
 
 from courses.models import ClassroomEvaluationSubmission, Course, CourseClass
 from learning.models import StratificationDecision
+from learning.services.bands import resolve_student_band
 from learning_analytics.models import (
     AssessmentResultFact,
     LearningEventV2,
@@ -22,7 +23,8 @@ from school.models import StudentProfile
 
 
 SUMMARY_GENERATOR_VERSION = "summary-v1"
-RULE_VERSION = "transparent-rules-v1"
+RULE_VERSION = "transparent-rules-v2"
+SUPPORT_POLICY_VERSION = "support-policy-v2"
 MIN_REQUIRED_OPPORTUNITIES = 5
 MIN_GRADED_ITEMS = 3
 
@@ -372,7 +374,7 @@ def build_student_learning_summary(
     return summary
 
 
-def _suggested_layer(metrics: dict):
+def _support_priority(metrics: dict):
     completion = metrics.get("completion_rate")
     score = metrics.get("score", {}).get("score_rate")
     resource = metrics.get("resources", {}).get("opened_rate")
@@ -394,10 +396,10 @@ def _suggested_layer(metrics: dict):
         weight for _value, weight in weighted
     )
     if index >= 0.8:
-        return "A", round(index, 4)
+        return StratificationDecision.SupportPriority.ROUTINE, round(index, 4)
     if index >= 0.6:
-        return "B", round(index, 4)
-    return "C", round(index, 4)
+        return StratificationDecision.SupportPriority.WATCH, round(index, 4)
+    return StratificationDecision.SupportPriority.HIGH, round(index, 4)
 
 
 @transaction.atomic
@@ -414,6 +416,7 @@ def build_transparent_suggestion(*, summary: StudentLearningSummary):
             course=summary.course,
             status=StratificationDecision.Status.PENDING,
             rule_version__startswith="m03-",
+            decision_kind=StratificationDecision.DecisionKind.SUPPORT,
         )
         .order_by("-window_end", "-created_at")
         .first()
@@ -427,11 +430,11 @@ def build_transparent_suggestion(*, summary: StudentLearningSummary):
         return model_candidate
     if existing and existing.status != StratificationDecision.Status.PENDING:
         return existing
-    suggested_layer, index = ("", None)
+    support_priority, index = ("", None)
     reasons = []
     support_suggestion = ""
     if summary.data_status == StudentLearningSummary.DataStatus.AVAILABLE:
-        suggested_layer, index = _suggested_layer(summary.metrics)
+        support_priority, index = _support_priority(summary.metrics)
         completion = summary.metrics.get("completion_rate")
         score_rate = summary.metrics.get("score", {}).get("score_rate")
         if score_rate is not None:
@@ -444,26 +447,24 @@ def build_transparent_suggestion(*, summary: StudentLearningSummary):
         if teacher_stars is not None:
             reasons.append(f"教师评价平均为 {teacher_stars:.1f} 星。")
         support_suggestion = {
-            "A": "可增加开放性任务、迁移应用和同伴支持机会。",
-            "B": "保持核心任务，并针对薄弱知识点安排一次订正。",
-            "C": "减少单次任务负担，补充示例、分步提示和及时反馈。",
-        }.get(suggested_layer, "继续收集学习材料后再安排支持。")
+            StratificationDecision.SupportPriority.ROUTINE: "可增加开放性任务、迁移应用和同伴支持机会。",
+            StratificationDecision.SupportPriority.WATCH: "保持核心任务，并针对薄弱知识点安排一次订正。",
+            StratificationDecision.SupportPriority.HIGH: "减少单次任务负担，补充示例、分步提示和及时反馈。",
+        }.get(support_priority, "继续收集学习材料后再安排支持。")
     else:
         reasons.append("当前学习材料不足，暂不生成层级变化建议。")
         support_suggestion = "保持当前学习安排，并补充必要的作答和评价材料。"
-    eligible_count = summary.metrics.get("opportunities", {}).get("eligible_count", 0)
-    graded_count = summary.metrics.get("score", {}).get("graded_item_count", 0)
-    confidence = (
-        min(0.9, 0.4 + min(eligible_count, 10) * 0.03 + min(graded_count, 10) * 0.02)
-        if suggested_layer
-        else 0
+    current_band = resolve_student_band(
+        student=summary.student,
+        subject=summary.subject,
+        course=summary.course,
     )
     defaults = {
         "class_group": summary.class_group,
         "subject": summary.subject,
-        "previous_layer": summary.student.student_profile.current_layer or "",
-        "suggested_layer": suggested_layer,
-        "confidence": round(confidence, 3),
+        "previous_layer": current_band or "",
+        "suggested_layer": "",
+        "confidence": 0,
         "reasons": reasons,
         "missing_data": summary.missing_data,
         "learning_summary": {
@@ -472,8 +473,13 @@ def build_transparent_suggestion(*, summary: StudentLearningSummary):
             "metrics": summary.metrics,
             "source_hash": summary.source_hash,
             "index": index,
+            "support_priority": support_priority,
+            "confidence_status": "not_estimated",
         },
         "support_suggestion": support_suggestion,
+        "decision_kind": StratificationDecision.DecisionKind.SUPPORT,
+        "support_priority": support_priority,
+        "policy_version": SUPPORT_POLICY_VERSION,
         "window_start": summary.window_start,
         "window_end": summary.window_end,
         "status": StratificationDecision.Status.PENDING,

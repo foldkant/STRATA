@@ -77,7 +77,14 @@ def release_group_collaboration_opportunities(
     occurred_at = occurred_at or timezone.now()
     release_events = 0
     opportunities_created = 0
-    groups = collaboration.groups.prefetch_related("members").order_by("group_no", "id")
+    groups = (
+        collaboration.groups.filter(
+            is_active=True,
+            plan_version=collaboration.active_plan_version,
+        )
+        .prefetch_related("members")
+        .order_by("group_no", "id")
+    )
     for group in groups:
         student_ids = list(group.members.values_list("student_id", flat=True))
         if not student_ids:

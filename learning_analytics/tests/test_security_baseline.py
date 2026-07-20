@@ -21,6 +21,7 @@ from courses.models import (
     LessonStep,
     Subject,
 )
+from learning.models import StratificationDecision, StudentSubjectBand
 from learning_analytics.models import (
     AnalyticsOperatingMode,
     EvaluationPlan,
@@ -382,6 +383,29 @@ class StudentHiddenStratificationContractTests(TestCase):
         )
         CourseClass.objects.create(
             course=self.course, class_group=self.class_group, created_by=self.teacher
+        )
+        band_decision = StratificationDecision.objects.create(
+            student=self.student,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            suggested_layer="A",
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+            policy_version="security-test-v1",
+            rule_version="security-test-band-v1",
+            status=StratificationDecision.Status.ACCEPTED,
+        )
+        StudentSubjectBand.objects.create(
+            student=self.student,
+            school=self.school,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            band="A",
+            valid_from=timezone.now(),
+            source_decision=band_decision,
+            policy_version="security-test-v1",
+            confirmed_by=self.teacher,
         )
         self.lesson = Lesson.objects.create(
             course=self.course, title="数据编码", is_active=True

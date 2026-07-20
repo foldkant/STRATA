@@ -10,6 +10,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import User
 from courses.models import Subject
+from learning.models import StratificationDecision, StudentSubjectBand
 from learning_analytics.models import (
     LearningEventV2,
     LearningOpportunity,
@@ -69,6 +70,28 @@ class LearningOpportunityApiTests(TestCase):
             is_first_use=False,
             onboarding_status=StudentProfile.OnboardingStatus.ACTIVE,
         )
+        if layer:
+            decision = StratificationDecision.objects.create(
+                student=user,
+                class_group=self.class_group,
+                subject=self.subject,
+                suggested_layer=layer,
+                decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+                policy_version="opportunity-test-v1",
+                rule_version=f"opportunity-{username}-v1",
+                status=StratificationDecision.Status.ACCEPTED,
+            )
+            StudentSubjectBand.objects.create(
+                student=user,
+                school=self.school,
+                class_group=self.class_group,
+                subject=self.subject,
+                band=layer,
+                valid_from=timezone.now() - timedelta(seconds=1),
+                source_decision=decision,
+                policy_version="opportunity-test-v1",
+                confirmed_by=self.teacher,
+            )
         return user
 
     def post_events(self, actor, events):

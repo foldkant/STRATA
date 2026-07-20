@@ -383,6 +383,10 @@ class ClassCalibrationRun(models.Model):
         FAILED = "failed", "生成失败"
         ARCHIVED = "archived", "已归档"
 
+    class DecisionPurpose(models.TextChoices):
+        SUPPORT = "support", "学习支持"
+        CONTENT_BAND = "content_band", "学习内容层级"
+
     run_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     run_key = models.CharField(max_length=96, unique=True)
     dataset = models.ForeignKey(
@@ -406,6 +410,11 @@ class ClassCalibrationRun(models.Model):
         related_name="class_calibration_runs",
     )
     calibration_version = models.CharField(max_length=32, default="model-03-v1")
+    decision_purpose = models.CharField(
+        max_length=16,
+        choices=DecisionPurpose.choices,
+        default=DecisionPurpose.SUPPORT,
+    )
     model_key = models.CharField(max_length=16, blank=True)
     status = models.CharField(
         max_length=16,

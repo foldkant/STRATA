@@ -686,6 +686,8 @@ POST /api/v1/student/classroom/{id}/activities/{activity_id}/response/
 ```text
 GET /api/v1/teacher/classroom/sessions/{id}/group-collaboration/
 POST /api/v1/teacher/classroom/sessions/{id}/group-collaboration/setup/
+GET|POST /api/v1/teacher/classroom/sessions/{id}/group-collaboration/candidates/
+POST /api/v1/teacher/classroom/sessions/{id}/group-collaboration/candidates/{run_id}/confirm/
 POST /api/v1/teacher/classroom/sessions/{id}/group-collaboration/close/
 GET /api/v1/teacher/classroom/sessions/{id}/groups/{group_id}/files/
 POST /api/v1/teacher/classroom/sessions/{id}/groups/{group_id}/files/
@@ -724,9 +726,10 @@ POST /api/v1/classroom/groups/{group_id}/office-callback/
 
 - 小组合作属于某次 `ClassroomSession` 的课堂运行能力，不写入课时设计环节。
 - 教师只能为自己的课堂开启、关闭或重新分组。
-- 已有分组时修改人数、策略或文档类型必须显式提交 `regenerate=true`；一旦已有文档打开、有效保存或共享文件，重新分组返回 `409`，避免历史证据丢失。
+- `setup` 保留旧调用兼容；正式重新分组使用候选与确认接口，不删除已有文档、聊天、文件或成员历史。
 - 学生只有在课堂 `running`、小组合作 `open`、且自己属于该组时才能看到小组合作入口。
-- 默认分组策略支持 `balanced_layer`、`same_layer`、`random`、`ai_layer`；`ai_layer` 第一版按同层优先规则执行，后续接分层模型。
+- 候选工作流使用随机基线、任务准备度优先和合作稳定优先三个候选。教师可锁定学生、拖动或选择移动、调整角色、填写说明并确认。
+- 锁定学生必须在当前班级且小组编号有效；三个候选都必须遵守锁定。重复确认同一候选幂等，改选其他候选返回 `409`。
 - `group_size` 范围为 2-12，`storage_quota_mb` 范围为 10-2048。
 - 每组自动生成一份协作文档，类型为 `docx`、`pptx` 或 `xlsx`。
 - 有 ONLYOFFICE 时，同组学生打开同一个文档 `key` 协作编辑；教师可以打开任意小组文档。
@@ -740,7 +743,7 @@ POST /api/v1/classroom/groups/{group_id}/office-callback/
 - ONLYOFFICE 回调必须提供有效 HS256 JWT，且签名内的 `status/key/url/users/actions` 与请求一致。服务端同时校验文档 key、下载 URL 来源和文件大小。
 - 有实际内容变化的回调追加 `ClassroomGroupDocumentVersion` 和组级 `group.document.saved`；相同 SHA-256 的重复回调不新增版本或事件。保存事实不自动归因到单个学生。
 - 关闭小组合作或结束课堂会关闭入口并撤回未完成机会；已提交共享文件等完成事实保留。
-- 后续 AI 分组应使用学生当前层级、近期学习行为、协作贡献、教师调整记录和小组任务完成质量作为特征，但模型建议必须可被教师确认或覆盖。
+- 分组只读取当前课程、学科、任务和决策点允许的准备度、搭档历史及教师锁定。学生响应不含层级、策略权重、模型理由或其他学生内部证据。
 
 ### 测试、任务、项目
 
@@ -890,13 +893,19 @@ GET /api/v1/teacher/resources/export/
 GET  /api/v1/teacher/analytics/learning-summaries/?window=day|7d|30d|unit&class_group=&course=
 GET  /api/v1/teacher/analytics/learning-summaries/export/?window=day|7d|30d|unit&class_group=&course=
 POST /api/v1/teacher/analytics/learning-summaries/refresh/
+GET  /api/v1/teacher/analytics/stratification/overview/?class_group=&course=
+GET  /api/v1/teacher/analytics/stratification/overview/export/?class_group=&course=
 GET  /api/v1/teacher/analytics/stratification/?status=&class_group=&course=
 POST /api/v1/teacher/analytics/stratification/{id}/review/
+GET  /api/v1/teacher/analytics/mastery/?class_group=&course=
+POST /api/v1/teacher/analytics/mastery/refresh/
 ```
 
-`review` 请求的 `action` 为 `accept|keep|adjust|defer`；`adjust` 另传 `layer=A|B|C`。教师只能读取本人课程和任教班级。采纳和调整只保存教师审核结果，不直接改写学生档案层级。学生不能访问这些接口，学生响应不包含层级、参考强度、原因或排名。
+`overview` 返回当前范围内的 A/B/C/未分层人数、班级分布和学生名单。学生行包含当前层级、近 30 日完成率/得分率及最新建议；XLSX 导出使用相同权限和筛选范围。
 
-建议响应同时返回 `rule_version` 和 `source_label`，用于区分“透明规则建议”和“班级校准候选”。模型内部指标键不会直接展示给教师，旧记录会在响应层转换成“近 30 日资源完成率：25%”等可读依据。存在待处理班级校准候选时，同一学生、课程不再并行产生透明规则待办；透明规则仍保留为模型比较基线和历史记录。
+`review` 请求的 `action` 为 `accept|keep|adjust|defer`；`adjust` 另传 `layer=A|B|C`。教师只能读取本人课程和任教班级。`accept` 和 `adjust` 在事务中保存审核记录并更新过渡期 `StudentProfile.current_layer` 缓存；`keep` 和 `defer` 不改层级。正式目标仍迁移到按学科、课程和有效期保存的 `StudentSubjectBand`。学生不能访问这些接口，学生响应不包含层级、参考强度、原因或排名。
+
+建议响应同时返回 `current_layer/current_layer_label`、`rule_version` 和 `source_label`，用于显示当前分层并区分“透明规则建议”和“班级校准候选”。模型内部指标键不会直接展示给教师，旧记录会在响应层转换成“近 30 日资源完成率：25%”等可读依据。存在待处理班级校准候选时，同一学生、课程不再并行产生透明规则待办；透明规则仍保留为模型比较基线和历史记录。
 
 ### 公告
 
@@ -1593,9 +1602,19 @@ GET  /api/v1/school-admin/analytics/models/{id}/export/
 
 `models/train/` 使用同一个 `dataset_id` 一次运行完整训练流程，响应返回结构化模型比较和班级候选。相同数据版本和分析版本重复请求返回已有记录。只有已冻结、属于当前学校且不是模拟批次的数据版本可通过学校管理员接口使用。测试样本少于 30 条只返回“数据不足”；不能通过页面参数绕过样本门槛。
 
-模型比较始终是影子结果。`shadow_only` 表示工程比较完成，`blocked` 表示存在数据不足、实际预测数不足或防误判问题。MODEL-03 的 `candidate` 只表示已生成教师待确认候选，不会自动修改学生层级。导出 XLSX 包含模型卡、模型比较、重复测量、防误判检查、稳定性、班级差异、班级校准、班级参数和匿名预测明细。匿名预测明细只包含数据版本匿名编号，不包含姓名、账号或学号。
+模型比较始终是影子结果。`shadow_only` 表示工程比较完成，`blocked` 表示存在数据不足、实际预测数不足或防误判问题。当前 MODEL-03 预测完成/逾期支持结果，`candidate` 只表示已生成测试期教师待确认候选，模型本身不会自动修改学生层级，也不得解释为正式掌握内容带。导出 XLSX 包含模型卡、模型比较、重复测量、防误判检查、稳定性、班级差异、班级校准、班级参数和匿名预测明细。匿名预测明细只包含数据版本匿名编号，不包含姓名、账号或学号。
 
 `include_test_data=1` 仅在 `DEBUG=true` 时允许学校管理员查看和导出本校模拟批次；生产环境忽略该参数。正式接口和正式夜间任务始终排除模拟数据。
+
+## 学校管理员学习内容层级标准
+
+```text
+GET|POST /api/v1/school-admin/analytics/content-band-policies/
+POST /api/v1/school-admin/analytics/content-band-policies/{id}/publish/
+POST /api/v1/school-admin/analytics/mastery/refresh/
+```
+
+学校管理员按本校学科或课程创建层级标准。草稿可调整，发布后不可原地修改；发布新版本会停用同范围旧版本。共同测试结束后可手动刷新掌握结果和候选，夜间任务也执行相同服务。教师只能读取本人课程的掌握结果和候选，学生不能访问这些接口或层级数据。
 
 ## 教师评价标准管理
 

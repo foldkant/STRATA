@@ -669,6 +669,16 @@ urlpatterns = [
         name="api_teacher_classroom_group_collaboration_setup",
     ),
     path(
+        "teacher/classroom/sessions/<int:pk>/group-collaboration/candidates/",
+        views.teacher_classroom_grouping_candidates,
+        name="api_teacher_classroom_grouping_candidates",
+    ),
+    path(
+        "teacher/classroom/sessions/<int:pk>/group-collaboration/candidates/<int:run_id>/confirm/",
+        views.teacher_classroom_grouping_confirm,
+        name="api_teacher_classroom_grouping_confirm",
+    ),
+    path(
         "teacher/classroom/sessions/<int:pk>/group-collaboration/close/",
         views.teacher_classroom_group_collaboration_close,
         name="api_teacher_classroom_group_collaboration_close",

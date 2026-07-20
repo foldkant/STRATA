@@ -30,6 +30,8 @@ from learning_analytics.services.class_calibration import (
     build_class_calibration_candidate,
 )
 from learning_analytics.feature_models import TrainingDatasetVersion
+from learning.models import TestAssessment
+from learning.services.mastery import build_assessment_mastery_candidates
 from school.models import School
 
 
@@ -205,6 +207,40 @@ def run_nightly_learning_summaries():
             )
         else:
             rows.append({"school_id": school.id, "status": "completed", **result})
+    return rows
+
+
+@shared_task
+def run_nightly_mastery_candidates(include_test_data: bool = False):
+    rows = []
+    assessments = TestAssessment.objects.filter(
+        status=TestAssessment.Status.CLOSED,
+        common_question_set__isnull=False,
+        is_active=True,
+    ).select_related("school", "subject", "course", "common_question_set")
+    if not include_test_data:
+        assessments = assessments.filter(school__is_synthetic=False)
+    for assessment in assessments.iterator():
+        try:
+            result = build_assessment_mastery_candidates(assessment=assessment)
+        except Exception as exc:
+            rows.append(
+                {
+                    "assessment_id": assessment.id,
+                    "school_id": assessment.school_id,
+                    "status": "failed",
+                    "reason": type(exc).__name__,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "assessment_id": assessment.id,
+                    "school_id": assessment.school_id,
+                    "status": "completed",
+                    **result,
+                }
+            )
     return rows
 
 

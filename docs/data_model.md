@@ -13,6 +13,7 @@
 - `ClassGroup.graduated_at`：班级毕业归档时间。
 - `ClassGroup.graduated_by`：执行毕业归档的学校管理员。
 - `StudentProfile`：学生档案扩展，保存班级、过渡期 `current_layer` 缓存、积分和首次使用状态。新生允许暂不选班级、暂不分层；正式隐性分层迁移到按学科/课程和有效期保存的 `StudentSubjectBand` 后，`current_layer` 逐步只读并删除。
+- 合成批次的界面验收可以通过 `complete_synthetic_stratification` 把已发布模型建议写入测试学生的 `current_layer`。该入口要求完整 `dataset_key`，只接受 `SyntheticDatasetRun` 学生，属于可清理的测试缓存，不是正式分层数据模型。
 - `StudentProfile.student_no`：学号，可为空。新生账号先发放，学号后续通过批量导入按登录账号匹配更新；非空学号在班级内唯一。
 - `TeachingAssignment`：任课关系，只维护本校教师与任教班级的对应关系；课程、公有课/私有课后续由课程模块单独处理。
 
@@ -74,10 +75,11 @@
 - 已发布课程和课时删除前必须先停用。
 - 已有学习事件或课堂记录的课程、课时、测试、任务和项目不做物理删除，只能停用、归档或复制新版本。
 - 课堂场次只有 `draft` 未开始状态可以删除；进行中和已结束课堂必须保留过程记录。
-- 同一课时不再额外区分普通课堂和分层课堂。教师只要在当前环节题目中设置 `target_layer` 或 `use_layer_scores`，学生端就会按学生当前层级自动过滤题目和适配分值。
+- 同一课时不再额外区分普通课堂和分层课堂。教师在环节题目设置 `target_layer` 或 `use_layer_scores` 后，学生端按当前课程有效的 `StudentSubjectBand` 投放；无正式层级时兼容读取过渡期 `current_layer`。完成/逾期支持三分位不能作为正式掌握内容带。
 - 小组合作不作为课时环节内容保存，而是某次课堂场次的运行能力。教师可在课堂控制台开启，学生只在课堂进行中看到自己所在小组。
 - 评价项配置不作为课堂运行态保存，而是备课阶段的课程级设置。入口放在课时设计页，教师选择性开启自评、互评和师评；课堂中只调用已保存配置。单次课堂是否开放评价保存为 `ClassroomSession.evaluation_enabled`，默认关闭，重新开始课堂也重置为关闭；评价结果只记录 1-5 星，不记录百分制分数。
-- 小组分组第一版采用默认分组：按 A/B/C 层级优先组内同层，未分层学生均衡补齐；随机分组可选；`ai_layer` 策略已预留，当前仍回退到同层优先规则。
+- 动态分组不再默认按 A/B/C 同层。教师选择任务目的后，系统生成随机、任务准备度优先和合作稳定优先候选，再由教师锁定、移动、调整角色并确认。
+- `ClassroomGroupCollaboration` 保存当前运行设置；不可变计划、旧材料、候选、教师调整和结果分别由动态分组版本表保存。内容层级只作为受限证据之一，不能自动决定组员。
 - 小组协作文档按组生成一份独立 Word/PPT/Excel 文件。STRATA 负责账号和权限，ONLYOFFICE 负责在线编辑；无 ONLYOFFICE 时仍保留文件下载和共享文件上传能力。
 - `ClassroomGroupDocumentVersion` 保存小组协作文档的不可变版本号、文件副本、SHA-256、大小、来源、回调状态、文档 key 和经过 JWT 校验的编辑者 ID。编辑者列表只用于组级审计，不直接归因个人贡献。
 - `ClassroomGroupFile` 使用 `public_id`、`analytics_attempt_id` 和 `version_no` 标识一次共享区提交；业务表保留文件名与描述，新版事件不复制这些正文信息。
@@ -86,6 +88,7 @@
 - `target_layer` 支持 `all`、`A`、`B`、`C`、`A/B`、`B/C`、`A/B/C`；第一版不支持 `A/C`。
 - `layer_scores` 初始值应由基础分 `score` 自动填充，教师可修改；后续 AI 只提供建议分值，不直接写入。
 - 后续新增正式提交表时，应保存学生作答时的 `student_layer_snapshot`、`target_layer_snapshot`、`layer_scores_snapshot`、`max_score_for_layer` 和 `score_rate`。
+- `student_layer_snapshot` 和实际题目投放是教学处理记录，不是学生能力标签；不同层题目的原始分值和 `score_rate` 未经链接时不得直接跨层比较。
 - 课堂活动进行中不能删除，必须先关闭。
 - 任务驱动学习和项目式学习都必须写入学习行为事件和学习日志。
 - 任务驱动学习日志重点记录课时任务过程、资源学习、作答、作品提交、修改和教师反馈。
@@ -95,7 +98,7 @@
 
 - `LearningEvent`：统一学习行为事件表，是 AI 特征工程的数据源。
 - `StudentFeatureSnapshot`：夜间聚合后的学生特征快照。
-- `StratificationDecision`：教师可见的隐性学习安排建议与审核记录，按学生、课程、窗口结束时间和规则版本去重；采纳、保持、调整和暂缓均不直接改写学生层级。
+- `StratificationDecision`：教师可见的隐性学习安排建议与审核记录，按学生、课程、窗口结束时间和规则版本去重。模型只创建候选；教师采纳或调整后写入过渡期 `StudentProfile.current_layer` 缓存，保持或暂缓不改层级。当前 `m03-*` 候选来源于完成/逾期预测，只能作为测试期完成支持分组；正式目标仍由版本化 `StudentSubjectBand` 替代该缓存。
 - `PretestPaper`：学科前测套卷。按学校、学科、前测类型和版本管理。
 - `PretestQuestion`：前测题目。支持单选、多选、量表和简答。
 - `PretestSubmission`：学生前测作答记录。后续学生端提交前测时写入。
@@ -126,11 +129,11 @@
 - 小组文档和共享区分别生成非必做 `document/task` 学习机会，并通过 `content.released@1.1.target_student_ids` 只投放给当前组员。
 - 学生打开小组协作文档时通过统一服务兼容写入 `group.document.opened`；学生上传共享文件时按同一方式写入 `group.file.shared`。
 - ONLYOFFICE 保存回调通过 JWT、文档 key、下载来源和大小校验后追加文档版本及 `group.document.saved`。该事件分析单位是 `group`，不能据此推断某位学生完成了多少内容。
-- 协作关闭和课堂结束撤回未完成机会；有打开、保存或上传证据后禁止重新分组，防止删除成员关系和文件证据。
+- 协作关闭和课堂结束撤回未完成机会。旧 `setup` 兼容入口在已有证据时禁止破坏性重建；正式候选确认入口通过新计划版本重新分组，旧成员关系、文档和文件归档保留。
 - 自评、互评、课堂师评和课程师评统一记录为 `evaluation.rating.submitted@1.1`；事件保存实际星级和结构化暂不评价原因代码，不复制评价备注正文。历史 `1.0` 定义继续保留，不覆盖原版本。
 - 平均星级只使用实际评分项。汇总同时返回已评分、暂不评价、未回答和总指标数；提交人数与指标覆盖数分开显示。
 - 自评事件的评价者和归属学生相同；师评及互评分别保留真实评价者，证据归属被评价学生。互评跨学生归属只能由已校验同组关系的服务端入口写入。
-- 课堂评价星级、评价完成时间、评价者和被评价者关系可作为过程性评价和后续 AI 分层/分组特征；星级本身不直接作为分层 label。
+- 课堂评价星级、评价完成时间、评价者和被评价者关系属于过程性评价证据。只有评价工具版本、材料关联、评分一致性和用途验证通过后，相关派生指标才可进入掌握或成长候选特征；星级不直接作为内容带标签，也不自动决定协作分组。
 - 课堂历史提交和附件版本底座已经建立；后续批量批阅与导出应读取业务提交表和成熟评分事实，不从事件 JSON 反解析答案。
 
 前测套卷规则：
@@ -352,10 +355,34 @@
 - `ModelEvaluationResult`：一个模型在一个验证折上的训练记录数、测试记录数、预测数、拒绝数、主要指标、RMSE/MAE/Brier、覆盖率和说明。
 - `ModelPrediction`：匿名的逐行预测事实，只保存冻结数据行、模型、验证折、预测/拒绝状态、预测值和拒绝原因；不向教师和学生 API 返回。
 - `NegativeControlResult`：标签打乱、随机匿名编号、未来哨兵、数据可用性和班级身份五类负对照结果。失败时模型比较保留记录但不得继续输出建议。
-- `ClassCalibrationRun`：绑定冻结数据版本和 MODEL-02 比较，保存全局模型类型、全局参数、每班残差收缩参数、模型文件、SHA-256、候选数量和模型卡。状态为 `building/candidate/blocked/retired`。
-- `StratificationDecision.rule_version=m03-*`：MODEL-03 生成的教师审核候选。新模型版本会把旧的待处理候选标记为 `deferred`，但不会修改 `StudentProfile.current_layer`。
+- `ClassCalibrationRun`：绑定冻结数据版本和 MODEL-02 比较，保存全局模型类型、全局参数、每班残差收缩参数、模型文件、SHA-256、候选数量和模型卡。状态为 `building/candidate/blocked/retired`。当前校准目标是完成率或逾期结果，不是掌握度。
+- `StratificationDecision.rule_version=m03-*`：MODEL-03 生成的教师审核候选。当前候选按班内预测分布产生，仅用于完成支持模型的工程验收；新模型版本只替换旧待办，不自动修改层级。教师采纳或调整后才更新过渡期 `StudentProfile.current_layer` 缓存。
 
 重复测量和模型比较均只读取 `TrainingDatasetVersion.status=frozen` 且 `view_type=operational_available` 的数据。模拟批次通过 `synthetic_run` 隔离，不进入学校管理员正式接口和正式夜间任务。
+
+### 正式动态内容带结构
+
+- `StudentMasterySnapshot`：绑定学生、学科/课程、共同题集合、测试和答卷，保存标准参照掌握结果、知识点结果、测量误差、可比性和数据状态。
+- `ContentBandPolicyVersion`：保存学科组审定的拓展/核心阈值、不确定性门槛、滞回、连续证据次数、冷却期和单次最大移动级数；已启用版本不可原地修改。
+- `StudentSubjectBand`：保存学生 × 学科/课程 × 有效期的内部内容层级版本，不使用全局永久标签。
+- `StratificationDecision.decision_kind=content_band`：冻结本次共同掌握证据、边界状态、迁移检查和建议状态。
+- `BandTransitionAudit`：保存教师接受、保持、调整或暂缓、最终层级及策略检查；教师决定是治理记录，不自动作为下一轮模型真值。
+- 题目投放继续保存实际题目版本、目标层级和分值快照；它是教学处理事实，不能事后混入同一时间点输入。
+
+正式内容带只读取可比较掌握证据。完成率、逾期、资源使用、请假、设备和离线状态分别用于支持或拒绝建议，不能直接成为降层依据。
+
+正式训练标签不读取 `StudentProfile.current_layer`、教师历史 A/B/C、课堂积分、奖章或班内排名。协作小组另存分组策略和任务目的；同层、异层、随机和教师手动分组均不能由 `StudentSubjectBand` 自动替代。
+
+### 动态分组结构
+
+- `GroupingPolicyVersion`：学校、学科或课程范围的分组标准版本，保存任务策略、人数范围、角色方案、约束和目标权重。
+- `GroupingDecisionPoint`：某次课堂、环节和任务上下文中的分组时间点。
+- `GroupingCandidateRun`：冻结输入、随机种子、算法版本、锁定学生、三个候选和冲突说明；相同输入幂等。
+- `GroupingPlanVersion`：教师确认后的不可变分组计划；新版本只归档旧版本，不删除旧材料。
+- `GroupingTeacherDecision`：保存采纳、调整、重新生成或手动设置及教师说明。
+- `GroupingPairHistory`：保存同班同学科搭档次数和最近合作时间。
+- `GroupingFairnessAudit`、`GroupingOpportunityAudit`：保存完整性、组间差异、角色和参与机会检查。
+- `GroupingOutcomeSnapshot`：课堂关闭时分开保存小组文档/文件结果和每名学生的角色、个人文件数及最近掌握结果，不把小组结果复制成个人掌握。
 
 ## 模拟数据开发
 

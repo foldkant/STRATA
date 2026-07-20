@@ -23,6 +23,10 @@ from courses.models import (
 )
 from learning.models import LearningEvent
 from learning_analytics.models import (
+    GroupingOpportunityAudit,
+    GroupingOutcomeSnapshot,
+    GroupingPairHistory,
+    GroupingPlanVersion,
     LearningEventV2,
     LearningOpportunity,
     LearningOpportunityTransitionFact,
@@ -195,8 +199,12 @@ class GroupCollaborationEventTests(TestCase):
             },
             format="json",
         )
-        self.assertEqual(regenerate.status_code, 409, regenerate.data)
-        self.assertEqual(collaboration.groups.count(), 2)
+        self.assertEqual(regenerate.status_code, 200, regenerate.data)
+        collaboration.refresh_from_db()
+        self.assertEqual(collaboration.active_plan_version, 2)
+        self.assertEqual(collaboration.groups.count(), 4)
+        self.assertEqual(collaboration.groups.filter(is_active=True).count(), 2)
+        self.assertEqual(collaboration.groups.filter(is_active=False).count(), 2)
         self.assertTrue(ClassroomGroupFile.objects.filter(pk=group_file.pk).exists())
 
         closed = self.client.post(
@@ -228,8 +236,181 @@ class GroupCollaborationEventTests(TestCase):
         closed_document = self.client.get(
             f"/api/v1/classroom/groups/{group.id}/office-config/?mode=view"
         )
-        self.assertEqual(closed_document.status_code, 403, closed_document.data)
+        self.assertEqual(closed_document.status_code, 200, closed_document.data)
+        self.assertFalse(closed_document.data["data"]["can_edit"])
+        self.assertEqual(closed_document.data["data"]["mode"], "view")
         self.assertTrue(reconcile_v1_v2_events(school=self.school)["consistent"])
+
+    def test_candidate_plan_confirmation_preserves_history_and_captures_outcomes(self):
+        collaboration = self.setup_collaboration()
+        original_group_ids = list(collaboration.groups.values_list("id", flat=True))
+
+        candidate_response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/group-collaboration/candidates/",
+            {
+                "group_size": 2,
+                "grouping_strategy": "random",
+                "document_type": "pptx",
+                "storage_quota_mb": 25,
+                "allow_student_upload": True,
+                "allow_onlyoffice_edit": True,
+                "locked_assignments": {},
+            },
+            format="json",
+        )
+        self.assertEqual(candidate_response.status_code, 201, candidate_response.data)
+        run = candidate_response.data["data"]
+        candidate = run["candidates"][0]
+        self.assertEqual(candidate["key"], "random")
+        self.assertEqual(candidate["fairness"]["unique_student_count"], 4)
+
+        confirm_payload = {
+            "candidate_key": candidate["key"],
+            "adjustments": {
+                "student_groups": {
+                    str(member["student_id"]): group["group_no"]
+                    for group in candidate["assignments"]
+                    for member in group["members"]
+                },
+                "roles": {
+                    str(member["student_id"]): member["role"]
+                    for group in candidate["assignments"]
+                    for member in group["members"]
+                },
+            },
+            "note": "课堂分组候选验收",
+        }
+        event_push = patch("api.views.publish_chat_event")
+        mocked_push = event_push.start()
+        self.addCleanup(event_push.stop)
+        confirm_response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/group-collaboration/candidates/{run['id']}/confirm/",
+            confirm_payload,
+            format="json",
+        )
+        self.assertEqual(confirm_response.status_code, 200, confirm_response.data)
+        mocked_push.assert_called_once()
+        self.assertEqual(mocked_push.call_args.args[1]["type"], "grouping.updated")
+        collaboration.refresh_from_db()
+        self.assertEqual(collaboration.active_plan_version, 2)
+        self.assertEqual(collaboration.document_type, "pptx")
+        self.assertTrue(
+            collaboration.groups.filter(
+                pk__in=original_group_ids, is_active=False
+            ).exists()
+        )
+        self.assertEqual(
+            collaboration.members.filter(plan_version=2)
+            .values("student_id")
+            .distinct()
+            .count(),
+            4,
+        )
+        plan = GroupingPlanVersion.objects.get(
+            collaboration=collaboration,
+            plan_version=2,
+        )
+        self.assertEqual(GroupingOpportunityAudit.objects.filter(plan=plan).count(), 4)
+        self.assertGreater(
+            GroupingPairHistory.objects.filter(class_group=self.class_group).count(), 0
+        )
+
+        plan_count = GroupingPlanVersion.objects.filter(
+            collaboration=collaboration
+        ).count()
+        pair_counts = list(
+            GroupingPairHistory.objects.filter(class_group=self.class_group)
+            .order_by("id")
+            .values_list("id", "collaboration_count")
+        )
+        repeated_response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/group-collaboration/candidates/{run['id']}/confirm/",
+            confirm_payload,
+            format="json",
+        )
+        self.assertEqual(repeated_response.status_code, 200, repeated_response.data)
+        self.assertEqual(
+            GroupingPlanVersion.objects.filter(collaboration=collaboration).count(),
+            plan_count,
+        )
+        self.assertEqual(
+            list(
+                GroupingPairHistory.objects.filter(class_group=self.class_group)
+                .order_by("id")
+                .values_list("id", "collaboration_count")
+            ),
+            pair_counts,
+        )
+        mocked_push.assert_called_once()
+
+        close_response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/group-collaboration/close/",
+            {},
+            format="json",
+        )
+        self.assertEqual(close_response.status_code, 200, close_response.data)
+        self.assertEqual(GroupingOutcomeSnapshot.objects.filter(plan=plan).count(), 2)
+        outcome = GroupingOutcomeSnapshot.objects.filter(plan=plan).first()
+        self.assertIn("document_version", outcome.group_result)
+        self.assertIn("shared_file_count", outcome.group_result)
+        self.assertTrue(outcome.individual_results)
+        self.assertSetEqual(
+            set(outcome.individual_results[0]),
+            {
+                "student_id",
+                "role",
+                "shared_file_count",
+                "mastery_snapshot_id",
+                "mastery_score",
+                "mastery_data_status",
+            },
+        )
+
+    def test_candidate_confirmation_rejects_moving_a_locked_student(self):
+        self.setup_collaboration()
+        locked_student_id = self.students[0].id
+        candidate_response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/group-collaboration/candidates/",
+            {
+                "group_size": 2,
+                "grouping_strategy": "random",
+                "locked_assignments": {str(locked_student_id): 1},
+            },
+            format="json",
+        )
+        self.assertEqual(candidate_response.status_code, 201, candidate_response.data)
+        run = candidate_response.data["data"]
+        candidate = run["candidates"][0]
+        source_group = next(
+            group
+            for group in candidate["assignments"]
+            if any(
+                member["student_id"] == locked_student_id for member in group["members"]
+            )
+        )
+        target_group = next(
+            group
+            for group in candidate["assignments"]
+            if group["group_no"] != source_group["group_no"]
+        )
+        swap_student_id = target_group["members"][0]["student_id"]
+        confirm_response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/group-collaboration/candidates/{run['id']}/confirm/",
+            {
+                "candidate_key": candidate["key"],
+                "adjustments": {
+                    "student_groups": {
+                        str(locked_student_id): target_group["group_no"],
+                        str(swap_student_id): source_group["group_no"],
+                    }
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(confirm_response.status_code, 400, confirm_response.data)
+        self.assertFalse(
+            GroupingPlanVersion.objects.filter(candidate_run_id=run["id"]).exists()
+        )
 
     def test_onlyoffice_callback_requires_signed_payload_and_versions_real_changes(
         self,

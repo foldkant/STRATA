@@ -827,6 +827,12 @@ async function refreshClassroomSilently() {
   }
 }
 
+function handleRealtimeClassroomEvent(payload: { type?: string }) {
+  if (payload.type === 'grouping.updated') {
+    void loadGroupCollaboration(true)
+  }
+}
+
 onMounted(async () => {
   timerHandle = window.setInterval(() => {
     nowTick.value = Date.now()
@@ -1433,6 +1439,7 @@ onUnmounted(() => {
       :session-id="classroom.id"
       role="student"
       :running="classroom.status === 'running'"
+      @classroom-event="handleRealtimeClassroomEvent"
     />
   </main>
 </template>

@@ -241,10 +241,27 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 
 ## 2026-07-20 验收记录
 
-- PostgreSQL 17.10 便携实例在默认 `5432` 启动，空数据库从零执行全部迁移并通过 141 项回归测试。
+- PostgreSQL 17.10 便携实例在默认 `5432` 启动，空数据库从零执行全部迁移；此前完成 141 项全量回归，本轮动态策略关键测试 `30/30` 通过。
 - Redis 兼容便携实例在 `6379` 启动，协议 `PING/PONG`、Redis Channel Layer、Celery broker 和结果后端可用。
 - Celery worker 使用 Redis 实际领取 `run_nightly_model_validation(include_test_data=True)`，为两校测试数据生成 LONG-01、MODEL-01、MODEL-02 和 MODEL-03 候选；结果仍标记为测试数据。
 - 现有模型 ZIP 使用可信 Ed25519 公钥验证通过，包内模型文件摘要一致。
-- SQLite 和 PostgreSQL 两套 141 项测试均通过；其中失败候选、篡改包拒绝、旧版本回滚和跨校权限为专项测试。
+- 2026-07-20 前一发布基线的 SQLite 和 PostgreSQL 141 项均通过；当前 SQLite 基线已增加到 `154/154`。
+
+动态策略验收可以在模拟学校生成一场可清理的共同测试：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py seed_mastery_pipeline_acceptance `
+  --school-code TEST-CROSS-01 `
+  --confirmation TEST-DATA-ONLY
+
+.\.venv\Scripts\python.exe manage.py seed_mastery_pipeline_acceptance `
+  --school-code TEST-CROSS-01 `
+  --confirmation TEST-DATA-ONLY `
+  --clear
+```
+
+默认只允许 `is_synthetic=true` 的模拟学校。实校测试必须额外传 `--allow-non-synthetic`，且输出仍只能用于工程验收，不能进入正式研究结论。
+
+2026-07-20 补充验收：PostgreSQL 17.10 完整迁移到 `courses.0028`、`learning.0017`、`learning_analytics.0031`；关键测试 `30/30` 通过；Redis 7.2 实际收发课堂分组事件；Celery worker 实际领取五类夜间任务，共同掌握任务生成 24 份掌握结果和 24 条待审核候选；SQLite 全量 `154/154` 通过。
 
 学校正式部署不得直接复用本机测试数据库、测试密钥或测试模型包。正式切换前必须执行备份、迁移、签名密钥生成、Redis 密码/白名单配置、worker/beat 任务领取和恢复演练。

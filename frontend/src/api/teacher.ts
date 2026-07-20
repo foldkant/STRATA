@@ -558,7 +558,7 @@ export type ClassroomGroupCollaborationRow = {
   status: 'draft' | 'open' | 'closed'
   status_label: string
   group_size: number
-  grouping_strategy: 'balanced_layer' | 'same_layer' | 'random' | 'manual' | 'ai_layer'
+  grouping_strategy: 'balanced_layer' | 'same_layer' | 'random' | 'manual' | 'ai_layer' | 'stable_project'
   grouping_strategy_label: string
   document_type: 'docx' | 'pptx' | 'xlsx'
   document_type_label: string
@@ -583,6 +583,60 @@ export type ClassroomGroupCollaborationPayload = {
   allow_student_upload: boolean
   allow_onlyoffice_edit: boolean
   regenerate?: boolean
+}
+
+export type GroupingCandidateMember = {
+  student_id: number
+  username: string
+  display_name: string
+  student_no: string
+  role: string
+  locked: boolean
+}
+
+export type GroupingCandidateAssignment = {
+  group_no: number
+  members: GroupingCandidateMember[]
+}
+
+export type GroupingCandidate = {
+  key: string
+  label: string
+  assignments: GroupingCandidateAssignment[]
+  metadata: Record<string, unknown>
+  fairness: {
+    student_count: number
+    unique_student_count: number
+    min_group_size: number
+    max_group_size: number
+    group_size_gap: number
+    readiness_mean_gap: number
+    role_counts: Record<string, number>
+  }
+}
+
+export type GroupingCandidateRun = {
+  id: number
+  run_id: string
+  status: 'building' | 'ready' | 'blocked' | 'failed'
+  status_label: string
+  algorithm_version: string
+  policy: {
+    id: number
+    name: string
+    strategy: string
+    strategy_label: string
+    min_group_size: number
+    max_group_size: number
+    roles: string[]
+  }
+  students: Array<Pick<GroupingCandidateMember, 'student_id' | 'username' | 'display_name' | 'student_no'>>
+  locked_assignments: Record<string, number>
+  candidates: GroupingCandidate[]
+  conflicts: Array<{ code?: string }>
+  selected_candidate_key: string
+  created_at: string
+  finished_at: string | null
 }
 
 export type ClassroomEvaluationType = 'self' | 'peer' | 'teacher'
@@ -1046,6 +1100,35 @@ export function getClassroomGroupCollaboration(sessionId: number) {
 
 export function setupClassroomGroupCollaboration(sessionId: number, payload: ClassroomGroupCollaborationPayload) {
   return apiRequest<ClassroomGroupCollaborationRow>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/setup/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function getClassroomGroupingCandidates(sessionId: number) {
+  return apiRequest<GroupingCandidateRun | null>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/candidates/`)
+}
+
+export function generateClassroomGroupingCandidates(
+  sessionId: number,
+  payload: ClassroomGroupCollaborationPayload & { locked_assignments?: Record<string, number> }
+) {
+  return apiRequest<GroupingCandidateRun>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/candidates/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function confirmClassroomGroupingCandidate(
+  sessionId: number,
+  runId: number,
+  payload: {
+    candidate_key: string
+    adjustments?: { student_groups?: Record<string, number>; roles?: Record<string, string> }
+    note?: string
+  }
+) {
+  return apiRequest<ClassroomGroupCollaborationRow>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/candidates/${runId}/confirm/`, {
     method: 'POST',
     body: toJsonBody(payload)
   })

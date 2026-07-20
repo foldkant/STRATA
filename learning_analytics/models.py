@@ -58,6 +58,17 @@ from .model_models import (  # noqa: F401
     ModelReleaseAudit,
     NegativeControlResult,
 )
+from .grouping_models import (  # noqa: F401
+    GroupingCandidateRun,
+    GroupingDecisionPoint,
+    GroupingFairnessAudit,
+    GroupingOpportunityAudit,
+    GroupingOutcomeSnapshot,
+    GroupingPairHistory,
+    GroupingPlanVersion,
+    GroupingPolicyVersion,
+    GroupingTeacherDecision,
+)
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 SCHEMA_VERSION_PATTERN = re.compile(r"^\d+\.\d+$")

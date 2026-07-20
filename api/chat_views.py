@@ -119,7 +119,11 @@ def _collaboration_groups(collaboration: ClassroomGroupCollaboration | None) -> 
     if collaboration is None:
         return []
     return list(
-        ClassroomGroup.objects.filter(collaboration=collaboration)
+        ClassroomGroup.objects.filter(
+            collaboration=collaboration,
+            is_active=True,
+            plan_version=collaboration.active_plan_version,
+        )
         .prefetch_related("members__student")
         .order_by("group_no", "id")
     )
@@ -185,10 +189,19 @@ def _resolve_thread(
         if not target_id:
             raise ChatError("请选择小组。", errors={"target_id": ["请选择小组。"]})
         collaboration = _active_collaboration(session)
-        group = ClassroomGroup.objects.filter(pk=target_id, collaboration=collaboration).first()
+        group = ClassroomGroup.objects.filter(
+            pk=target_id,
+            collaboration=collaboration,
+            is_active=True,
+            plan_version=collaboration.active_plan_version,
+        ).first()
         if group is None:
             raise ChatError("小组不存在或小组合作未开启。", status=404)
-        if user.role == "student" and not ClassroomGroupMember.objects.filter(group=group, student=user).exists():
+        if user.role == "student" and not ClassroomGroupMember.objects.filter(
+            group=group,
+            student=user,
+            plan_version=collaboration.active_plan_version,
+        ).exists():
             raise ChatError("只能进入自己所在的小组聊天。", status=403)
         filters["group"] = group
 
@@ -287,11 +300,17 @@ def _context_payload(session: ClassroomSession, viewer) -> dict:
     config = _chat_config(session)
     collaboration = _active_collaboration(session)
     groups = _collaboration_groups(collaboration)
-    thread_query = ClassroomChatThread.objects.filter(session=session)
+    active_group_ids = [group.id for group in groups]
+    thread_query = ClassroomChatThread.objects.filter(session=session).filter(
+        ~Q(room_type=ClassroomChatThread.RoomType.GROUP)
+        | Q(group_id__in=active_group_ids)
+    )
     if viewer.role == "student":
         group_ids = ClassroomGroupMember.objects.filter(
-            group__collaboration=collaboration,
+            collaboration=collaboration,
             student=viewer,
+            plan_version=(collaboration.active_plan_version if collaboration else 0),
+            group__is_active=True,
         ).values_list("group_id", flat=True)
         thread_query = thread_query.filter(
             Q(room_type=ClassroomChatThread.RoomType.WHOLE_CLASS)
@@ -342,7 +361,12 @@ def _context_payload(session: ClassroomSession, viewer) -> dict:
     else:
         member = (
             ClassroomGroupMember.objects.select_related("group")
-            .filter(collaboration=collaboration, student=viewer)
+            .filter(
+                collaboration=collaboration,
+                student=viewer,
+                plan_version=collaboration.active_plan_version,
+                group__is_active=True,
+            )
             .first()
             if collaboration is not None
             else None

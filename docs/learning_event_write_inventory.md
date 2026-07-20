@@ -84,7 +84,7 @@
 - 小组协作按当前组员使用 `content.released@1.1.target_student_ids` 定向生成文档和共享区机会，不扩展到全班其他学生。
 - 学生打开协作文档写 `group.document.opened`；上传共享文件写 `group.file.shared`，文件名、描述、地址和正文不进入新版记录。
 - ONLYOFFICE 回调必须通过 HS256 JWT、文档 key、文档服务器来源和大小校验。真实变化追加 `ClassroomGroupDocumentVersion` 与组级 `group.document.saved`；回调只能证明组文档变化，不能推断个人贡献。
-- 小组已有打开、保存或上传证据后禁止重新分组，关闭协作或结束课堂只撤回未完成机会，不删除历史文件和版本。
+- 旧 `setup` 入口在已有证据后禁止破坏性重建；正式候选确认入口新建不可变计划版本并归档旧组，不删除历史文件、聊天或文档版本。
 - 教师开启签到时使用 `content.released@1.2` 为全班生成必做 `attendance` 机会。学生自助签到和教师考勤修订统一写 `attendance.recorded`，通过 `revision_no/supersedes_event_id` 保留状态变化。
 - 学生事件入口只能记录本人 `signed/student`；迟到、请假、缺勤和教师来源必须经过任课教师业务接口。考勤备注只留旧业务记录，不复制到新版记录。
 - 课堂结束时，有考勤状态的机会保留为已提交；未响应机会追加 `withdrawn`，不自动生成缺勤事件。已开启或已有记录的课堂活动禁止物理删除。

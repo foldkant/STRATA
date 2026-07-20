@@ -41,6 +41,7 @@ from learning.services.question_bank import (
     ensure_question_version,
     transition_question,
 )
+from learning.services.bands import resolve_student_band
 from ops.xlsx import build_workbook, export_rows, read_table_rows, template_response, workbook_response
 from school.models import ClassGroup, StudentProfile, TeachingAssignment
 
@@ -2110,11 +2111,16 @@ def _layer_scope_allows(layer_scope: str, current_layer: str | None) -> bool:
 
 
 def _eligible_assessment_questions(assessment, profile) -> list[TestAssessmentQuestion]:
+    current_band = resolve_student_band(
+        student=profile.user,
+        subject=assessment.subject,
+        course=assessment.course,
+    )
     return [
         question
         for question in assessment.questions.all()
         if question.item_role != QuestionBankItem.ItemRole.LAYERED
-        or _layer_scope_allows(question.layer_scope, getattr(profile, "current_layer", None))
+        or _layer_scope_allows(question.layer_scope, current_band)
     ]
 
 

@@ -11,10 +11,13 @@ import {
   closeClassroomActivity,
   closeClassroomGroupCollaboration,
   closeClassroomStep,
+  confirmClassroomGroupingCandidate,
   finishClassroomSession,
+  generateClassroomGroupingCandidates,
   getClassroomAttendance,
   getClassroomEvaluation,
   getClassroomGroupCollaboration,
+  getClassroomGroupingCandidates,
   getClassroomQuickAnswer,
   getClassroomRandomPick,
   getClassroomRandomPickPreview,
@@ -46,6 +49,8 @@ import {
   type ClassroomGroupCollaborationPayload,
   type ClassroomGroupCollaborationRow,
   type ClassroomGroupRow,
+  type GroupingCandidateAssignment,
+  type GroupingCandidateRun,
   type ClassroomSessionRow,
   type ClassroomStepProgressAnswer,
   type ClassroomStepProgressPayload,
@@ -131,6 +136,12 @@ const groupCollabOpen = ref(false)
 const groupCollabLoading = ref(false)
 const groupCollaboration = ref<ClassroomGroupCollaborationRow | null>(null)
 const activeGroupDocument = ref<ClassroomGroupRow | null>(null)
+const groupingRun = ref<GroupingCandidateRun | null>(null)
+const groupingCandidateKey = ref('')
+const groupingDraft = ref<GroupingCandidateAssignment[]>([])
+const groupingLocks = ref<Record<number, boolean>>({})
+const groupingNote = ref('')
+const draggedGroupingStudentId = ref<number | null>(null)
 const groupCollabForm = ref<ClassroomGroupCollaborationPayload>({
   group_size: 4,
   grouping_strategy: 'balanced_layer',
@@ -196,6 +207,9 @@ const classroomStats = computed(() => [
   { label: '进行活动', value: openActivities.value.length }
 ])
 const groupRows = computed(() => groupCollaboration.value?.groups || [])
+const selectedGroupingCandidate = computed(() => (
+  groupingRun.value?.candidates.find((item) => item.key === groupingCandidateKey.value) || null
+))
 const groupCollaborationOpenText = computed(() => {
   if (!groupCollaboration.value) return '未开启'
   return `${groupCollaboration.value.status_label} · ${groupCollaboration.value.group_count} 组`
@@ -648,6 +662,36 @@ function syncGroupCollaborationForm(row: ClassroomGroupCollaborationRow | null) 
   }
 }
 
+function cloneGroupingAssignments(assignments: GroupingCandidateAssignment[]) {
+  return assignments.map((group) => ({
+    group_no: group.group_no,
+    members: group.members.map((member) => ({ ...member }))
+  }))
+}
+
+function selectGroupingCandidate(key: string) {
+  const candidate = groupingRun.value?.candidates.find((item) => item.key === key)
+  if (!candidate) return
+  groupingCandidateKey.value = key
+  groupingDraft.value = cloneGroupingAssignments(candidate.assignments)
+  groupingLocks.value = Object.fromEntries(
+    candidate.assignments.flatMap((group) => group.members.map((member) => [member.student_id, Boolean(member.locked)]))
+  )
+}
+
+async function loadGroupingCandidates() {
+  if (!session.value) return
+  try {
+    const run = await getClassroomGroupingCandidates(session.value.id)
+    groupingRun.value = run
+    if (run?.candidates.length) {
+      selectGroupingCandidate(run.selected_candidate_key || run.candidates[0].key)
+    }
+  } catch {
+    groupingRun.value = null
+  }
+}
+
 async function loadGroupCollaboration(silent = false) {
   if (!session.value) return
   if (!silent) groupCollabLoading.value = true
@@ -666,27 +710,103 @@ async function loadGroupCollaboration(silent = false) {
 
 async function openGroupCollaborationPanel() {
   groupCollabOpen.value = true
-  await loadGroupCollaboration()
+  await Promise.all([loadGroupCollaboration(), loadGroupingCandidates()])
 }
 
 async function saveGroupCollaboration(regenerate = false) {
   if (!session.value) return
-  if (regenerate && groupCollaboration.value?.group_count) {
-    const confirmed = window.confirm('重新分组会重建小组协作文档和小组共享文件记录，确认继续？')
-    if (!confirmed) return
-  }
   groupCollabLoading.value = true
   notice.value = ''
   try {
+    if (regenerate) {
+      if (!groupCollaboration.value) {
+        notice.value = '请先开启小组合作，再生成分组候选。'
+        return
+      }
+      const lockedAssignments = Object.fromEntries(
+        groupingDraft.value.flatMap((group) => group.members
+          .filter((member) => groupingLocks.value[member.student_id])
+          .map((member) => [String(member.student_id), group.group_no]))
+      )
+      const run = await generateClassroomGroupingCandidates(session.value.id, {
+        ...groupCollabForm.value,
+        regenerate: false,
+        locked_assignments: lockedAssignments
+      })
+      groupingRun.value = run
+      if (run.candidates.length) selectGroupingCandidate(run.candidates[0].key)
+      notice.value = run.candidates.length > 1
+        ? '已生成多套分组候选，请检查后确认。'
+        : '当前材料只能生成随机候选，请检查后确认。'
+      return
+    }
     const row = await setupClassroomGroupCollaboration(session.value.id, {
       ...groupCollabForm.value,
-      regenerate
+      regenerate: false
     })
     groupCollaboration.value = row
     syncGroupCollaborationForm(row)
-    notice.value = regenerate ? '小组已重新生成。' : '小组合作设置已保存。'
+    notice.value = '小组合作设置已保存。'
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '小组合作设置保存失败。'
+  } finally {
+    groupCollabLoading.value = false
+  }
+}
+
+function moveGroupingStudent(studentId: number, targetGroupNo: number) {
+  const source = groupingDraft.value.find((group) => group.members.some((member) => member.student_id === studentId))
+  const target = groupingDraft.value.find((group) => group.group_no === targetGroupNo)
+  if (!source || !target || source === target || groupingLocks.value[studentId]) return
+  const memberIndex = source.members.findIndex((member) => member.student_id === studentId)
+  const [member] = source.members.splice(memberIndex, 1)
+  target.members.push(member)
+}
+
+function onGroupingDragStart(studentId: number) {
+  if (groupingLocks.value[studentId]) return
+  draggedGroupingStudentId.value = studentId
+}
+
+function onGroupingDrop(groupNo: number) {
+  if (draggedGroupingStudentId.value !== null) {
+    moveGroupingStudent(draggedGroupingStudentId.value, groupNo)
+  }
+  draggedGroupingStudentId.value = null
+}
+
+function groupingStudentGroup(studentId: number) {
+  return groupingDraft.value.find((group) => group.members.some((member) => member.student_id === studentId))?.group_no || 1
+}
+
+function setGroupingStudentGroup(studentId: number, event: Event) {
+  const target = event.target as HTMLSelectElement | null
+  if (target) moveGroupingStudent(studentId, Number(target.value))
+}
+
+async function confirmGroupingPlan() {
+  if (!session.value || !groupingRun.value || !groupingCandidateKey.value) return
+  if (!window.confirm('确认启用当前分组？学生将立即切换到新小组，旧小组材料继续保留。')) return
+  groupCollabLoading.value = true
+  notice.value = ''
+  try {
+    const studentGroups = Object.fromEntries(
+      groupingDraft.value.flatMap((group) => group.members.map((member) => [String(member.student_id), group.group_no]))
+    )
+    const roles = Object.fromEntries(
+      groupingDraft.value.flatMap((group) => group.members.map((member) => [String(member.student_id), member.role]))
+    )
+    const row = await confirmClassroomGroupingCandidate(session.value.id, groupingRun.value.id, {
+      candidate_key: groupingCandidateKey.value,
+      adjustments: { student_groups: studentGroups, roles },
+      note: groupingNote.value.trim()
+    })
+    groupCollaboration.value = row
+    syncGroupCollaborationForm(row)
+    groupingRun.value.selected_candidate_key = groupingCandidateKey.value
+    notice.value = '新分组已生效，学生端会立即刷新。'
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '分组确认失败。'
   } finally {
     groupCollabLoading.value = false
   }
@@ -716,10 +836,6 @@ function closeGroupDocument() {
   activeGroupDocument.value = null
 }
 
-function groupLayerText(group: ClassroomGroupRow) {
-  return group.layer_hint ? `${group.layer_hint} 层` : '未分层'
-}
-
 function groupMembersText(group: ClassroomGroupRow) {
   return group.members.map((member) => member.display_name || member.username).join('、') || '暂无成员'
 }
@@ -732,6 +848,12 @@ function groupStoragePercent(group: ClassroomGroupRow) {
 
 function groupStorageStyle(group: ClassroomGroupRow) {
   return { width: `${groupStoragePercent(group)}%` }
+}
+
+function handleRealtimeClassroomEvent(payload: { type?: string }) {
+  if (payload.type === 'grouping.updated' && groupCollabOpen.value) {
+    void loadGroupCollaboration(true)
+  }
 }
 
 function evaluationCriteria(type: ClassroomEvaluationType) {
@@ -2173,10 +2295,11 @@ onUnmounted(() => {
               <label>
                 <span>分组方式</span>
                 <select v-model="groupCollabForm.grouping_strategy">
-                  <option value="balanced_layer">同层优先，未分层均衡补齐</option>
-                  <option value="same_layer">严格同层级分组</option>
                   <option value="random">随机分组</option>
-                  <option value="ai_layer">按学习情况分组（当前按同层优先）</option>
+                  <option value="same_layer">准备度接近</option>
+                  <option value="balanced_layer">相邻互助</option>
+                  <option value="ai_layer">任务匹配</option>
+                  <option value="stable_project">项目稳定</option>
                 </select>
               </label>
               <label>
@@ -2203,7 +2326,9 @@ onUnmounted(() => {
                 <button class="primary-button" type="button" :disabled="groupCollabLoading" @click="saveGroupCollaboration(false)">
                   {{ groupCollaboration ? '保存设置' : '开启小组合作' }}
                 </button>
-                <button class="secondary-button" type="button" :disabled="groupCollabLoading" @click="saveGroupCollaboration(true)">重新分组</button>
+                <button class="secondary-button" type="button" :disabled="groupCollabLoading || !groupCollaboration" @click="saveGroupCollaboration(true)">
+                  {{ groupingRun ? '重新计算' : '生成分组候选' }}
+                </button>
                 <button
                   v-if="groupCollaboration?.status === 'open'"
                   class="secondary-button danger"
@@ -2212,6 +2337,95 @@ onUnmounted(() => {
                   @click="closeGroupCollaboration"
                 >
                   关闭合作
+                </button>
+              </div>
+            </section>
+
+            <section v-if="groupingRun" class="grouping-candidate-workspace">
+              <header class="grouping-candidate-header">
+                <div>
+                  <span>{{ groupingRun.status_label }}</span>
+                  <strong>选择并调整分组方案</strong>
+                </div>
+                <small>锁定的学生在重新计算时保持当前小组</small>
+              </header>
+
+              <div class="grouping-candidate-tabs" role="tablist" aria-label="分组候选">
+                <button
+                  v-for="candidate in groupingRun.candidates"
+                  :key="candidate.key"
+                  type="button"
+                  :class="{ active: groupingCandidateKey === candidate.key }"
+                  @click="selectGroupingCandidate(candidate.key)"
+                >
+                  <strong>{{ candidate.label }}</strong>
+                  <span>{{ candidate.assignments.length }} 组 · 人数差 {{ candidate.fairness.group_size_gap }}</span>
+                </button>
+              </div>
+
+              <div v-if="selectedGroupingCandidate" class="grouping-plan-editor">
+                <article
+                  v-for="group in groupingDraft"
+                  :key="group.group_no"
+                  class="grouping-draft-group"
+                  @dragover.prevent
+                  @drop="onGroupingDrop(group.group_no)"
+                >
+                  <header>
+                    <strong>第{{ group.group_no }}组</strong>
+                    <span>{{ group.members.length }} 人</span>
+                  </header>
+                  <div class="grouping-draft-members">
+                    <div
+                      v-for="member in group.members"
+                      :key="member.student_id"
+                      class="grouping-draft-member"
+                      :class="{ locked: groupingLocks[member.student_id] }"
+                      :draggable="!groupingLocks[member.student_id]"
+                      @dragstart="onGroupingDragStart(member.student_id)"
+                      @dragend="draggedGroupingStudentId = null"
+                    >
+                      <div>
+                        <strong>{{ member.display_name || member.username }}</strong>
+                        <small>{{ member.student_no || member.username }}</small>
+                      </div>
+                      <label>
+                        <span class="sr-only">调整小组</span>
+                        <select
+                          :value="groupingStudentGroup(member.student_id)"
+                          :disabled="groupingLocks[member.student_id]"
+                          @change="setGroupingStudentGroup(member.student_id, $event)"
+                        >
+                          <option v-for="target in groupingDraft" :key="target.group_no" :value="target.group_no">第{{ target.group_no }}组</option>
+                        </select>
+                      </label>
+                      <label>
+                        <span class="sr-only">调整角色</span>
+                        <select v-model="member.role">
+                          <option value="coordinator">协调</option>
+                          <option value="recorder">记录</option>
+                          <option value="resource">资源</option>
+                          <option value="presenter">展示</option>
+                          <option value="verifier">核验</option>
+                          <option value="member">成员</option>
+                        </select>
+                      </label>
+                      <label class="grouping-lock-toggle">
+                        <input v-model="groupingLocks[member.student_id]" type="checkbox" />
+                        <span>锁定</span>
+                      </label>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="grouping-confirm-row">
+                <label>
+                  <span>调整说明</span>
+                  <input v-model="groupingNote" maxlength="500" placeholder="可选，记录本次人工调整原因" />
+                </label>
+                <button class="primary-button" type="button" :disabled="groupCollabLoading || !selectedGroupingCandidate" @click="confirmGroupingPlan">
+                  确认启用
                 </button>
               </div>
             </section>
@@ -2229,7 +2443,7 @@ onUnmounted(() => {
                 <article v-for="group in groupRows" :key="group.id" class="group-card">
                   <header>
                     <div>
-                      <span>{{ groupLayerText(group) }}</span>
+                      <span>{{ group.members.length }} 名成员</span>
                       <strong>{{ group.name }}</strong>
                     </div>
                     <button class="primary-button mini" type="button" @click="openGroupDocument(group)">打开协作文档</button>
@@ -2261,7 +2475,7 @@ onUnmounted(() => {
           </div>
 
           <footer class="modal-actions">
-            <span>后续 AI 分组会基于分层、学习行为、协作贡献和教师调整记录优化。</span>
+            <span>学生只看到小组、角色和任务，不显示内部判断依据。</span>
             <button class="primary-button" type="button" @click="groupCollabOpen = false">完成</button>
           </footer>
         </section>
@@ -2616,6 +2830,7 @@ onUnmounted(() => {
       :session-id="session.id"
       role="teacher"
       :running="session.status === 'running'"
+      @classroom-event="handleRealtimeClassroomEvent"
     />
   </main>
 </template>

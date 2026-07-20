@@ -193,6 +193,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "learning_analytics.tasks.run_nightly_learning_summaries",
         "schedule": crontab(hour=2, minute=30),
     },
+    "strata-nightly-mastery-candidates": {
+        "task": "learning_analytics.tasks.run_nightly_mastery_candidates",
+        "schedule": crontab(hour=2, minute=40),
+    },
     "strata-nightly-feature-outcomes": {
         "task": "learning_analytics.tasks.run_nightly_feature_outcomes",
         "schedule": crontab(hour=2, minute=50),

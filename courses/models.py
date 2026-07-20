@@ -622,6 +622,7 @@ class ClassroomGroupCollaboration(models.Model):
         RANDOM = "random", "随机分组"
         MANUAL = "manual", "手动分组"
         AI_LAYER = "ai_layer", "AI 分层分组"
+        STABLE_PROJECT = "stable_project", "项目稳定分组"
 
     class DocumentType(models.TextChoices):
         DOCX = "docx", "Word"
@@ -638,8 +639,11 @@ class ClassroomGroupCollaboration(models.Model):
     grouping_strategy = models.CharField(
         max_length=32,
         choices=GroupingStrategy.choices,
-        default=GroupingStrategy.BALANCED_LAYER,
+        default=GroupingStrategy.RANDOM,
     )
+    active_plan_version = models.PositiveIntegerField(default=1)
+    strategy_version = models.CharField(max_length=32, default="group-policy-v2")
+    generation_metadata = models.JSONField(default=dict, blank=True)
     document_type = models.CharField(
         max_length=8, choices=DocumentType.choices, default=DocumentType.DOCX
     )
@@ -679,6 +683,9 @@ class ClassroomGroup(models.Model):
         related_name="groups",
     )
     group_no = models.PositiveSmallIntegerField()
+    plan_version = models.PositiveIntegerField(default=1)
+    is_active = models.BooleanField(default=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
     name = models.CharField(max_length=64)
     layer_hint = models.CharField(max_length=32, blank=True)
     leader = models.ForeignKey(
@@ -700,12 +707,13 @@ class ClassroomGroup(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["collaboration", "group_no"],
-                name="uniq_classroom_group_no_per_collaboration",
+                fields=["collaboration", "plan_version", "group_no"],
+                name="uniq_classroom_group_no_per_plan",
             ),
         ]
         indexes = [
-            models.Index(fields=["collaboration", "group_no"]),
+            models.Index(fields=["collaboration", "is_active", "group_no"]),
+            models.Index(fields=["collaboration", "plan_version", "group_no"]),
         ]
         ordering = ["collaboration_id", "group_no", "id"]
 
@@ -762,6 +770,11 @@ class ClassroomGroupMember(models.Model):
     class Role(models.TextChoices):
         LEADER = "leader", "组长"
         MEMBER = "member", "成员"
+        COORDINATOR = "coordinator", "协调"
+        RECORDER = "recorder", "记录"
+        RESOURCE = "resource", "资源"
+        PRESENTER = "presenter", "展示"
+        VERIFIER = "verifier", "核验"
 
     collaboration = models.ForeignKey(
         ClassroomGroupCollaboration,
@@ -784,13 +797,14 @@ class ClassroomGroupMember(models.Model):
         related_name="classroom_group_memberships",
     )
     role = models.CharField(max_length=16, choices=Role.choices, default=Role.MEMBER)
+    plan_version = models.PositiveIntegerField(default=1)
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["collaboration", "student"],
-                name="uniq_student_per_group_collaboration",
+                fields=["collaboration", "student", "plan_version"],
+                name="uniq_student_per_group_plan",
             ),
             models.UniqueConstraint(
                 fields=["group", "student"], name="uniq_student_per_classroom_group"

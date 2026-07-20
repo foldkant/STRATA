@@ -25,6 +25,10 @@ const props = defineProps<{
   running: boolean
 }>()
 
+const emit = defineEmits<{
+  classroomEvent: [payload: { type?: string; [key: string]: unknown }]
+}>()
+
 type ChatView = ChatRoomType | 'moderation'
 
 const drawerOpen = ref(false)
@@ -269,8 +273,9 @@ function connectSocket() {
   }
   socket.onmessage = (event) => {
     try {
-      const payload = JSON.parse(event.data) as { type?: string }
+      const payload = JSON.parse(event.data) as { type?: string; [key: string]: unknown }
       if (payload.type?.startsWith('chat.')) scheduleRefresh()
+      else emit('classroomEvent', payload)
     } catch {
       // Ignore malformed realtime frames; REST polling remains available.
     }

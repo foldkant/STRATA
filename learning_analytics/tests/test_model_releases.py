@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import zipfile
+from datetime import timedelta
 from pathlib import Path
 
 from django.core.exceptions import ValidationError
@@ -20,6 +21,8 @@ from learning_analytics.models import (
     ModelRelease,
     ModelReleaseAudit,
     OutcomeDefinition,
+    SyntheticDatasetRun,
+    SyntheticStudentTruth,
     TrainingDatasetVersion,
 )
 from learning_analytics.services.model_packages import (
@@ -27,6 +30,10 @@ from learning_analytics.services.model_packages import (
     rollback_model_release,
     verify_model_package,
     verify_model_release,
+)
+from learning_analytics.services.synthetic_stratification import (
+    TEST_REVIEW_NOTE,
+    complete_synthetic_stratification,
 )
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
@@ -126,12 +133,19 @@ class ModelReleaseTests(TestCase):
             status=OutcomeDefinition.Status.ACTIVE,
         )
 
-    def _candidate(self, suffix: str, *, blocked: bool = False):
+    def _candidate(
+        self,
+        suffix: str,
+        *,
+        blocked: bool = False,
+        synthetic_run: SyntheticDatasetRun | None = None,
+    ):
         now = timezone.now()
         dataset = TrainingDatasetVersion.objects.create(
             dataset_key=f"release-dataset-{suffix}",
             school=self.school,
             subject=self.subject,
+            synthetic_run=synthetic_run,
             feature_set=self.feature_set,
             outcome_definition=self.outcome,
             status=TrainingDatasetVersion.Status.FROZEN,
@@ -200,10 +214,12 @@ class ModelReleaseTests(TestCase):
             subject=self.subject,
             course=self.course,
             previous_layer="B",
-            suggested_layer="A",
+            suggested_layer="",
             confidence=0.8,
             reasons=["近 30 日学习记录稳定"],
             learning_summary={"calibration_run_id": calibration.id},
+            decision_kind=StratificationDecision.DecisionKind.SUPPORT,
+            support_priority=StratificationDecision.SupportPriority.WATCH,
             rule_version=f"m03-{suffix}",
             calibration_run=calibration,
             status=StratificationDecision.Status.PENDING,
@@ -279,6 +295,29 @@ class ModelReleaseTests(TestCase):
         self.assertEqual(first_decision.status, StratificationDecision.Status.PENDING)
         self.assertEqual(second_decision.status, StratificationDecision.Status.DEFERRED)
 
+    def test_support_release_does_not_defer_content_band_candidate(self):
+        calibration, _ = self._candidate("purpose-scope")
+        self._decision(calibration, "purpose-scope")
+        content_decision = StratificationDecision.objects.create(
+            student=self.student,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            suggested_layer="B",
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+            policy_version="criterion-test-v1",
+            rule_version="content-purpose-test",
+            status=StratificationDecision.Status.PENDING,
+        )
+
+        publish_model_candidate(calibration_run=calibration, actor=self.admin)
+
+        content_decision.refresh_from_db()
+        self.assertEqual(
+            content_decision.status,
+            StratificationDecision.Status.PENDING,
+        )
+
     def test_tampered_package_signature_is_rejected(self):
         calibration, _ = self._candidate("tamper")
         release = publish_model_candidate(calibration_run=calibration, actor=self.admin)
@@ -324,3 +363,74 @@ class ModelReleaseTests(TestCase):
         visible = client.get("/api/v1/teacher/analytics/stratification/")
         self.assertEqual(visible.status_code, 200)
         self.assertEqual(len(visible.data["data"]), 1)
+
+    def test_synthetic_acceptance_publishes_support_without_changing_layers(self):
+        now = timezone.now()
+        synthetic_run = SyntheticDatasetRun.objects.create(
+            dataset_key="f" * 64,
+            school=self.school,
+            mode=SyntheticDatasetRun.Mode.SCHOOL_OVERLAY,
+            generator_version="test-v1",
+            seed=20260720,
+            window_start=now - timedelta(days=14),
+            window_end=now,
+            configuration={"purpose": "acceptance-test"},
+            counts={"students": 1},
+            status=SyntheticDatasetRun.Status.SUCCEEDED,
+        )
+        SyntheticStudentTruth.objects.create(
+            synthetic_run=synthetic_run,
+            student=self.student,
+            class_group=self.class_group,
+            prior_mastery="0.7000",
+            engagement="0.8000",
+            self_regulation="0.7500",
+            response_speed="0.6500",
+            growth_rate="0.02000",
+            class_effect="0.01000",
+        )
+        calibration, _ = self._candidate(
+            "synthetic", synthetic_run=synthetic_run
+        )
+        decision = self._decision(calibration, "synthetic")
+
+        result = complete_synthetic_stratification(
+            calibration_run=calibration,
+            actor=self.admin,
+            confirmation_key=synthetic_run.dataset_key,
+        )
+
+        self.profile = StudentProfile.objects.get(pk=self.student.student_profile.pk)
+        decision.refresh_from_db()
+        self.assertEqual(result["student_count"], 1)
+        self.assertEqual(result["applied_count"], 1)
+        self.assertIsNone(self.profile.current_layer)
+        self.assertEqual(decision.status, StratificationDecision.Status.ACCEPTED)
+        self.assertEqual(decision.teacher_selected_layer, "")
+        self.assertEqual(decision.review_note, TEST_REVIEW_NOTE)
+        self.assertTrue(
+            ModelRelease.objects.filter(
+                calibration_run=calibration,
+                status=ModelRelease.Status.ACTIVE,
+                is_test_data=True,
+            ).exists()
+        )
+
+        repeated = complete_synthetic_stratification(
+            calibration_run=calibration,
+            actor=self.admin,
+            confirmation_key=synthetic_run.dataset_key,
+        )
+        self.assertEqual(repeated["applied_count"], 0)
+        self.assertEqual(repeated["unchanged_count"], 1)
+
+    def test_synthetic_acceptance_rejects_formal_dataset(self):
+        calibration, _ = self._candidate("formal")
+        self._decision(calibration, "formal")
+
+        with self.assertRaises(ValidationError):
+            complete_synthetic_stratification(
+                calibration_run=calibration,
+                actor=self.admin,
+                confirmation_key="f" * 64,
+            )

@@ -25,9 +25,29 @@ urlpatterns = [
         name="teacher_stratification_suggestions",
     ),
     path(
+        "teacher/analytics/stratification/overview/",
+        teacher_views.stratification_overview,
+        name="teacher_stratification_overview",
+    ),
+    path(
+        "teacher/analytics/stratification/overview/export/",
+        teacher_views.export_stratification_overview,
+        name="teacher_stratification_overview_export",
+    ),
+    path(
         "teacher/analytics/stratification/<int:pk>/review/",
         teacher_views.review_stratification_suggestion,
         name="teacher_stratification_review",
+    ),
+    path(
+        "teacher/analytics/mastery/",
+        teacher_views.mastery_snapshots,
+        name="teacher_mastery_snapshots",
+    ),
+    path(
+        "teacher/analytics/mastery/refresh/",
+        teacher_views.refresh_mastery_snapshots,
+        name="teacher_mastery_snapshots_refresh",
     ),
     path(
         "teacher/evaluations/options/",
@@ -133,6 +153,21 @@ urlpatterns = [
         "school-admin/analytics/models/",
         school_admin_views.model_validation,
         name="school_admin_model_validation",
+    ),
+    path(
+        "school-admin/analytics/content-band-policies/",
+        school_admin_views.content_band_policies,
+        name="school_admin_content_band_policies",
+    ),
+    path(
+        "school-admin/analytics/content-band-policies/<int:pk>/publish/",
+        school_admin_views.publish_content_band_policy_view,
+        name="school_admin_content_band_policy_publish",
+    ),
+    path(
+        "school-admin/analytics/mastery/refresh/",
+        school_admin_views.refresh_assessment_mastery,
+        name="school_admin_mastery_refresh",
     ),
     path(
         "school-admin/analytics/models/longitudinal/",

@@ -1076,7 +1076,10 @@ def classroom_group_collaboration_row(
     groups = getattr(collaboration, "prefetched_groups", None)
     if groups is None and include_groups:
         groups = list(
-            collaboration.groups.annotate(used_storage_bytes=Sum("files__file_size"))
+            collaboration.groups.filter(
+                is_active=True,
+                plan_version=collaboration.active_plan_version,
+            ).annotate(used_storage_bytes=Sum("files__file_size"))
             .prefetch_related(
                 Prefetch(
                     "members",
@@ -1107,7 +1110,14 @@ def classroom_group_collaboration_row(
         "storage_quota_mb": collaboration.storage_quota_mb,
         "allow_student_upload": collaboration.allow_student_upload,
         "allow_onlyoffice_edit": collaboration.allow_onlyoffice_edit,
-        "group_count": len(groups) if include_groups else collaboration.groups.count(),
+        "group_count": (
+            len(groups)
+            if include_groups
+            else collaboration.groups.filter(
+                is_active=True,
+                plan_version=collaboration.active_plan_version,
+            ).count()
+        ),
         "my_group_id": my_group.id if my_group else None,
         "my_group": (
             classroom_group_row(my_group, include_files=include_files)
@@ -1147,7 +1157,10 @@ def student_classroom_group_collaboration_row(
         "storage_quota_mb": collaboration.storage_quota_mb,
         "allow_student_upload": collaboration.allow_student_upload,
         "allow_onlyoffice_edit": collaboration.allow_onlyoffice_edit,
-        "group_count": collaboration.groups.count(),
+        "group_count": collaboration.groups.filter(
+            is_active=True,
+            plan_version=collaboration.active_plan_version,
+        ).count(),
         "my_group_id": my_group.id,
         "my_group": student_classroom_group_row(my_group, include_files=include_files),
         "groups": [],

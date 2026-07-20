@@ -4,6 +4,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from learning.services.bands import resolve_student_band
 from learning_analytics.models import (
     LearningEventV2,
     LearningOpportunity,
@@ -85,9 +86,24 @@ def _eligible_profiles(release_event: LearningEventV2):
     explicit_student_ids = release_event.payload.get("target_student_ids")
     if explicit_student_ids:
         profiles = profiles.filter(user_id__in=explicit_student_ids)
-    if "unassigned" in allowed:
-        return profiles
-    return profiles.filter(current_layer__in=allowed)
+    if "all" in target_layers:
+        return list(profiles)
+    return [
+        profile
+        for profile in profiles
+        if (
+            (
+                resolved_band := resolve_student_band(
+                    student=profile.user,
+                    subject=release_event.subject,
+                    course=release_event.course,
+                    at=release_event.client_occurred_at,
+                )
+            )
+            in allowed
+            or (resolved_band is None and "unassigned" in allowed)
+        )
+    ]
 
 
 def _create_transition(
@@ -198,7 +214,7 @@ def release_learning_opportunities(release_event: LearningEventV2) -> dict:
     profiles = _eligible_profiles(release_event)
     explicit_student_ids = set(payload.get("target_student_ids") or [])
     if explicit_student_ids:
-        eligible_student_ids = set(profiles.values_list("user_id", flat=True))
+        eligible_student_ids = {profile.user_id for profile in profiles}
         if eligible_student_ids != explicit_student_ids:
             raise OpportunityError(
                 "release_targets_invalid",
@@ -206,7 +222,7 @@ def release_learning_opportunities(release_event: LearningEventV2) -> dict:
             )
     created = 0
     existing = 0
-    for profile in profiles.iterator():
+    for profile in profiles:
         opportunity = LearningOpportunity.objects.filter(
             student=profile.user,
             release_event=release_event,

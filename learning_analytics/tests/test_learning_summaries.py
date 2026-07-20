@@ -193,8 +193,16 @@ class LearningSummaryTests(TestCase):
         self.assertEqual(summary.metrics["completion_rate"], 1.0)
         self.assertEqual(summary.metrics["score"]["score_rate"], 0.8)
         suggestion = build_transparent_suggestion(summary=summary)
-        self.assertEqual(suggestion.suggested_layer, "A")
-        self.assertEqual(suggestion.previous_layer, "B")
+        self.assertEqual(suggestion.suggested_layer, "")
+        self.assertEqual(suggestion.previous_layer, "")
+        self.assertEqual(
+            suggestion.decision_kind,
+            StratificationDecision.DecisionKind.SUPPORT,
+        )
+        self.assertEqual(
+            suggestion.support_priority,
+            StratificationDecision.SupportPriority.ROUTINE,
+        )
 
         rebuilt = build_student_learning_summary(
             student_profile=self.profile,
@@ -221,6 +229,28 @@ class LearningSummaryTests(TestCase):
         listed = self.client.get("/api/v1/teacher/analytics/stratification/")
         self.assertEqual(listed.status_code, 200, listed.data)
         self.assertEqual(len(listed.data["data"]), 1)
+        overview = self.client.get(
+            "/api/v1/teacher/analytics/stratification/overview/"
+        )
+        self.assertEqual(overview.status_code, 200, overview.data)
+        self.assertEqual(overview.data["data"]["counts"]["total"], 1)
+        self.assertEqual(overview.data["data"]["counts"]["unassigned"], 1)
+        self.assertEqual(overview.data["data"]["counts"]["pending"], 1)
+        self.assertEqual(
+            overview.data["data"]["rows"][0]["current_layer"], ""
+        )
+        self.assertEqual(
+            overview.data["data"]["rows"][0]["latest_decision"]["id"],
+            suggestion.id,
+        )
+        overview_export = self.client.get(
+            "/api/v1/teacher/analytics/stratification/overview/export/"
+        )
+        self.assertEqual(overview_export.status_code, 200)
+        self.assertEqual(
+            overview_export["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
         exported = self.client.get(
             "/api/v1/teacher/analytics/learning-summaries/export/?window=30d"
         )
@@ -244,13 +274,24 @@ class LearningSummaryTests(TestCase):
         self.assertEqual(self.profile.current_layer, "B")
         suggestion.refresh_from_db()
         self.assertEqual(suggestion.status, StratificationDecision.Status.ACCEPTED)
-        self.assertEqual(suggestion.teacher_selected_layer, "A")
+        self.assertEqual(suggestion.teacher_selected_layer, "")
+        updated_overview = self.client.get(
+            "/api/v1/teacher/analytics/stratification/overview/"
+        )
+        self.assertEqual(updated_overview.data["data"]["counts"]["unassigned"], 1)
+        self.assertEqual(
+            updated_overview.data["data"]["rows"][0]["current_layer"], ""
+        )
 
         self.client.force_authenticate(self.student)
         denied_export = self.client.get(
             "/api/v1/teacher/analytics/learning-summaries/export/?window=30d"
         )
         self.assertEqual(denied_export.status_code, 403)
+        denied_overview = self.client.get(
+            "/api/v1/teacher/analytics/stratification/overview/"
+        )
+        self.assertEqual(denied_overview.status_code, 403)
 
     def test_no_task_is_not_counted_as_zero_score(self):
         summary = build_student_learning_summary(

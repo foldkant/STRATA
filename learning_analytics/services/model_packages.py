@@ -341,7 +341,11 @@ def _failed_audit(*, run, actor, action: str, message: str):
 def _decision_scope(run: ClassCalibrationRun) -> Q:
     scope = Q()
     for student_id, course_id in StratificationDecision.objects.filter(
-        calibration_run=run
+        calibration_run=run,
+        decision_kind__in=[
+            StratificationDecision.DecisionKind.SUPPORT,
+            StratificationDecision.DecisionKind.CONTENT_BAND,
+        ],
     ).values_list("student_id", "course_id"):
         scope |= Q(student_id=student_id, course_id=course_id)
     return scope
@@ -356,6 +360,7 @@ def _activate_release_suggestions(
     now = timezone.now()
     StratificationDecision.objects.filter(
         scope,
+        decision_kind=run.decision_purpose,
         status=StratificationDecision.Status.PENDING,
     ).exclude(calibration_run=run).update(
         status=StratificationDecision.Status.DEFERRED,
@@ -364,6 +369,7 @@ def _activate_release_suggestions(
     )
     StratificationDecision.objects.filter(
         calibration_run=run,
+        decision_kind=run.decision_purpose,
         status=StratificationDecision.Status.DEFERRED,
         review_note__startswith=SYSTEM_RELEASE_NOTE_PREFIX,
     ).update(

@@ -11,6 +11,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from learning.models import StratificationDecision
+from learning.services.bands import resolve_student_band
 from learning_analytics.feature_models import (
     TrainingDatasetRow,
     TrainingDatasetVersion,
@@ -27,7 +28,8 @@ from learning_analytics.services.advanced_models import (
 from learning_analytics.services.model_comparison import _dataset_rows, _target_type
 
 
-CALIBRATION_VERSION = "model-03-v4"
+CALIBRATION_VERSION = "model-03-v5"
+SUPPORT_POLICY_VERSION = "support-policy-v2"
 CLASS_PRIOR_STRENGTH = 20.0
 FEATURE_LABELS = {
     "prior_due_required_count__7d": "近 7 日到期必做任务数",
@@ -91,28 +93,36 @@ def _save_artifact(model, model_key: str, run_key: str, school_id: int) -> tuple
     return str(relative).replace("\\", "/"), hashlib.sha256(content).hexdigest()
 
 
-def _quantile(values: list[float], q: float) -> float:
-    return float(np.quantile(np.asarray(values, dtype=float), q))
+def _support_policy(outcome_key: str) -> dict:
+    if outcome_key == "required_completion_next_7d":
+        return {
+            "kind": "ratio_higher_is_better",
+            "routine_cutoff": 0.8,
+            "watch_cutoff": 0.6,
+        }
+    if outcome_key == "new_overdue_count_next_7d":
+        return {
+            "kind": "count_lower_is_better",
+            "routine_max": 0.5,
+            "watch_max": 1.5,
+        }
+    return {"kind": "unsupported"}
 
 
-def _layer_for_score(score: float, lower: float, upper: float, *, higher_is_better: bool):
-    if higher_is_better:
-        if score >= upper:
-            return "A"
-        if score >= lower:
-            return "B"
-        return "C"
-    if score <= lower:
-        return "A"
-    if score <= upper:
-        return "B"
-    return "C"
-
-
-def _confidence(score: float, lower: float, upper: float) -> float:
-    span = max(abs(upper - lower), 0.05)
-    distance = min(abs(score - lower), abs(score - upper))
-    return round(min(0.95, 0.55 + 0.4 * distance / span), 4)
+def _support_priority(score: float, policy: dict) -> str:
+    if policy["kind"] == "ratio_higher_is_better":
+        if score >= policy["routine_cutoff"]:
+            return StratificationDecision.SupportPriority.ROUTINE
+        if score >= policy["watch_cutoff"]:
+            return StratificationDecision.SupportPriority.WATCH
+        return StratificationDecision.SupportPriority.HIGH
+    if policy["kind"] == "count_lower_is_better":
+        if score <= policy["routine_max"]:
+            return StratificationDecision.SupportPriority.ROUTINE
+        if score <= policy["watch_max"]:
+            return StratificationDecision.SupportPriority.WATCH
+        return StratificationDecision.SupportPriority.HIGH
+    return ""
 
 
 def _format_feature_value(key: str, value: float) -> str:
@@ -151,12 +161,12 @@ def _reasons(row, importance: list[dict]) -> list[str]:
     return reasons or ["依据当前冻结的学习过程记录形成候选建议。"]
 
 
-def _support_suggestion(layer: str) -> str:
+def _support_suggestion(priority: str) -> str:
     return {
-        "A": "可安排拓展任务，同时保留共同题用于持续比较。",
-        "B": "保持核心任务，结合薄弱环节安排一次针对性练习。",
-        "C": "先提供必要支架和基础任务，完成后再逐步增加难度。",
-    }[layer]
+        StratificationDecision.SupportPriority.ROUTINE: "可安排拓展任务，同时保留共同题用于持续比较。",
+        StratificationDecision.SupportPriority.WATCH: "保持核心任务，结合薄弱环节安排一次针对性练习。",
+        StratificationDecision.SupportPriority.HIGH: "先提供必要支架和基础任务，完成后再逐步增加难度。",
+    }.get(priority, "继续收集学习材料后再安排支持。")
 
 
 @transaction.atomic
@@ -197,6 +207,7 @@ def build_class_calibration_candidate(
         school=dataset.school,
         subject=dataset.subject,
         calibration_version=CALIBRATION_VERSION,
+        decision_purpose=ClassCalibrationRun.DecisionPurpose.SUPPORT,
         model_key=best_model_key or "",
         status=ClassCalibrationRun.Status.BUILDING,
         created_by=created_by,
@@ -274,10 +285,10 @@ def build_class_calibration_candidate(
         correction = class_parameters[row.class_key]["calibration_correction"]
         calibrated_by_row[row.row_id] = predicted_by_row[row.row_id] + correction
 
-    values = list(calibrated_by_row.values())
-    lower = _quantile(values, 1 / 3)
-    upper = _quantile(values, 2 / 3)
     higher_is_better = _higher_is_better(dataset.outcome_definition.outcome_key)
+    support_policy = _support_policy(dataset.outcome_definition.outcome_key)
+    if support_policy["kind"] == "unsupported":
+        raise ValidationError("当前未来结果尚未登记学习支持判定规则。")
     artifact_path, artifact_hash = _save_artifact(
         model, best_model_key, run_key, dataset.school_id
     )
@@ -322,10 +333,12 @@ def build_class_calibration_candidate(
         if score is None:
             continue
         student = source.snapshot.student
-        profile = student.student_profile
-        suggested_layer = _layer_for_score(
-            score, lower, upper, higher_is_better=higher_is_better
+        current_band = resolve_student_band(
+            student=student,
+            subject=source.decision_point.subject,
+            course=source.decision_point.course,
         )
+        support_priority = _support_priority(score, support_policy)
         comparison_row = rows_by_id[source.id]
         _, created = StratificationDecision.objects.get_or_create(
             student=student,
@@ -335,9 +348,9 @@ def build_class_calibration_candidate(
             defaults={
                 "class_group": source.decision_point.class_group,
                 "subject": source.decision_point.subject,
-                "previous_layer": profile.current_layer or "",
-                "suggested_layer": suggested_layer,
-                "confidence": _confidence(score, lower, upper),
+                "previous_layer": current_band or "",
+                "suggested_layer": "",
+                "confidence": 0,
                 "reasons": _reasons(comparison_row, importance),
                 "missing_data": [],
                 "learning_summary": {
@@ -347,8 +360,14 @@ def build_class_calibration_candidate(
                     "raw_prediction": predicted_by_row[source.id],
                     "calibrated_prediction": score,
                     "outcome_key": dataset.outcome_definition.outcome_key,
+                    "support_priority": support_priority,
+                    "support_policy": support_policy,
+                    "confidence_status": "not_estimated",
                 },
-                "support_suggestion": _support_suggestion(suggested_layer),
+                "support_suggestion": _support_suggestion(support_priority),
+                "decision_kind": StratificationDecision.DecisionKind.SUPPORT,
+                "support_priority": support_priority,
+                "policy_version": SUPPORT_POLICY_VERSION,
                 "window_start": dataset.decision_start,
                 "calibration_run": run,
                 "status": StratificationDecision.Status.PENDING,
@@ -360,7 +379,7 @@ def build_class_calibration_candidate(
         "outcome_key": dataset.outcome_definition.outcome_key,
         "higher_is_better": higher_is_better,
         "global_residual_correction": global_residual,
-        "layer_thresholds": {"lower": lower, "upper": upper},
+        "support_policy": support_policy,
         "class_prior_strength": CLASS_PRIOR_STRENGTH,
         "feature_importance": importance,
     }
