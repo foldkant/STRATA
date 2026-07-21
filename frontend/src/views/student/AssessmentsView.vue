@@ -49,7 +49,7 @@ onMounted(load)
 
 <template>
   <StudentShell title="测试" subtitle="课程检测与阶段测试" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section class="student-test-summary">
       <article><span>可作答</span><strong>{{ summary.available }}</strong></article>
       <article><span>进行中</span><strong>{{ summary.inProgress }}</strong></article>

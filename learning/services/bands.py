@@ -162,7 +162,7 @@ def apply_student_subject_band(
         source_decision=decision,
         valid_until__isnull=True,
     ).first()
-    if existing:
+    if existing and existing.band == selected_band:
         return existing
 
     effective_at = effective_at or timezone.now()

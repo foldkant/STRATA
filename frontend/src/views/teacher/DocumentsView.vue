@@ -64,7 +64,7 @@ onMounted(loadRows)
 
 <template>
   <AppShell title="协作文档" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section class="document-workspace-shell">
       <header class="document-workspace-header">
         <div>
@@ -88,10 +88,10 @@ onMounted(loadRows)
             </label>
             <label>
               <span>打开方式</span>
-              <select v-model="mode">
+              <AppSelect v-model="mode">
                 <option value="edit">编辑</option>
                 <option value="view">只读预览</option>
-              </select>
+              </AppSelect>
             </label>
           </div>
 

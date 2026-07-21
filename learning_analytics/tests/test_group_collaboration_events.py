@@ -124,6 +124,24 @@ class GroupCollaborationEventTests(TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         return ClassroomGroupCollaboration.objects.get(session=self.session)
 
+    def test_group_storage_defaults_to_twenty_mb(self):
+        response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/group-collaboration/setup/",
+            {
+                "group_size": 2,
+                "grouping_strategy": "random",
+                "document_type": "docx",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["storage_quota_mb"], 20)
+        self.assertEqual(
+            ClassroomGroupCollaboration.objects.get(session=self.session).storage_quota_mb,
+            20,
+        )
+
     def test_group_opportunities_are_member_scoped_and_evidence_blocks_regrouping(self):
         collaboration = self.setup_collaboration()
         groups = list(

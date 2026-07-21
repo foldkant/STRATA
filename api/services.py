@@ -5862,7 +5862,7 @@ def save_classroom_session(
     class_group = classes[0] if classes else None
     title = str(data.get("title", "")).strip()
     if not title and course and class_group:
-        title = f"{course.title} - {class_group.name}"
+        title = f"{lesson.title if lesson else course.title} - {class_group.name}"
 
     if not _fullmatch(COURSE_TITLE_PATTERN, title):
         errors["title"] = ["课堂标题需为 2-128 位，可包含中文、字母、数字和常用标点。"]

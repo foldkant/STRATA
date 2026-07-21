@@ -75,6 +75,8 @@ export type StratificationSuggestionRow = {
   missing_data: string[]
   learning_summary: { summary_id?: number; data_status?: string; metrics?: LearningSummaryMetrics; index?: number | null }
   support_suggestion: string
+  decision_kind: 'support' | 'content_band' | 'legacy'
+  support_priority: '' | 'routine' | 'watch' | 'high'
   rule_version: string
   source_label: string
   window_start: string | null
@@ -82,6 +84,8 @@ export type StratificationSuggestionRow = {
   status: string
   status_label: string
   teacher_selected_layer: string
+  review_reason_code: string
+  review_reason_label: string
   review_note: string
   reviewed_by: string
   reviewed_at: string | null
@@ -159,8 +163,33 @@ export function stratificationOverviewExportUrl(params: { class_group?: number |
   return `${baseUrl}/stratification/overview/export/${queryString(params)}`
 }
 
-export function reviewStratificationSuggestion(id: number, payload: { action: 'accept' | 'keep' | 'adjust' | 'defer'; layer?: string; note?: string }) {
+export function reviewStratificationSuggestion(id: number, payload: { action: 'accept' | 'keep' | 'adjust' | 'defer'; layer?: string; reason_code?: string; note?: string }) {
   return apiRequest<StratificationSuggestionRow>(`${baseUrl}/stratification/${id}/review/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function bulkReviewStratificationSuggestions(payload: {
+  ids: number[]
+  action: 'accept' | 'keep' | 'defer'
+  reason_code?: string
+  note?: string
+}) {
+  return apiRequest<{ updated_count: number; ids: number[]; action: string }>(`${baseUrl}/stratification/batch-review/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function manuallyAdjustStratification(payload: {
+  student: number
+  course: number
+  layer: 'A' | 'B' | 'C'
+  reason_code: string
+  note?: string
+}) {
+  return apiRequest<StratificationSuggestionRow>(`${baseUrl}/stratification/manual-adjust/`, {
     method: 'POST',
     body: toJsonBody(payload)
   })

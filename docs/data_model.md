@@ -83,7 +83,7 @@
 - 小组协作文档按组生成一份独立 Word/PPT/Excel 文件。STRATA 负责账号和权限，ONLYOFFICE 负责在线编辑；无 ONLYOFFICE 时仍保留文件下载和共享文件上传能力。
 - `ClassroomGroupDocumentVersion` 保存小组协作文档的不可变版本号、文件副本、SHA-256、大小、来源、回调状态、文档 key 和经过 JWT 校验的编辑者 ID。编辑者列表只用于组级审计，不直接归因个人贡献。
 - `ClassroomGroupFile` 使用 `public_id`、`analytics_attempt_id` 和 `version_no` 标识一次共享区提交；业务表保留文件名与描述，新版事件不复制这些正文信息。
-- 小组共享空间按组限制容量，第一版由教师设置 MB 配额，上传文件只允许 Office、PDF、压缩包、图片、音视频和常见文本格式。
+- 小组共享空间按组限制容量，第一版由教师设置 MB 配额，新配置默认每组 20MB；上传文件只允许 Office、PDF、压缩包、图片、音视频和常见文本格式。
 - `LessonStep.question_items` 第一版保存在 JSON 中，题目可包含 `target_layer`、`use_layer_scores` 和 `layer_scores`，用于学生端自动分层过滤和分值适配。
 - `target_layer` 支持 `all`、`A`、`B`、`C`、`A/B`、`B/C`、`A/B/C`；第一版不支持 `A/C`。
 - `layer_scores` 初始值应由基础分 `score` 自动填充，教师可修改；后续 AI 只提供建议分值，不直接写入。

@@ -41,7 +41,7 @@ onMounted(async () => {
     <template #actions>
       <input v-model.trim="query" class="student-search-input" aria-label="搜索课程" placeholder="搜索课程、学科或教师" />
     </template>
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section v-if="loading" class="student-panel"><p class="empty">正在加载课程</p></section>
     <section v-else class="student-course-grid wide">
       <RouterLink v-for="course in filteredRows" :key="course.id" class="student-course-card large" :to="`/student/courses/${course.id}`">

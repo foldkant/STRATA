@@ -556,17 +556,17 @@ onBeforeUnmount(() => {
 
     <section v-if="activeView === 'teacher_private' && isTeacher" class="chat-target-selector">
       <label for="chat-student-select">私聊学生</label>
-      <select id="chat-student-select" v-model.number="selectedStudentId">
+      <AppSelect id="chat-student-select" v-model.number="selectedStudentId">
         <option v-for="student in studentOptions" :key="student.id" :value="student.id">
           {{ student.display_name }}{{ student.student_no ? ` · ${student.student_no}` : '' }}
         </option>
-      </select>
+      </AppSelect>
     </section>
     <section v-if="activeView === 'group' && isTeacher" class="chat-target-selector">
       <label for="chat-group-select">进入小组</label>
-      <select id="chat-group-select" v-model.number="selectedGroupId">
+      <AppSelect id="chat-group-select" v-model.number="selectedGroupId">
         <option v-for="group in groupOptions" :key="group.id" :value="group.id">{{ group.name }} · {{ group.members.length }} 人</option>
-      </select>
+      </AppSelect>
     </section>
 
     <template v-if="activeView !== 'moderation'">

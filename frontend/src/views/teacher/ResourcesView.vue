@@ -309,7 +309,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="资源中心" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="resource-center-head">
       <div>
@@ -336,14 +336,14 @@ onMounted(async () => {
       </div>
       <div class="resource-filter-row">
         <input v-model.trim="query" aria-label="搜索资源" placeholder="搜索标题、成员、标签或说明" @keyup.enter="loadRows" />
-        <select v-model="subjectFilter" aria-label="按学科筛选" @change="loadRows">
+        <AppSelect v-model="subjectFilter" aria-label="按学科筛选" @change="loadRows">
           <option value="">全部学科</option>
           <option v-for="subject in options.subjects" :key="subject.id" :value="subject.id">{{ subject.name }}</option>
-        </select>
-        <select v-model="categoryFilter" aria-label="按分类筛选" @change="loadRows">
+        </AppSelect>
+        <AppSelect v-model="categoryFilter" aria-label="按分类筛选" @change="loadRows">
           <option value="">全部分类</option>
           <option v-for="item in categories" :key="item.value" :value="item.value">{{ item.label }}</option>
-        </select>
+        </AppSelect>
         <button class="secondary-button" type="button" :disabled="loading" @click="loadRows">
           {{ loading ? '查询中' : '查询' }}
         </button>
@@ -422,16 +422,16 @@ onMounted(async () => {
             </label>
             <label>
               <span>资源分类 <b>*</b></span>
-              <select v-model="form.category" :disabled="form.resource_type === 'student_project'">
+              <AppSelect v-model="form.category" :disabled="form.resource_type === 'student_project'">
                 <option v-for="item in categories" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
+              </AppSelect>
             </label>
             <label>
               <span>所属学科</span>
-              <select v-model="form.subject">
+              <AppSelect v-model="form.subject">
                 <option value="">不限定学科</option>
                 <option v-for="subject in options.subjects" :key="subject.id" :value="subject.id">{{ subject.name }}</option>
-              </select>
+              </AppSelect>
             </label>
             <label>
               <span>适用年级</span>
@@ -456,10 +456,10 @@ onMounted(async () => {
             <template v-if="form.resource_type === 'student_project'">
               <label>
                 <span>项目形式 <b>*</b></span>
-                <select v-model="form.project_type">
+                <AppSelect v-model="form.project_type">
                   <option value="individual">个人项目</option>
                   <option value="group">小组项目</option>
-                </select>
+                </AppSelect>
               </label>
               <label>
                 <span>所属课程</span>

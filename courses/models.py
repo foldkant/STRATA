@@ -647,7 +647,7 @@ class ClassroomGroupCollaboration(models.Model):
     document_type = models.CharField(
         max_length=8, choices=DocumentType.choices, default=DocumentType.DOCX
     )
-    storage_quota_mb = models.PositiveIntegerField(default=100)
+    storage_quota_mb = models.PositiveIntegerField(default=20)
     allow_student_upload = models.BooleanField(default=True)
     allow_onlyoffice_edit = models.BooleanField(default=True)
     status = models.CharField(

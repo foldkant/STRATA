@@ -162,8 +162,8 @@ onMounted(loadPage)
       <button class="student-ghost-button" type="button" @click="router.back()">返回</button>
     </template>
 
-    <NoticeLine v-if="notice" :message="notice" />
-    <NoticeLine v-if="success" :message="success" tone="success" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
+    <NoticeLine v-if="success" :message="success" tone="success" floating @dismiss="success = ''" />
     <section v-if="loading || !data" class="student-panel">
       <p class="empty">正在加载前测</p>
     </section>

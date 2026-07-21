@@ -135,6 +135,14 @@ function toneClass(tone: string) {
   return `analysis-tone-${tone}`
 }
 
+function calibrationState(run: ModelValidation['calibration_runs'][number]) {
+  if (run.release?.status === 'active') return '当前已发布'
+  if (run.release?.status === 'superseded') return '已被新版本替代'
+  if (run.release?.status === 'rolled_back') return '已停用'
+  if (run.status === 'candidate') return '候选待发布'
+  return run.status_label
+}
+
 async function loadData(showLoading = true) {
   if (showLoading) loading.value = true
   try {
@@ -213,7 +221,7 @@ async function runAdvancedValidation(dataset: AnalysisDataset, type: 'advanced' 
     } else {
       const result = await createClassCalibration({ dataset_id: dataset.id })
       notice.value = result.run.status === 'candidate'
-        ? `已生成 ${result.run.suggestion_count} 条教师审核候选，学生层级没有自动改变。`
+        ? `已生成 ${result.run.suggestion_count} 条学习支持候选，学生层级没有自动改变。`
         : '班级校准暂未生成建议，页面已保留阻塞原因。'
     }
     noticeTone.value = 'success'
@@ -236,7 +244,7 @@ async function runFullModelTraining(dataset: AnalysisDataset) {
   try {
     const result = await trainStratificationModel({ dataset_id: dataset.id })
     notice.value = result.calibration_run.status === 'candidate'
-      ? `训练完成：已选择 ${result.calibration_run.model_key}，生成 ${result.calibration_run.suggestion_count} 条教师候选。`
+      ? `训练完成：已选择 ${result.calibration_run.model_key}，生成 ${result.calibration_run.suggestion_count} 条学习支持候选。`
       : '训练检查已经完成，当前数据暂不能生成教师分层建议。'
     noticeTone.value = result.calibration_run.status === 'candidate' ? 'success' : 'warning'
     await loadData(false)
@@ -435,6 +443,22 @@ onMounted(loadData)
         <h2>分层模型管理</h2>
         <p>训练、查看和发布本校各学科的隐性分层模型；分层情况仅向学校管理员和对应任课教师开放。</p>
       </div>
+    </section>
+
+    <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" floating @dismiss="notice = ''" />
+    <NoticeLine
+      v-if="data?.test_data_visible"
+      message="当前为本地测试环境，页面会显示带测试标记的数据；正式部署默认排除。"
+      tone="warning"
+    />
+
+    <div v-if="!loading && data" class="analysis-section-toolbar">
+      <nav class="analysis-section-tabs" aria-label="分层分析页面">
+        <button type="button" :class="{ active: activeSection === 'overview' }" @click="activeSection = 'overview'">运行概览</button>
+        <button type="button" :class="{ active: activeSection === 'data' }" @click="activeSection = 'data'">数据准备</button>
+        <button type="button" :class="{ active: activeSection === 'standards' }" @click="activeSection = 'standards'">层级标准</button>
+        <button type="button" :class="{ active: activeSection === 'research' }" @click="activeSection = 'research'">详细检查</button>
+      </nav>
       <div v-if="activeSection === 'data'" class="analysis-page-actions">
         <button class="secondary-button" type="button" :disabled="working" @click="refreshOutcomes">
           更新到期结果
@@ -451,21 +475,7 @@ onMounted(loadData)
           新建层级标准
         </button>
       </div>
-    </section>
-
-    <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" />
-    <NoticeLine
-      v-if="data?.test_data_visible"
-      message="当前为本地测试环境，页面会显示带测试标记的数据；正式部署默认排除。"
-      tone="warning"
-    />
-
-    <nav v-if="!loading && data" class="analysis-section-tabs" aria-label="分层分析页面">
-      <button type="button" :class="{ active: activeSection === 'overview' }" @click="activeSection = 'overview'">运行概览</button>
-      <button type="button" :class="{ active: activeSection === 'data' }" @click="activeSection = 'data'">数据准备</button>
-      <button type="button" :class="{ active: activeSection === 'standards' }" @click="activeSection = 'standards'">层级标准</button>
-      <button type="button" :class="{ active: activeSection === 'research' }" @click="activeSection = 'research'">详细检查</button>
-    </nav>
+    </div>
 
     <section v-if="loading" class="panel analysis-loading" aria-live="polite">
       <strong>正在加载分析准备情况</strong>
@@ -775,6 +785,7 @@ onMounted(loadData)
                   <td data-label="学科与结果">
                     <strong>{{ run.subject.name }} · {{ run.model_card.title || '模型比较' }}</strong>
                     <small>{{ run.row_count }} 条已观察结果 · {{ run.status_label }}</small>
+                    <small>完成时间：{{ formatDateTime(run.finished_at || run.created_at) }}</small>
                   </td>
                   <td data-label="检查方式"><span>{{ run.validation_keys.join('、') }}</span><small>测试样本不足时不输出指标</small></td>
                   <td data-label="比较方法">
@@ -794,15 +805,16 @@ onMounted(loadData)
         </div>
 
         <div v-if="validation?.calibration_runs.length" class="analysis-calibration-results">
-          <header><div><h3>候选与发布</h3><p>候选通过校验并发布后，教师才能看到对应建议；学生端始终不显示内部层级。</p></div></header>
+          <header><div><h3>候选与发布</h3><p>发布后教师可处理建议，学生端不显示层级。</p></div></header>
           <article v-for="run in validation.calibration_runs" :key="run.id" class="analysis-calibration-row">
             <div class="analysis-calibration-main">
               <strong>{{ run.subject.name }} · {{ run.model_key || '暂未选择模型' }}</strong>
-              <small>{{ run.calibration_version }} · {{ run.status_label }}<template v-if="run.release"> · v{{ run.release.release_version }} {{ run.release.status_label }}</template></small>
+              <small>{{ run.calibration_version }} · {{ calibrationState(run) }}<template v-if="run.release"> · v{{ run.release.release_version }}</template></small>
+              <small>开始：{{ formatDateTime(run.created_at) }} · 完成：{{ formatDateTime(run.finished_at) }}</small>
             </div>
             <div class="analysis-calibration-counts">
               <span>班级参数 {{ Object.keys(run.class_parameters).length }} 组</span>
-              <strong>教师候选 {{ run.suggestion_count }} 条</strong>
+              <strong>支持候选 {{ run.suggestion_count }} 条</strong>
             </div>
             <div class="analysis-release-actions">
               <span v-if="run.release?.is_test_data" class="analysis-status analysis-tone-warning">测试版本</span>
@@ -870,21 +882,21 @@ onMounted(loadData)
         <div class="form-grid analysis-form-grid">
           <label>
             <span>班级 <b>*</b></span>
-            <select v-model.number="pointForm.class_id" required>
+            <AppSelect v-model.number="pointForm.class_id" required>
               <option :value="0" disabled>请选择班级</option>
               <option v-for="item in data?.options.classes || []" :key="item.id" :value="item.id">
                 {{ item.grade }} {{ item.name }}（{{ item.student_count }} 人）
               </option>
-            </select>
+            </AppSelect>
           </label>
           <label>
             <span>课程 <b>*</b></span>
-            <select v-model.number="pointForm.course_id" required>
+            <AppSelect v-model.number="pointForm.course_id" required>
               <option :value="0" disabled>请选择课程</option>
               <option v-for="item in availableCourses" :key="item.id" :value="item.id">
                 {{ item.subject.name }} · {{ item.title }} · {{ item.teacher_name }}
               </option>
-            </select>
+            </AppSelect>
             <small v-if="pointForm.class_id && !availableCourses.length">所选班级暂没有已启用课程。</small>
           </label>
           <label class="wide-field">
@@ -913,19 +925,19 @@ onMounted(loadData)
         <div class="form-grid analysis-form-grid">
           <label>
             <span>学科 <b>*</b></span>
-            <select v-model.number="datasetForm.subject_id" required>
+            <AppSelect v-model.number="datasetForm.subject_id" required>
               <option :value="0" disabled>请选择学科</option>
               <option v-for="item in subjects" :key="item.id" :value="item.id">{{ item.name }}</option>
-            </select>
+            </AppSelect>
           </label>
           <label>
             <span>随后结果 <b>*</b></span>
-            <select v-model="datasetForm.outcome_key" required>
+            <AppSelect v-model="datasetForm.outcome_key" required>
               <option value="" disabled>请选择未来结果</option>
               <option v-for="item in data?.outcome_definitions || []" :key="item.key" :value="item.key">
                 {{ item.label }}
               </option>
-            </select>
+            </AppSelect>
           </label>
           <div v-if="selectedOutcome" class="analysis-form-note wide-field">
             <strong>{{ selectedOutcome.label }}</strong>
@@ -953,10 +965,10 @@ onMounted(loadData)
         <div class="form-grid analysis-policy-form">
           <label>
             <span>学科 <b>*</b></span>
-            <select v-model.number="policyForm.subject" required>
+            <AppSelect v-model.number="policyForm.subject" required>
               <option :value="0" disabled>请选择学科</option>
               <option v-for="item in subjects" :key="item.id" :value="item.id">{{ item.name }}</option>
-            </select>
+            </AppSelect>
           </label>
           <label>
             <span>名称 <b>*</b></span>
@@ -1039,7 +1051,8 @@ onMounted(loadData)
   overflow-wrap: anywhere;
 }
 
-.analysis-calibration-row {
+.analysis-calibration-results > .analysis-calibration-row {
+  display: grid;
   grid-template-columns: minmax(190px, 1.2fr) minmax(180px, 0.8fr) minmax(220px, auto);
   align-items: center;
 }
@@ -1086,7 +1099,7 @@ onMounted(loadData)
 }
 
 @media (max-width: 1024px) {
-  .analysis-calibration-row {
+  .analysis-calibration-results > .analysis-calibration-row {
     grid-template-columns: minmax(0, 1fr) minmax(170px, auto);
   }
 
@@ -1106,7 +1119,7 @@ onMounted(loadData)
     grid-template-columns: 1fr;
   }
 
-  .analysis-calibration-row {
+  .analysis-calibration-results > .analysis-calibration-row {
     grid-template-columns: 1fr;
   }
 

@@ -860,7 +860,7 @@ onUnmounted(() => {
 
 <template>
   <main class="classroom-fullscreen-page student-classroom-fullscreen">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section v-if="loading" class="student-panel">
       <p class="empty">正在加载课堂</p>
     </section>

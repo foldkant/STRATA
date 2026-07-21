@@ -364,6 +364,87 @@ class ModelReleaseTests(TestCase):
         self.assertEqual(visible.status_code, 200)
         self.assertEqual(len(visible.data["data"]), 1)
 
+    def test_teacher_cannot_review_unpublished_candidate(self):
+        calibration, _ = self._candidate("unpublished-review")
+        decision = self._decision(calibration, "unpublished-review")
+        client = APIClient()
+        client.force_authenticate(self.teacher)
+
+        response = client.post(
+            f"/api/v1/teacher/analytics/stratification/{decision.id}/review/",
+            {"action": "accept"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404, response.data)
+        decision.refresh_from_db()
+        self.assertEqual(decision.status, StratificationDecision.Status.PENDING)
+
+    def test_teacher_cannot_bulk_review_unpublished_candidate(self):
+        calibration, _ = self._candidate("unpublished-bulk-review")
+        decision = self._decision(calibration, "unpublished-bulk-review")
+        client = APIClient()
+        client.force_authenticate(self.teacher)
+
+        response = client.post(
+            "/api/v1/teacher/analytics/stratification/batch-review/",
+            {"ids": [decision.id], "action": "accept"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 404, response.data)
+        decision.refresh_from_db()
+        self.assertEqual(decision.status, StratificationDecision.Status.PENDING)
+
+    def test_teacher_can_review_candidate_after_release(self):
+        calibration, _ = self._candidate("published-review")
+        decision = self._decision(calibration, "published-review")
+        publish_model_candidate(calibration_run=calibration, actor=self.admin)
+        client = APIClient()
+        client.force_authenticate(self.teacher)
+
+        response = client.post(
+            f"/api/v1/teacher/analytics/stratification/{decision.id}/review/",
+            {"action": "accept"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        decision.refresh_from_db()
+        self.assertEqual(decision.status, StratificationDecision.Status.ACCEPTED)
+
+    def test_publish_restores_support_suggestions_retired_as_legacy(self):
+        calibration, _ = self._candidate("legacy-support")
+        legacy = self._decision(calibration, "legacy-support")
+        legacy.decision_kind = StratificationDecision.DecisionKind.LEGACY
+        legacy.support_priority = ""
+        legacy.policy_version = "legacy-compat-v1"
+        legacy.status = StratificationDecision.Status.DEFERRED
+        legacy.learning_summary = {
+            "calibration_run_id": calibration.id,
+            "outcome_key": "required_completion_next_7d",
+            "calibrated_prediction": 0.72,
+        }
+        legacy.save()
+
+        publish_model_candidate(calibration_run=calibration, actor=self.admin)
+
+        restored = StratificationDecision.objects.get(
+            calibration_run=calibration,
+            decision_kind=StratificationDecision.DecisionKind.SUPPORT,
+        )
+        self.assertEqual(restored.status, StratificationDecision.Status.PENDING)
+        self.assertEqual(
+            restored.support_priority,
+            StratificationDecision.SupportPriority.WATCH,
+        )
+        self.assertEqual(
+            restored.learning_summary["restored_from_legacy_decision_id"],
+            legacy.id,
+        )
+        legacy.refresh_from_db()
+        self.assertEqual(legacy.decision_kind, StratificationDecision.DecisionKind.LEGACY)
+
     def test_synthetic_acceptance_publishes_support_without_changing_layers(self):
         now = timezone.now()
         synthetic_run = SyntheticDatasetRun.objects.create(

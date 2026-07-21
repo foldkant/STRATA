@@ -1,6 +1,6 @@
 from django.urls import include, path
 
-from . import assessment_views, chat_views, protected_files, views
+from . import assessment_views, chat_views, protected_files, super_admin_views, views
 
 urlpatterns = [
     path("", include("api.analytics.urls")),
@@ -47,6 +47,41 @@ urlpatterns = [
         "super-admin/dashboard/",
         views.super_admin_dashboard,
         name="api_super_admin_dashboard",
+    ),
+    path(
+        "super-admin/collection/",
+        super_admin_views.collection_batches,
+        name="api_super_admin_collection",
+    ),
+    path(
+        "super-admin/collection/export/",
+        super_admin_views.collection_batches_export,
+        name="api_super_admin_collection_export",
+    ),
+    path(
+        "super-admin/collection/<int:pk>/",
+        super_admin_views.collection_batch_detail,
+        name="api_super_admin_collection_detail",
+    ),
+    path(
+        "super-admin/analysis/",
+        super_admin_views.cross_school_analysis,
+        name="api_super_admin_analysis",
+    ),
+    path(
+        "super-admin/analysis/export/",
+        super_admin_views.cross_school_analysis_export,
+        name="api_super_admin_analysis_export",
+    ),
+    path(
+        "super-admin/health/",
+        super_admin_views.system_health,
+        name="api_super_admin_health",
+    ),
+    path(
+        "super-admin/health/export/",
+        super_admin_views.system_health_export,
+        name="api_super_admin_health_export",
     ),
     path(
         "super-admin/schools/",

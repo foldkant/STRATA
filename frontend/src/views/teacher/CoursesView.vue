@@ -461,7 +461,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="课程备课" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="metric-grid teacher-student-summary" aria-label="课程概况">
       <article v-for="item in summary" :key="item.label" class="metric-card">
@@ -494,12 +494,12 @@ onMounted(async () => {
       <template #toolbar-actions>
         <label>
           <span>学科</span>
-          <select v-model="subjectFilter" @change="load(1)">
+          <AppSelect v-model="subjectFilter" @change="load(1)">
             <option value="">全部学科</option>
             <option v-for="item in subjectOptions" :key="item.id" :value="item.id">
               {{ item.name }}
             </option>
-          </select>
+          </AppSelect>
         </label>
       </template>
 
@@ -571,25 +571,25 @@ onMounted(async () => {
             </label>
             <label>
               <span>学科 <b>*</b></span>
-              <select v-model="courseForm.subject">
+              <AppSelect v-model="courseForm.subject">
                 <option value="">请选择学科</option>
                 <option v-for="item in subjectOptions" :key="item.id" :value="item.id">{{ item.name }}</option>
-              </select>
+              </AppSelect>
               <small v-if="courseErrors.subject" class="field-error">{{ courseErrors.subject[0] }}</small>
             </label>
             <label>
               <span>教学模式</span>
-              <select v-model="courseForm.teaching_model">
+              <AppSelect v-model="courseForm.teaching_model">
                 <option value="pbl">项目式学习</option>
                 <option value="tbl">任务驱动学习</option>
-              </select>
+              </AppSelect>
             </label>
             <label>
               <span>状态</span>
-              <select v-model="courseForm.status">
+              <AppSelect v-model="courseForm.status">
                 <option value="draft">草稿</option>
                 <option value="published">已发布</option>
-              </select>
+              </AppSelect>
             </label>
             <label class="span-2">
               <span>课程简介</span>
@@ -744,10 +744,10 @@ onMounted(async () => {
             </label>
             <label>
               <span>状态</span>
-              <select v-model="lessonForm.status">
+              <AppSelect v-model="lessonForm.status">
                 <option value="draft">草稿</option>
                 <option value="published">已发布</option>
-              </select>
+              </AppSelect>
             </label>
             <label class="span-2">
               <span>课时内容</span>

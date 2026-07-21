@@ -142,11 +142,38 @@ const groupingDraft = ref<GroupingCandidateAssignment[]>([])
 const groupingLocks = ref<Record<number, boolean>>({})
 const groupingNote = ref('')
 const draggedGroupingStudentId = ref<number | null>(null)
+const groupingStrategyOptions = [
+  {
+    value: 'random',
+    label: '日常随机',
+    description: '随机且尽量等人数，适合一般课堂活动。'
+  },
+  {
+    value: 'same_layer',
+    label: '同进度练习',
+    description: '把当前学科学习准备情况接近的学生分在一起，适合分层练习和集中辅导。'
+  },
+  {
+    value: 'balanced_layer',
+    label: '同伴互助',
+    description: '搭配准备情况相邻的学生，适合讨论、讲解和互相检查。'
+  },
+  {
+    value: 'ai_layer',
+    label: '任务均衡',
+    description: '根据当前任务的准备情况平衡各组，适合开放任务和短项目。'
+  },
+  {
+    value: 'stable_project',
+    label: '保持原组',
+    description: '尽量保留已有搭档和锁定成员，适合跨课时项目。'
+  }
+] as const
 const groupCollabForm = ref<ClassroomGroupCollaborationPayload>({
   group_size: 4,
   grouping_strategy: 'balanced_layer',
   document_type: 'docx',
-  storage_quota_mb: 100,
+  storage_quota_mb: 20,
   allow_student_upload: true,
   allow_onlyoffice_edit: true,
   regenerate: false
@@ -210,6 +237,14 @@ const groupRows = computed(() => groupCollaboration.value?.groups || [])
 const selectedGroupingCandidate = computed(() => (
   groupingRun.value?.candidates.find((item) => item.key === groupingCandidateKey.value) || null
 ))
+const groupingFallbackMessage = computed(() => {
+  const run = groupingRun.value
+  if (!run || run.candidates.length !== 1 || run.candidates[0]?.key !== 'random') return ''
+  const reason = run.conflicts[0]?.code || String(run.candidates[0]?.metadata?.fallback_reason || '')
+  if (reason === 'constraints_unsatisfied') return '当前人数或锁定条件无法生成其他方案，本次仅提供随机分组。'
+  if (reason === 'ortools_unavailable') return '本地分组计算组件暂不可用，本次仅提供随机分组。'
+  return '当前学习材料不足，本次仅提供随机分组。'
+})
 const groupCollaborationOpenText = computed(() => {
   if (!groupCollaboration.value) return '未开启'
   return `${groupCollaboration.value.status_label} · ${groupCollaboration.value.group_count} 组`
@@ -1754,7 +1789,7 @@ onUnmounted(() => {
 
 <template>
   <main class="classroom-fullscreen-page teacher-classroom-fullscreen">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section v-if="loading || !session" class="panel classroom-fullscreen-loading">
       <p class="empty">正在加载课堂控制台</p>
     </section>
@@ -2294,25 +2329,37 @@ onUnmounted(() => {
               </label>
               <label>
                 <span>分组方式</span>
-                <select v-model="groupCollabForm.grouping_strategy">
-                  <option value="random">随机分组</option>
-                  <option value="same_layer">准备度接近</option>
-                  <option value="balanced_layer">相邻互助</option>
-                  <option value="ai_layer">任务匹配</option>
-                  <option value="stable_project">项目稳定</option>
-                </select>
+                <AppSelect v-model="groupCollabForm.grouping_strategy" aria-label="分组方式">
+                  <option
+                    v-for="item in groupingStrategyOptions"
+                    :key="item.value"
+                    :value="item.value"
+                    :title="item.description"
+                  >
+                    {{ item.label }}
+                  </option>
+                </AppSelect>
               </label>
               <label>
                 <span>协作文档</span>
-                <select v-model="groupCollabForm.document_type">
+                <AppSelect v-model="groupCollabForm.document_type">
                   <option value="docx">Word 文档</option>
                   <option value="pptx">PPT 演示</option>
                   <option value="xlsx">Excel 表格</option>
-                </select>
+                </AppSelect>
               </label>
               <label>
                 <span>小组空间</span>
-                <input v-model.number="groupCollabForm.storage_quota_mb" type="number" min="10" max="2048" />
+                <div class="group-storage-input">
+                  <input
+                    v-model.number="groupCollabForm.storage_quota_mb"
+                    type="number"
+                    min="10"
+                    max="2048"
+                    aria-label="小组空间容量"
+                  />
+                  <span>MB</span>
+                </div>
               </label>
               <label class="group-collaboration-check">
                 <input v-model="groupCollabForm.allow_onlyoffice_edit" type="checkbox" />
@@ -2349,6 +2396,8 @@ onUnmounted(() => {
                 </div>
                 <small>锁定的学生在重新计算时保持当前小组</small>
               </header>
+
+              <p v-if="groupingFallbackMessage" class="grouping-fallback-message" role="status">{{ groupingFallbackMessage }}</p>
 
               <div class="grouping-candidate-tabs" role="tablist" aria-label="分组候选">
                 <button
@@ -2391,24 +2440,24 @@ onUnmounted(() => {
                       </div>
                       <label>
                         <span class="sr-only">调整小组</span>
-                        <select
+                        <AppSelect
                           :value="groupingStudentGroup(member.student_id)"
                           :disabled="groupingLocks[member.student_id]"
                           @change="setGroupingStudentGroup(member.student_id, $event)"
                         >
                           <option v-for="target in groupingDraft" :key="target.group_no" :value="target.group_no">第{{ target.group_no }}组</option>
-                        </select>
+                        </AppSelect>
                       </label>
                       <label>
                         <span class="sr-only">调整角色</span>
-                        <select v-model="member.role">
+                        <AppSelect v-model="member.role">
                           <option value="coordinator">协调</option>
                           <option value="recorder">记录</option>
                           <option value="resource">资源</option>
                           <option value="presenter">展示</option>
                           <option value="verifier">核验</option>
                           <option value="member">成员</option>
-                        </select>
+                        </AppSelect>
                       </label>
                       <label class="grouping-lock-toggle">
                         <input v-model="groupingLocks[member.student_id]" type="checkbox" />

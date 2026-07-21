@@ -100,7 +100,7 @@ function updateNote(note: string) {
     <div v-if="notAssessed" class="not-assessed-fields">
       <label>
         <span>原因</span>
-        <select
+        <AppSelect
           :value="notAssessed.reason"
           :disabled="disabled"
           @change="updateReason(($event.target as HTMLSelectElement).value as EvaluationNotAssessedReasonCode)"
@@ -108,7 +108,7 @@ function updateNote(note: string) {
           <option v-for="item in evaluationNotAssessedOptions" :key="item.value" :value="item.value">
             {{ item.label }}
           </option>
-        </select>
+        </AppSelect>
       </label>
       <label>
         <span>{{ notAssessed.reason === 'other' ? '说明（必填）' : '补充说明' }}</span>

@@ -25,7 +25,7 @@ export type TeacherDashboard = {
     event_count: number
     status_label: string
   }>
-  todo_rows: Array<{ label: string; count: number; level: string }>
+  todo_rows: Array<{ label: string; count: number; level: string; path: string }>
 }
 
 export function getTeacherDashboard() {

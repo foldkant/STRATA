@@ -144,7 +144,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="学生管理" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="metric-grid teacher-student-summary" aria-label="学生管理概况">
       <article v-for="item in summary" :key="item.label" class="metric-card">
@@ -212,22 +212,22 @@ onMounted(async () => {
       <template #toolbar-actions>
         <label>
           <span>任教班级</span>
-          <select v-model="filters.class" @change="load(1)">
+          <AppSelect v-model="filters.class" @change="load(1)">
             <option value="">全部班级</option>
             <option v-for="item in classes" :key="item.id" :value="item.id">
               {{ item.grade ? `${item.grade} ` : '' }}{{ item.name }}
             </option>
-          </select>
+          </AppSelect>
         </label>
         <label>
           <span>分层</span>
-          <select v-model="filters.layer" @change="load(1)">
+          <AppSelect v-model="filters.layer" @change="load(1)">
             <option value="">全部分层</option>
             <option value="A">A 拓展挑战层</option>
             <option value="B">B 核心发展层</option>
             <option value="C">C 基础提升层</option>
             <option value="unassigned">未分层</option>
-          </select>
+          </AppSelect>
         </label>
       </template>
 

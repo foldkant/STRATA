@@ -44,6 +44,7 @@ const saving = ref(false)
 const activityLoading = ref(false)
 const notice = ref('')
 const query = ref('')
+const lessonQuery = ref('')
 const status = ref('')
 const classFilter = ref('')
 const courseFilter = ref('')
@@ -87,6 +88,13 @@ const classOptions = computed<ClassGroupRow[]>(() => options.value.classes || []
 const activityTypeOptions = computed(() => options.value.activity_types || [])
 const selectedCourse = computed(() => courseOptions.value.find((item) => String(item.id) === String(sessionForm.course)) || null)
 const lessonOptions = computed<LessonRow[]>(() => selectedCourse.value?.lessons || [])
+const filteredLessonOptions = computed(() => {
+  const keyword = lessonQuery.value.trim().toLocaleLowerCase()
+  if (!keyword) return lessonOptions.value
+  return lessonOptions.value.filter((item) => (
+    `${item.sort_order} ${item.title}`.toLocaleLowerCase().includes(keyword)
+  ))
+})
 const courseClassOptions = computed<ClassGroupRow[]>(() => selectedCourse.value?.target_classes || [])
 const summary = computed(() => {
   const running = rows.value.results.filter((item) => item.status === 'running').length
@@ -138,6 +146,7 @@ function resetSessionForm() {
   sessionForm.lesson = courseOptions.value[0]?.lessons?.[0]?.id || ''
   sessionForm.class_group = courseOptions.value[0]?.target_classes?.[0]?.id || ''
   sessionForm.title = ''
+  lessonQuery.value = ''
 }
 
 function openCreateSession() {
@@ -152,10 +161,12 @@ function openEditSession(row: ClassroomSessionRow) {
   sessionForm.lesson = row.lesson?.id || ''
   sessionForm.class_group = row.class_group?.id || ''
   sessionForm.title = row.title
+  lessonQuery.value = ''
   sessionModalOpen.value = true
 }
 
 function syncCourseDefaults() {
+  lessonQuery.value = ''
   const course = selectedCourse.value
   if (!course) {
     sessionForm.lesson = ''
@@ -168,6 +179,14 @@ function syncCourseDefaults() {
   if (!course.target_classes.some((item) => String(item.id) === String(sessionForm.class_group))) {
     sessionForm.class_group = course.target_classes[0]?.id || ''
   }
+}
+
+function selectLesson(lessonId: number | '') {
+  sessionForm.lesson = lessonId
+}
+
+function lessonSequenceLabel(item: LessonRow) {
+  return item.sort_order > 0 ? `第 ${item.sort_order} 课时` : '课时'
 }
 
 function validateSessionForm() {
@@ -406,7 +425,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="课堂教学" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="metric-grid teacher-student-summary" aria-label="课堂概况">
       <article v-for="item in summary" :key="item.label" class="metric-card">
@@ -439,17 +458,17 @@ onMounted(async () => {
       <template #toolbar-actions>
         <label>
           <span>课程</span>
-          <select v-model="courseFilter" @change="load(1)">
+          <AppSelect v-model="courseFilter" @change="load(1)">
             <option value="">全部课程</option>
             <option v-for="item in courseOptions" :key="item.id" :value="item.id">{{ item.title }}</option>
-          </select>
+          </AppSelect>
         </label>
         <label>
           <span>班级</span>
-          <select v-model="classFilter" @change="load(1)">
+          <AppSelect v-model="classFilter" @change="load(1)">
             <option value="">全部班级</option>
             <option v-for="item in classOptions" :key="item.id" :value="item.id">{{ classLabel(item) }}</option>
-          </select>
+          </AppSelect>
         </label>
       </template>
 
@@ -505,31 +524,63 @@ onMounted(async () => {
           <div class="notice-editor-body">
             <label>
               <span>课程 <b>*</b></span>
-              <select v-model="sessionForm.course" @change="syncCourseDefaults">
+              <AppSelect v-model="sessionForm.course" @change="syncCourseDefaults">
                 <option value="">请选择课程</option>
                 <option v-for="item in courseOptions" :key="item.id" :value="item.id">{{ item.title }}</option>
-              </select>
+              </AppSelect>
               <small v-if="sessionErrors.course" class="field-error">{{ sessionErrors.course[0] }}</small>
             </label>
-            <label>
-              <span>课时</span>
-              <select v-model="sessionForm.lesson">
-                <option value="">不指定课时</option>
-                <option v-for="item in lessonOptions" :key="item.id" :value="item.id">{{ item.title }}</option>
-              </select>
+            <section class="classroom-lesson-picker span-2">
+              <header>
+                <span>课时</span>
+                <small>{{ lessonOptions.length }} 个课时</small>
+              </header>
+              <input
+                v-model="lessonQuery"
+                type="search"
+                placeholder="搜索课时名称或序号"
+                aria-label="搜索课时"
+              />
+              <div class="classroom-lesson-options" role="listbox" aria-label="选择课堂课时">
+                <button
+                  type="button"
+                  :class="{ active: !sessionForm.lesson }"
+                  role="option"
+                  :aria-selected="!sessionForm.lesson"
+                  @click="selectLesson('')"
+                >
+                  <span>临时课堂</span>
+                  <strong>不指定课时</strong>
+                  <small>未绑定</small>
+                </button>
+                <button
+                  v-for="item in filteredLessonOptions"
+                  :key="item.id"
+                  type="button"
+                  :class="{ active: String(sessionForm.lesson) === String(item.id) }"
+                  role="option"
+                  :aria-selected="String(sessionForm.lesson) === String(item.id)"
+                  @click="selectLesson(item.id)"
+                >
+                  <span>{{ lessonSequenceLabel(item) }}</span>
+                  <strong>{{ item.title }}</strong>
+                  <small>{{ item.status_label }}</small>
+                </button>
+                <p v-if="lessonQuery && !filteredLessonOptions.length" class="empty">没有匹配的课时。</p>
+              </div>
               <small v-if="sessionErrors.lesson" class="field-error">{{ sessionErrors.lesson[0] }}</small>
-            </label>
+            </section>
             <label>
               <span>班级 <b>*</b></span>
-              <select v-model="sessionForm.class_group">
+              <AppSelect v-model="sessionForm.class_group">
                 <option value="">请选择班级</option>
                 <option v-for="item in courseClassOptions" :key="item.id" :value="item.id">{{ classLabel(item) }}</option>
-              </select>
+              </AppSelect>
               <small v-if="sessionErrors.class_group" class="field-error">{{ sessionErrors.class_group[0] }}</small>
             </label>
             <label>
               <span>课堂标题</span>
-              <input v-model.trim="sessionForm.title" maxlength="128" placeholder="不填时按课程和班级自动生成" />
+              <input v-model.trim="sessionForm.title" maxlength="128" placeholder="不填时按课时和班级自动生成" />
               <small v-if="sessionErrors.title" class="field-error">{{ sessionErrors.title[0] }}</small>
             </label>
             <p class="form-helper span-2">课堂不再单独设置分层模式。教师在课时设计中设置 A/B/C、A/B、B/C 题目后，学生端会按当前投放环节自动匹配。</p>
@@ -612,9 +663,9 @@ onMounted(async () => {
           <div class="notice-editor-body">
             <label>
               <span>活动类型 <b>*</b></span>
-              <select v-model="activityForm.activity_type">
+              <AppSelect v-model="activityForm.activity_type">
                 <option v-for="item in activityTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
+              </AppSelect>
               <small v-if="activityErrors.activity_type" class="field-error">{{ activityErrors.activity_type[0] }}</small>
             </label>
             <label>

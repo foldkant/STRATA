@@ -66,7 +66,7 @@ onMounted(loadRows)
 
 <template>
   <StudentShell title="资源中心" subtitle="课外拓展与优秀项目" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="student-resource-center-head">
       <div class="resource-scope-tabs student-resource-tabs">

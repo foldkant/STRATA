@@ -359,7 +359,7 @@ onMounted(load)
 
 <template>
   <AppShell title="教师管理" eyebrow="学校管理员" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <ManagementPage
       v-model:query="query"
       v-model:status="status"

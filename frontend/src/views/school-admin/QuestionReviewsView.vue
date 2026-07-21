@@ -272,7 +272,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="题库审核" eyebrow="学校管理员" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="question-review-head">
       <div>
@@ -299,13 +299,13 @@ onMounted(async () => {
 
     <section class="question-review-filters">
       <input v-model.trim="query" aria-label="搜索题目" placeholder="搜索题干、知识点或教师" @keyup.enter="page = 1; loadRows()" />
-      <select v-model="subject" aria-label="按学科筛选" @change="page = 1; loadRows()">
+      <AppSelect v-model="subject" aria-label="按学科筛选" @change="page = 1; loadRows()">
         <option value="">全部学科</option>
         <option v-for="item in subjects" :key="item.id" :value="item.id">{{ item.name }}</option>
-      </select>
-      <select v-model="source" aria-label="按来源筛选" @change="page = 1; loadRows()">
+      </AppSelect>
+      <AppSelect v-model="source" aria-label="按来源筛选" @change="page = 1; loadRows()">
         <option v-for="item in sources" :key="item.value || 'all'" :value="item.value">{{ item.label }}</option>
-      </select>
+      </AppSelect>
       <button class="secondary-button" type="button" :disabled="loading" @click="page = 1; loadRows()">查询</button>
     </section>
 
@@ -432,7 +432,7 @@ onMounted(async () => {
         <div class="common-set-body">
           <section class="common-set-form">
             <div class="assessment-form-grid">
-              <label><span>学科 <b class="required-mark">*</b></span><select v-model="commonSetForm.subject" @change="loadCommonCandidates"><option v-for="item in subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+              <label><span>学科 <b class="required-mark">*</b></span><AppSelect v-model="commonSetForm.subject" @change="loadCommonCandidates"><option v-for="item in subjects" :key="item.id" :value="item.id">{{ item.name }}</option></AppSelect></label>
               <label><span>集合名称 <b class="required-mark">*</b></span><input v-model.trim="commonSetForm.title" maxlength="128" placeholder="例如 高一第一单元共同题" /></label>
               <label><span>年级范围</span><input v-model.trim="commonSetForm.grade_scope" maxlength="32" placeholder="例如 高一" /></label>
               <label><span>学期</span><input v-model.trim="commonSetForm.term" maxlength="32" placeholder="例如 第一学期" /></label>

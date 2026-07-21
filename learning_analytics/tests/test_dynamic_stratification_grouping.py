@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
@@ -17,6 +18,7 @@ from courses.models import (
     Subject,
 )
 from learning.models import (
+    BandTransitionAudit,
     CommonQuestionSet,
     ContentBandPolicyVersion,
     StratificationDecision,
@@ -194,6 +196,20 @@ class DynamicStratificationAndGroupingTests(TestCase):
         )
         self.assertEqual(response.status_code, 200, response.data)
 
+    def _support_decision(self, profile, suffix, *, status=None):
+        return StratificationDecision.objects.create(
+            student=profile.user,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            suggested_layer="",
+            decision_kind=StratificationDecision.DecisionKind.SUPPORT,
+            support_priority=StratificationDecision.SupportPriority.WATCH,
+            support_suggestion="安排针对性练习。",
+            rule_version=f"support-bulk-{suffix}",
+            status=status or StratificationDecision.Status.PENDING,
+        )
+
     def test_support_decision_never_changes_formal_band(self):
         profile = self.profiles[0]
         decision = StratificationDecision.objects.create(
@@ -213,6 +229,153 @@ class DynamicStratificationAndGroupingTests(TestCase):
         profile.refresh_from_db()
         self.assertEqual(profile.current_layer, "A")
         self.assertFalse(StudentSubjectBand.objects.exists())
+
+    def test_support_decision_rejects_layer_adjust_action(self):
+        profile = self.profiles[0]
+        decision = StratificationDecision.objects.create(
+            student=profile.user,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            suggested_layer="",
+            decision_kind=StratificationDecision.DecisionKind.SUPPORT,
+            support_priority=StratificationDecision.SupportPriority.HIGH,
+            support_suggestion="补充支架。",
+            rule_version="support-adjust-test-v2",
+        )
+
+        response = self.client.post(
+            f"/api/v1/teacher/analytics/stratification/{decision.id}/review/",
+            {"action": "adjust", "layer": "B"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        decision.refresh_from_db()
+        self.assertEqual(decision.status, StratificationDecision.Status.PENDING)
+
+    def test_bulk_review_accepts_support_and_content_band_together(self):
+        support = self._support_decision(self.profiles[0], "mixed-support")
+        content_band = StratificationDecision.objects.create(
+            student=self.profiles[1].user,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            previous_layer="A",
+            suggested_layer="B",
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+            policy_version="criterion-test-v1",
+            rule_version="content-bulk-mixed",
+        )
+
+        response = self.client.post(
+            "/api/v1/teacher/analytics/stratification/batch-review/",
+            {"ids": [support.id, content_band.id], "action": "accept"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["updated_count"], 2)
+        support.refresh_from_db()
+        content_band.refresh_from_db()
+        self.profiles[0].refresh_from_db()
+        self.assertEqual(support.status, StratificationDecision.Status.ACCEPTED)
+        self.assertEqual(content_band.status, StratificationDecision.Status.ACCEPTED)
+        self.assertEqual(self.profiles[0].current_layer, "A")
+        self.assertEqual(
+            StudentSubjectBand.objects.get(source_decision=content_band).band,
+            "B",
+        )
+
+    def test_bulk_review_rolls_back_when_one_decision_is_already_processed(self):
+        pending = self._support_decision(self.profiles[0], "atomic-pending")
+        processed = self._support_decision(
+            self.profiles[1],
+            "atomic-processed",
+            status=StratificationDecision.Status.ACCEPTED,
+        )
+
+        response = self.client.post(
+            "/api/v1/teacher/analytics/stratification/batch-review/",
+            {
+                "ids": [pending.id, processed.id],
+                "action": "defer",
+                "reason_code": "support_plan",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409, response.data)
+        pending.refresh_from_db()
+        processed.refresh_from_db()
+        self.assertEqual(pending.status, StratificationDecision.Status.PENDING)
+        self.assertEqual(processed.status, StratificationDecision.Status.ACCEPTED)
+
+    def test_bulk_review_requires_reason_before_writing_any_decision(self):
+        first = self._support_decision(self.profiles[0], "reason-first")
+        second = self._support_decision(self.profiles[1], "reason-second")
+
+        response = self.client.post(
+            "/api/v1/teacher/analytics/stratification/batch-review/",
+            {"ids": [first.id, second.id], "action": "keep"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.status, StratificationDecision.Status.PENDING)
+        self.assertEqual(second.status, StratificationDecision.Status.PENDING)
+
+    def test_teacher_manual_adjustment_versions_band_and_preserves_model_decision(self):
+        profile = self.profiles[0]
+        now = timezone.now()
+        model_decision = self._comparable_candidate(
+            profile,
+            0.86,
+            version="manual-v1",
+            window_end=now,
+        )
+        self._accept(model_decision)
+        original_band = StudentSubjectBand.objects.get(source_decision=model_decision)
+
+        response = self.client.post(
+            "/api/v1/teacher/analytics/stratification/manual-adjust/",
+            {
+                "student": profile.user_id,
+                "course": self.course.id,
+                "layer": "B",
+                "reason_code": "classroom_evidence",
+                "note": "课堂作品显示核心任务更适合当前阶段。",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        model_decision.refresh_from_db()
+        self.assertEqual(model_decision.suggested_layer, "A")
+        self.assertEqual(model_decision.status, StratificationDecision.Status.ACCEPTED)
+        original_band.refresh_from_db()
+        self.assertIsNotNone(original_band.valid_until)
+        current_band = StudentSubjectBand.objects.get(
+            student=profile.user,
+            subject=self.subject,
+            course=self.course,
+            valid_until__isnull=True,
+        )
+        self.assertEqual(current_band.band, "B")
+        self.assertEqual(current_band.source_decision.suggested_layer, "")
+        self.assertEqual(current_band.source_decision.teacher_selected_layer, "B")
+        self.assertTrue(current_band.source_decision.rule_version.startswith("teacher-manual-"))
+        self.assertTrue(
+            BandTransitionAudit.objects.filter(
+                decision=current_band.source_decision,
+                action="manual_adjust",
+                final_band="B",
+            ).exists()
+        )
+        profile.refresh_from_db()
+        self.assertEqual(profile.current_layer, "B")
 
     def test_comparable_mastery_creates_versioned_formal_band(self):
         profile = self.profiles[0]
@@ -390,6 +553,34 @@ class DynamicStratificationAndGroupingTests(TestCase):
                 for chunk in stable["chunks"]
             },
             set(original_groups),
+        )
+
+    def test_grouping_candidates_explain_local_optimizer_fallback(self):
+        readiness = {
+            profile.user_id: index / len(self.profiles)
+            for index, profile in enumerate(self.profiles, start=1)
+        }
+        with (
+            patch("courses.grouping._candidate_readiness", return_value=readiness),
+            patch(
+                "courses.grouping._cp_sat_chunks",
+                return_value=([], "ortools_unavailable"),
+            ),
+        ):
+            candidates = build_grouping_candidates(
+                session=self.session,
+                profiles=self.profiles,
+                group_size=3,
+                strategy=ClassroomGroupCollaboration.GroupingStrategy.AI_LAYER,
+                seed=20260721,
+                plan_version=1,
+            )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["key"], "random")
+        self.assertEqual(
+            candidates[0]["metadata"]["fallback_reason"],
+            "ortools_unavailable",
         )
 
     def test_content_band_change_requires_cooldown_and_consecutive_evidence(self):

@@ -1,93 +1,99 @@
 # STRATA数智教学系统
 
-STRATA 是面向中学课堂的过程性评价与分层教学平台。系统采用学校局域网私有化部署，正式业务由 Vue 3 前端和 Django ASGI 后端承载，支持课程备课、课堂控制、过程数据采集、学科前测、测试题库、小组协作、AI 学习网页、实名课堂聊天和后续班级模型训练。
+STRATA 2.0 是一套面向中学课堂的教学平台。它把备课、课堂活动、学生作答、过程评价和课后查看放在同一个系统里，学校可以部署在自己的服务器和局域网中，不必把学生数据放到云端。
 
-核心业务不依赖云服务器或公网服务。ONLYOFFICE、DeepSeek 和模型训练均为可选增强能力，未启用时不影响普通教学、作答、评价和数据留存。
+平台仍在持续开发和试用。当前重点不是替代教师，而是让教师更方便地组织课堂，并把原本分散的学习过程记录下来，为后续教学调整提供依据。
 
-## 当前状态
+## 老师可以用它做什么
 
-当前为 2.0 重构开发版，已经从旧 PHP/MySQL 项目迁移到前后端分离架构。
+- 建立课程和课时，按教学过程依次加入课件、视频、资源、题目、任务和作品提交。
+- 在课堂中逐环节投放内容，学生只有在教师开始课堂并投放环节后才能进入。
+- 使用签到、随机点名、抢答、倒计时、课堂广播和实名文字聊天。
+- 开启小组合作，安排组员、协作文档和小组共享文件。每组共享空间默认 20MB，教师可以调整。
+- 建立个人题目，也可以使用学校共享题库组卷和安排测试。
+- 制定评价标准，在课堂收尾时按需要开放学生自评、小组互评和教师评价。
+- 查看学生作答、附件、测试、评价和近期学习情况。
+- 查看系统给出的教学关注建议和隐性分层建议。学生看不到内部层级，是否采用始终由教师决定。
+- 选填自己的 DeepSeek API，用于生成备课草稿、题目、评价内容和受控学习网页。
 
-已实现的主要模块：
+## 一节课的大致流程
 
-- 超级管理员：数据总览、学校管理、学校管理员管理。
-- 学校管理员：教师管理、学生管理、班级管理、任课关系、学科前测、共享题审核、共同题集合、跨校资源审核、学习数据检查和分析准备情况。
-- 教师：工作台、任教学生、课程与课时设计、评价标准、课堂教学、公告、反馈、教学资源中心、AI 接入、共享题库、测试管理和隐性分层建议。
-- 学生：首页、课程学习、教学资源中心、实时课堂、课堂作答、测试、公告、反馈和个人学习档案。
-- 课堂能力：签到、随机点名、抢答、倒计时、课堂广播、小组合作、星级评价、附件提交与批阅、AI 学习网页、实名文字聊天。
-- 课堂聊天：全班、师生私聊、小组三类范围，本地不良言论判断，教师放行、警告、撤回和确认扣分。
-- 文档能力：ONLYOFFICE 在线预览与协作，未安装时保留本地预览和下载降级路线。
-- 数据能力：版本化学习事件、批量防重复接收、新旧记录兼容写入、历史记录转换、学生学习任务关联、评分版本、课堂积分流水、七项学习数据检查、评价冻结快照、共同题比较、日/7 日/30 日/单元学习情况汇总、固定分析时间点、多窗口学习指标、7 日未来结果和匿名冻结数据版本。
+1. 在“课程备课”中建立课程，并选择任教班级。
+2. 新建课时，按实际教学顺序加入资源、题目和任务。
+3. 在“课堂教学”中选择课程、课时和班级，新建本次课堂。
+4. 开始课堂后，在独立课堂控制台逐个投放学习环节。
+5. 根据教学需要开启签到、互动、小组合作、聊天或评价。
+6. 课堂结束后查看学生完成情况、作答结果和过程记录。
 
-当前开发校最近完整 7 日数据检查已通过，旧事件未转换比例为 0%。教师端已完成评价标准制定、课时绑定、课堂冻结和材料关联；题库已支持普通题、共同题、分层题、题目版本和测试版本比较；教师可查看日、7 日、30 日和单元学习情况，并审核学生不可见的分层建议。学校管理员可手动训练、查看模型指标与 ECharts 图表、发布候选和回滚历史版本。LONG-01、M00-M03、CatBoost/LightGBM 同折比较、跨校验证折和班级校准候选已使用两校模拟数据跑通；候选发布、失败保护、Ed25519 离线签名模型包和旧版本回滚也已完成。共同测试已支持准备第二版本、保留锚题关系和知识点映射。这些结果仅证明工程流程可运行，正式学校试用和真实数据效度验证尚未完成。
+课堂绑定的是“课时”，不是固定的第几周。系统不限制课程只能有 8 个课时；新建课堂时可以搜索课时名称或序号。开发库中出现的“第 n 周学习任务”只是模拟数据的课时名称，不是正式学校必须填写的周次字段。
 
-## 技术架构
+## 不同账户看到什么
 
-```text
-Vue 3 + TypeScript + Vite
-        |
-        | REST / WebSocket
-        v
-Django 5.2 LTS + DRF + Channels
-        |
-        +-- PostgreSQL（正式）/ SQLite（本机开发）
-        +-- Redis（WebSocket、Celery）
-        +-- Celery worker + Celery beat
-        +-- 本地文件存储，后续可切换 MinIO
-        +-- ONLYOFFICE Document Server（可选）
-        +-- 教师个人 DeepSeek API（可选）
-```
+### 超级管理员
 
-技术基线：
+用于维护多所学校的基础信息、学校管理员账户、数据采集、跨校汇总和运行状态。跨校数据只在明确导入学校数据包后处理，不要求成员校连接公共云服务器。
+
+### 学校管理员
+
+负责本校教师、学生、班级、任课关系和学科前测，也可以查看学校学习数据检查、模型训练记录和候选版本。学校管理员不代替教师给学生做课堂评价。
+
+### 教师
+
+负责课程、课时、课堂、题库、测试、评价标准、公告、资源和本人任教班级的学生。教师可以重置所教学生的课堂密码，也可以确认或调整系统给出的教学建议。
+
+### 学生
+
+学生端以学习和上课为主，不使用管理后台式界面。学生完成首次登录、选择班级和学科前测后，可以进入课程、课堂、测试、资源和个人学习档案。
+
+## 学习记录与分层
+
+平台会记录与教学有关的过程事实，例如：
+
+- 是否进入资源、阅读或观看到什么进度。
+- 题目是否作答、是否正确、用了多长时间。
+- 任务和附件是否按时提交，教师如何评价。
+- 签到、抢答、点名、小组协作和课堂互动情况。
+- 自评、互评、教师评价和测试结果。
+
+这些记录用于生成日、7 日、30 日和单元学习情况，也用于后续模型比较。系统不会因为一次答错、一次缺勤或一次教师扣分就自动改变学生层级。
+
+目前开发库使用模拟数据验证训练、发布和回滚流程。模拟结果只能说明程序可以运行，不能直接证明教学效果。正式使用前仍需经过真实学校试用、隐私审查和教学研究验证。
+
+## 私有化与离线运行
+
+- Django、Vue、ECharts 和系统业务资源全部本地提供，不使用 CDN 或公网字体。
+- SQLite 可用于单机开发；学校正式部署建议使用 PostgreSQL。
+- Redis 用于 WebSocket 和后台任务。
+- ONLYOFFICE 是可选组件。安装后可以预览和协作编辑 Word、PPT、Excel；没有安装时仍保留普通课堂、文件下载和其他学习功能。
+- DeepSeek 是教师自愿接入的可选能力。未填写 API Key 时，普通备课、上课、作答和评价不受影响。
+
+## 当前已经完成的主要页面
+
+- 超级管理员：总览、学校、学校管理员、数据采集、跨校分析、运行检查。
+- 学校管理员：首页、教师、学生、班级、任课关系、学科前测、内容审核、学习数据检查、分层分析与模型记录。
+- 教师：工作台、课程备课、课时设计、课堂教学、学生、题库、测试、评价标准、资源、公告、留言、AI 接入和分层建议。
+- 学生：首页、课程、实时课堂、资源、测试、公告、留言和学习档案。
+
+## 开发与运行
+
+### 基础版本
 
 - Python 3.12
 - Django 5.2 LTS
-- Django REST Framework
-- Django Channels + channels-redis
-- Celery + django-celery-beat
-- PostgreSQL 16/17
-- Vue 3 + TypeScript + Pinia + Vue Router
+- Vue 3 + TypeScript + Vite
+- PostgreSQL 16/17（正式部署）
+- Redis + Celery + Django Channels
 - ECharts
-- Uvicorn ASGI
-- CatBoost + LightGBM + scikit-learn
 
-所有前端依赖、图表、样式和业务资源均本地打包，不使用 CDN 或公网字体。
+### 第一次安装
 
-## 目录结构
-
-```text
-accounts/           用户与四类角色
-school/             学校、班级、学生档案、任课关系
-courses/            学科、课程、课时、课堂、小组、评价、AI 学习网页
-learning/           行为事件、前测、测试、作品、公告、反馈
-learning_analytics/ 学习记录检查、评价版本、隐性分层与后续分析服务
-realtime/           课堂聊天模型、过滤规则、WebSocket 消费者
-aiops/              教师 AI 配置、模型版本和训练任务底座
-api/                DRF 接口、业务服务、序列化和测试
-frontend/           Vue 3 正式前端源码
-static/frontend/    Vue 生产构建产物
-scripts/            本机、局域网、离线安装和任务进程脚本
-docs/               架构、业务、API、部署和设计文档
-storage/            本地数据库、媒体、模型和运行数据，不提交 Git
-```
-
-## 快速启动
-
-### 1. 安装依赖
-
-已有虚拟环境时直接使用 `.venv`。新环境或离线学校服务器执行：
+已有离线依赖包时：
 
 ```powershell
 .\scripts\install_offline.ps1
 ```
 
-联网开发机重新准备离线 wheel 包：
-
-```powershell
-.\scripts\make_wheelhouse.ps1
-```
-
-### 2. 初始化数据库
+初始化数据库：
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py migrate
@@ -95,13 +101,9 @@ storage/            本地数据库、媒体、模型和运行数据，不提交
 .\.venv\Scripts\python.exe manage.py sync_analysis_definitions
 ```
 
-本机开发默认使用 `storage/dev.sqlite3`。正式学校部署应切换 PostgreSQL：
+### 构建前端
 
-```powershell
-.\scripts\switch_to_postgres.ps1
-```
-
-### 3. 构建前端
+开发机修改 Vue 源码后执行：
 
 ```powershell
 cd frontend
@@ -110,11 +112,11 @@ npm.cmd run build
 cd ..
 ```
 
-构建产物写入 `static/frontend/`，Django 直接提供正式 Vue 页面。
+构建结果写入 `static/frontend/`。已经包含构建结果的学校安装包不需要在每台学习电脑上安装 Node.js。
 
-### 4. 启动 ASGI 服务
+### 启动系统
 
-本机：
+本机使用：
 
 ```powershell
 .\scripts\run_dev.ps1 -Port 8010
@@ -132,15 +134,6 @@ cd ..
 .\scripts\start_lan_background.ps1 -Port 8010
 ```
 
-也可以通过环境变量指定端口：
-
-```powershell
-$env:STRATA_PORT = "8010"
-.\scripts\run_asgi.ps1
-```
-
-课堂聊天使用 WebSocket，必须通过 Uvicorn/ASGI 启动，不能使用普通 WSGI 服务代替。
-
 访问地址：
 
 ```text
@@ -148,76 +141,28 @@ http://127.0.0.1:8010
 http://<学校服务器局域网IP>:8010
 ```
 
-健康检查：
+课堂聊天使用 WebSocket，正式运行应使用项目提供的 ASGI 启动脚本。
 
-```text
-http://127.0.0.1:8010/api/health/
+### PostgreSQL 与后台任务
+
+切换 PostgreSQL：
+
+```powershell
+.\scripts\switch_to_postgres.ps1
 ```
 
-## 环境配置
-
-复制 `.env.example` 为 `.env` 后修改。不要把真实密钥、数据库密码或教师 API Key 提交到 Git。
-
-本机单进程开发可以使用：
-
-```env
-DATABASE_ENGINE=sqlite
-CHANNEL_LAYER_BACKEND=memory
-```
-
-学校正式部署至少应设置：
-
-```env
-DJANGO_DEBUG=false
-DJANGO_SECRET_KEY=<随机长密钥>
-LEARNING_EVENT_QUARANTINE_KEY=<Fernet 密钥>
-LEARNING_EVENT_QUARANTINE_RETENTION_DAYS=7
-LEARNING_EVENT_WRITE_MODE=dual_required
-DATABASE_ENGINE=postgresql
-DATABASE_NAME=xlzxedu
-DATABASE_HOST=127.0.0.1
-DATABASE_PORT=5432
-DATABASE_USER=xlzxedu
-DATABASE_PASSWORD=<数据库密码>
-CHANNEL_LAYER_BACKEND=redis
-REDIS_URL=redis://127.0.0.1:6379/0
-```
-
-生产环境还需要配置局域网域名或服务器 IP、HTTPS、Cookie 安全选项、备份目录和 Redis 访问控制。
-
-## 后台任务
-
-Celery worker：
+启动 Celery：
 
 ```powershell
 .\scripts\run_celery_worker.ps1
-```
-
-Celery beat：
-
-```powershell
 .\scripts\run_celery_beat.ps1
 ```
 
-Celery 当前用于每日 01:30 学习数据检查、02:30 学习情况汇总、02:50 分析时间点/未来结果更新和 03:10 的 LONG-01、MODEL-01、MODEL-02 与 MODEL-03 更新。每个学校和学科只处理最新冻结数据版本；正式夜间任务排除模拟批次，候选结果必须由教师确认。
+后台任务负责学习记录检查、学习情况汇总和夜间模型候选更新。候选结果仍需教师确认，不会自动改变学生安排。
 
-升级或夜间检查可核对新旧学习记录：
+## 模拟数据说明
 
-```powershell
-.\.venv\Scripts\python.exe manage.py reconcile_learning_event_writes --check
-```
-
-学校管理员数据检查页面：
-
-```text
-http://127.0.0.1:8010/app/school-admin/data-quality
-```
-
-检查指标、判断标准和下一阶段条件见 [学习数据检查](docs/data_quality_pipeline.md)。
-
-## 模拟数据
-
-平台无真实纵向样本时，可以在独立模拟学校中生成可重复数据，用于验证评价、题目和学习情况汇总工程，不进入正式运营统计：
+没有真实纵向数据时，可以生成可清理的模拟数据检查完整流程：
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py generate_synthetic_learning_data `
@@ -225,41 +170,30 @@ http://127.0.0.1:8010/app/school-admin/data-quality
   --seed 20260719 `
   --classes 4 `
   --students-per-class 30 `
-  --weeks 8 `
+  --weeks 12 `
   --end-date 2026-07-18
 ```
 
-先加 `--dry-run` 可只查看规模估算。相同配置重复执行不会重复造数。完整隔离规则和研究使用边界见[模拟数据开发与研究说明](docs/synthetic_data_research_track.md)。
-
-也可以使用 `--mode school_overlay --school-code <现有学校代码> --teacher-username <教师账号>` 在现有学校中生成带 `SIM` 前缀的界面测试数据。完成后使用 `purge_synthetic_learning_data` 并同时提供 `run_id` 和完整 `dataset_key` 整批清理；正式检查报告不会读取这些测试事件。
+`--weeks` 支持 1 到 52，这只是模拟数据跨度，不是正式课程的课时上限。先加 `--dry-run` 可以只查看预计数据量。清理方式和隔离规则见[模拟数据说明](docs/synthetic_data_research_track.md)。
 
 ## ONLYOFFICE
 
-ONLYOFFICE 是可选组件，用于 Word、PPT、Excel 的网页预览、编辑和小组协作。配置项：
+环境配置示例：
 
 ```env
 ONLYOFFICE_DOCUMENT_SERVER_URL=http://127.0.0.1
 ONLYOFFICE_JWT_SECRET=<与 Document Server 一致的密钥>
 ```
 
-详细检测、JWT 和降级方案见 [ONLYOFFICE 集成文档](docs/onlyoffice_integration.md)。
+学校服务器地址、端口或密钥变化后，需要重新运行检测。详细说明见[ONLYOFFICE 集成文档](docs/onlyoffice_integration.md)。
 
-## AI 使用边界
-
-- 教师可以配置自己的 DeepSeek API，用于备课、生成题目、评价项和受控学习网页。
-- AI 输出先作为教师可修改草稿，不直接发布给学生。
-- 学生聊天内容默认只在学校本地处理，不发送给外部 AI。
-- AI 学习网页运行在受控 iframe 中，表单回答通过平台接口采集。
-- 学生分层、扣分和模型上线必须保留教师确认，不由模型自动决定。
-
-## 验证命令
+## 提交前检查
 
 后端：
 
 ```powershell
 .\.venv\Scripts\python.exe manage.py check
 .\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
-.\.venv\Scripts\python.exe manage.py test api.tests
 ```
 
 前端：
@@ -269,43 +203,51 @@ cd frontend
 npm.cmd run build
 ```
 
-提交前还应执行：
+代码格式：
 
 ```powershell
 git diff --check
 ```
 
-## 文档
+## 目录说明
 
-完整文档导航见 [docs/README.md](docs/README.md)。重点入口：
+```text
+accounts/           登录账户与权限
+school/             学校、班级、学生档案和任课关系
+courses/            学科、课程、课时、课堂、小组、评价和学习网页
+learning/           学习记录、前测、测试、作品、公告和留言
+learning_analytics/ 学习情况汇总、数据检查、分层与模型服务
+realtime/           课堂聊天、过滤规则和 WebSocket
+aiops/              教师 AI 配置、模型版本和训练任务
+api/                前后端接口
+frontend/           Vue 正式前端源码
+static/frontend/    Vue 构建结果
+scripts/            安装、启动和维护脚本
+docs/               架构、业务、部署和研究设计文档
+storage/            本地数据库、媒体、模型和运行数据
+```
 
-- [前端架构](docs/frontend_architecture.md)
-- [API 契约](docs/api_contract.md)
-- [数据模型](docs/data_model.md)
+## 使用边界
+
+- 学校数据、数据库、媒体文件、模型文件、日志和备份包不提交到 Git。
+- 超级管理员和学校管理员必须使用高强度密码。
+- 学生可以使用便于课堂登录的初始密码，并在首次使用流程中修改。
+- 学校、班级和账户删除前必须先停用或归档。
+- 学生不能看到内部层级、风险标签、模型置信度和教师干预记录。
+- AI 生成的题目、评价和学习网页必须经过教师确认后才能发布。
+
+## 进一步文档
+
+完整索引见 [docs/README.md](docs/README.md)。常用入口：
+
 - [私有化部署](docs/private_deployment.md)
-- [教师模块](docs/teacher_module_design.md)
-- [学生模块](docs/student_module_design.md)
-- [课时与课堂重构](docs/teacher_lesson_classroom_redesign.md)
+- [教师端设计](docs/teacher_module_design.md)
+- [学生端设计](docs/student_module_design.md)
+- [课时与课堂设计](docs/teacher_lesson_classroom_redesign.md)
 - [测试与共享题库](docs/assessment_module_design.md)
 - [课堂实名聊天](docs/classroom_chat_design.md)
 - [教学资源中心](docs/resource_center_design.md)
-- [AI 隐性动态分层设计报告](docs/student_behavior_ai_stratification_design.md)
-- [学生学习分析与分层教学开发计划](docs/student_behavior_ai_stratification_development_roadmap.md)
-- [学习指标、未来结果与数据版本设计](docs/feature_outcome_dataset_design.md)
-- [统计验证与模型比较](docs/model_validation_design.md)
-- [学生评价、积分与奖章设计](docs/student_evaluation_incentive_design.md)
-- [模型发布、校验与回滚](docs/model_release_operations.md)
-- [共同测试第二版本准备](docs/common_test_v2_preparation.md)
-- [正式学校试用方案](docs/school_pilot_protocol.md)
-- [伦理与隐私检查表](docs/ethics_privacy_checklist.md)
-- [教师试用培训](docs/teacher_training_guide.md)
-- [研究预注册模板](docs/research_preregistration_template.md)
-
-## 安全原则
-
-- 角色只保留超级管理员、学校管理员、教师和学生。
-- 管理员和超级管理员必须使用高强度密码；学生可使用便于课堂使用的低强度初始密码，并在首次使用流程中修改。
-- 账号、班级和学校删除前必须先停用或归档。
-- 所有接口必须在服务端校验学校、班级、任课关系和数据所有权。
-- 学生不能看到内部风险标签、模型置信度或教师干预记录。
-- `.env`、数据库、媒体文件、模型产物、日志和学校备份包不得提交 Git。
+- [学习数据检查](docs/data_quality_pipeline.md)
+- [动态分层设计报告](docs/student_behavior_ai_stratification_design.md)
+- [模型发布与回滚](docs/model_release_operations.md)
+- [学校试用方案](docs/school_pilot_protocol.md)

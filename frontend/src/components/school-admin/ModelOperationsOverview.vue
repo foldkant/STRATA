@@ -50,6 +50,30 @@ const calibrationRun = computed<ClassCalibrationRun | null>(() =>
   props.validation.calibration_runs.find((run) => run.dataset_id === selectedDatasetId.value) || null
 )
 
+const activeRelease = computed(() => {
+  const subjectId = selectedDataset.value?.subject.id
+  if (!subjectId) return null
+  return props.validation.releases.find(
+    (release) => release.subject.id === subjectId && release.status === 'active'
+  ) || null
+})
+
+const activeCalibrationRun = computed<ClassCalibrationRun | null>(() => {
+  const release = activeRelease.value
+  if (!release) return null
+  return props.validation.calibration_runs.find(
+    (run) => run.id === release.calibration_run_id
+  ) || null
+})
+
+const activeComparisonRun = computed(() => {
+  const run = activeCalibrationRun.value
+  if (!run) return null
+  return props.validation.comparison_runs.find(
+    (comparison) => comparison.id === run.comparison_run_id
+  ) || null
+})
+
 const bestModelKey = computed(() => {
   const modelCardValue = comparisonRun.value?.model_card.best_advanced_model
   return typeof modelCardValue === 'string'
@@ -94,7 +118,9 @@ const trainingState = computed(() => {
   const run = calibrationRun.value
   if (!run) return { label: '等待训练', tone: 'info' }
   if (run.release?.status === 'active') return { label: '当前模型已发布', tone: 'success' }
-  if (run.status === 'candidate') return { label: '候选模型待发布', tone: 'warning' }
+  if (run.release?.status === 'superseded') return { label: '该训练版本已被替代', tone: 'info' }
+  if (run.release?.status === 'rolled_back') return { label: '该训练版本已停用', tone: 'info' }
+  if (run.status === 'candidate') return { label: '本次候选待发布', tone: 'warning' }
   if (run.status === 'blocked') return { label: '训练检查未通过', tone: 'warning' }
   if (run.status === 'failed') return { label: '训练失败', tone: 'error' }
   return { label: run.status_label, tone: 'info' }
@@ -131,6 +157,14 @@ function percent(value: number | null | undefined) {
   return value === null || value === undefined || !Number.isFinite(Number(value))
     ? '-'
     : `${(Number(value) * 100).toFixed(1)}%`
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return '-'
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime())
+    ? '-'
+    : parsed.toLocaleString('zh-CN', { hour12: false })
 }
 
 function chartToolbox(name: string) {
@@ -231,15 +265,16 @@ const residualChart = computed<EChartsCoreOption>(() => {
       </div>
       <label class="model-dataset-select">
         <span>训练数据</span>
-        <select v-model.number="selectedDatasetId" :disabled="working || !readyDatasets.length">
+        <AppSelect v-model.number="selectedDatasetId" :disabled="working || !readyDatasets.length">
           <option v-if="!readyDatasets.length" :value="0">暂无可训练数据</option>
           <option v-for="dataset in readyDatasets" :key="dataset.id" :value="dataset.id">
             {{ dataset.subject.name }} · {{ dataset.outcome.label }} · {{ dataset.row_count }} 条
           </option>
-        </select>
+        </AppSelect>
       </label>
       <div class="model-run-action">
         <span class="analysis-status" :class="`analysis-tone-${trainingState.tone}`">{{ trainingState.label }}</span>
+        <small>{{ calibrationRun ? `最近完成：${formatDateTime(calibrationRun.finished_at || calibrationRun.created_at)}` : '尚无训练记录' }}</small>
         <button
           class="primary-button"
           type="button"
@@ -251,36 +286,36 @@ const residualChart = computed<EChartsCoreOption>(() => {
 
     <section class="model-current-strip" aria-label="当前模型状态">
       <article>
-        <span>使用模型</span>
-        <strong>{{ modelLabel(bestModelKey || '-') }}</strong>
-        <small>{{ comparisonRun?.comparison_version || '尚未训练' }}</small>
+        <span>当前使用模型</span>
+        <strong>{{ modelLabel(activeCalibrationRun?.model_key || '-') }}</strong>
+        <small>{{ activeComparisonRun ? `${activeComparisonRun.comparison_version} · ${formatDateTime(activeComparisonRun.finished_at || activeComparisonRun.created_at)}` : '尚未发布' }}</small>
       </article>
       <article>
-        <span>训练记录</span>
-        <strong>{{ comparisonRun?.row_count || 0 }}</strong>
+        <span>当前训练记录</span>
+        <strong>{{ activeComparisonRun?.row_count || 0 }}</strong>
         <small>冻结、已观察记录</small>
       </article>
       <article>
         <span>班级参数</span>
-        <strong>{{ Object.keys(calibrationRun?.class_parameters || {}).length }}</strong>
+        <strong>{{ Object.keys(activeCalibrationRun?.class_parameters || {}).length }}</strong>
         <small>按班级修正</small>
       </article>
       <article>
-        <span>教师建议</span>
-        <strong>{{ calibrationRun?.suggestion_count || 0 }}</strong>
+        <span>学习支持</span>
+        <strong>{{ activeCalibrationRun?.suggestion_count || 0 }}</strong>
         <small>发布后教师可见</small>
       </article>
       <article>
-        <span>发布版本</span>
-        <strong>{{ calibrationRun?.release ? `v${calibrationRun.release.release_version}` : '-' }}</strong>
-        <small>{{ calibrationRun?.release?.status_label || '尚未发布' }}</small>
+        <span>当前发布版本</span>
+        <strong>{{ activeRelease ? `v${activeRelease.release_version}` : '-' }}</strong>
+        <small>{{ activeRelease ? `${activeRelease.status_label} · ${formatDateTime(activeRelease.released_at)}` : '尚未发布' }}</small>
       </article>
     </section>
 
-    <section v-if="calibrationRun" class="model-release-band">
+    <section v-if="calibrationRun" class="model-release-band" :class="`model-release-band-${trainingState.tone}`">
       <div>
-        <strong>{{ calibrationRun.subject.name }} · {{ calibrationRun.status_label }}</strong>
-        <span>训练完成不会自动改变学生分层；发布后仅任课教师可见候选建议。</span>
+        <strong>{{ calibrationRun.subject.name }} · {{ trainingState.label }}</strong>
+        <span>训练完成：{{ formatDateTime(calibrationRun.finished_at || calibrationRun.created_at) }}<template v-if="calibrationRun.release"> · 发布时间：{{ formatDateTime(calibrationRun.release.released_at) }}</template></span>
       </div>
       <div class="model-release-band-actions">
         <button
@@ -304,13 +339,13 @@ const residualChart = computed<EChartsCoreOption>(() => {
       <section class="model-metric-heading">
         <div>
           <h2>模型指标</h2>
-          <p>{{ modelLabel(bestModelKey) }} · {{ validationLabel(headlineEvaluation?.validation_key || selectedValidation) }}</p>
+          <p>{{ modelLabel(bestModelKey) }} · {{ validationLabel(headlineEvaluation?.validation_key || selectedValidation) }} · {{ formatDateTime(comparisonRun.finished_at || comparisonRun.created_at) }}</p>
         </div>
         <label>
           <span>检查范围</span>
-          <select v-model="selectedValidation">
+          <AppSelect v-model="selectedValidation">
             <option v-for="item in validationOptions" :key="item.key" :value="item.key">{{ item.label }}</option>
-          </select>
+          </AppSelect>
         </label>
       </section>
 

@@ -29,6 +29,12 @@ from learning_analytics.model_models import (
     ModelRelease,
     ModelReleaseAudit,
 )
+from learning_analytics.services.class_calibration import (
+    SUPPORT_POLICY_VERSION,
+    _support_policy,
+    _support_priority,
+    _support_suggestion,
+)
 from school.models import School
 
 
@@ -351,9 +357,81 @@ def _decision_scope(run: ClassCalibrationRun) -> Q:
     return scope
 
 
+def _restore_legacy_release_suggestions(*, run: ClassCalibrationRun) -> int:
+    """Recreate support suggestions retired by the content-band schema migration."""
+    if run.decision_purpose != ClassCalibrationRun.DecisionPurpose.SUPPORT:
+        return 0
+    if StratificationDecision.objects.filter(
+        calibration_run=run,
+        decision_kind=StratificationDecision.DecisionKind.SUPPORT,
+    ).exists():
+        return 0
+
+    created = 0
+    legacy_rows = StratificationDecision.objects.filter(
+        calibration_run=run,
+        decision_kind=StratificationDecision.DecisionKind.LEGACY,
+        rule_version__startswith="m03-",
+    ).order_by("id")
+    for legacy in legacy_rows.iterator():
+        summary = (
+            legacy.learning_summary
+            if isinstance(legacy.learning_summary, dict)
+            else {}
+        )
+        outcome_key = str(
+            summary.get("outcome_key")
+            or run.global_parameters.get("outcome_key")
+            or ""
+        )
+        support_policy = summary.get("support_policy")
+        if not isinstance(support_policy, dict) or not support_policy.get("kind"):
+            support_policy = _support_policy(outcome_key)
+        priority = str(summary.get("support_priority") or "").strip()
+        if priority not in StratificationDecision.SupportPriority.values:
+            score = summary.get("calibrated_prediction")
+            if isinstance(score, (int, float)) and support_policy.get("kind") != "unsupported":
+                priority = _support_priority(float(score), support_policy)
+        if priority not in StratificationDecision.SupportPriority.values:
+            continue
+        restored_summary = {
+            **summary,
+            "support_priority": priority,
+            "support_policy": support_policy,
+            "restored_from_legacy_decision_id": legacy.id,
+            "restored_for_release": True,
+        }
+        _, was_created = StratificationDecision.objects.get_or_create(
+            student=legacy.student,
+            course=legacy.course,
+            window_end=legacy.window_end,
+            rule_version=f"release-support-{run.id}-{legacy.id}"[:32],
+            defaults={
+                "class_group": legacy.class_group,
+                "subject": legacy.subject,
+                "previous_layer": legacy.previous_layer,
+                "suggested_layer": "",
+                "confidence": legacy.confidence,
+                "reasons": legacy.reasons,
+                "missing_data": legacy.missing_data,
+                "learning_summary": restored_summary,
+                "support_suggestion": _support_suggestion(priority),
+                "decision_kind": StratificationDecision.DecisionKind.SUPPORT,
+                "support_priority": priority,
+                "policy_version": SUPPORT_POLICY_VERSION,
+                "window_start": legacy.window_start,
+                "calibration_run": run,
+                "status": StratificationDecision.Status.PENDING,
+            },
+        )
+        created += int(was_created)
+    return created
+
+
 def _activate_release_suggestions(
     *, run: ClassCalibrationRun, note: str
 ) -> None:
+    _restore_legacy_release_suggestions(run=run)
     scope = _decision_scope(run)
     if not scope.children:
         return

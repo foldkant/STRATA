@@ -121,12 +121,12 @@ async function save() {
         <section class="evaluation-form-grid standard-basics">
           <label>
             <span>评价方案<b>*</b></span>
-            <select v-model="form.plan" :disabled="planLocked">
+            <AppSelect v-model="form.plan" :disabled="planLocked">
               <option value="" disabled>请选择评价方案</option>
               <option v-for="plan in plans" :key="plan.id" :value="plan.id">
                 {{ plan.course?.title || plan.subject.name }} · {{ plan.title }}
               </option>
-            </select>
+            </AppSelect>
             <small v-if="planLocked">已发布版本后不能更换评价方案。</small>
             <small v-if="errors.plan" class="field-error">{{ errors.plan[0] }}</small>
           </label>

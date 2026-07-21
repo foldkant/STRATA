@@ -35,9 +35,19 @@ urlpatterns = [
         name="teacher_stratification_overview_export",
     ),
     path(
+        "teacher/analytics/stratification/batch-review/",
+        teacher_views.bulk_review_stratification_suggestions,
+        name="teacher_stratification_bulk_review",
+    ),
+    path(
         "teacher/analytics/stratification/<int:pk>/review/",
         teacher_views.review_stratification_suggestion,
         name="teacher_stratification_review",
+    ),
+    path(
+        "teacher/analytics/stratification/manual-adjust/",
+        teacher_views.manually_adjust_stratification,
+        name="teacher_stratification_manual_adjust",
     ),
     path(
         "teacher/analytics/mastery/",

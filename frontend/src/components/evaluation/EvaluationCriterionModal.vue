@@ -129,9 +129,9 @@ function submit() {
           </label>
           <label>
             <span>评价方面<b>*</b></span>
-            <select v-model="form.dimension">
+            <AppSelect v-model="form.dimension">
               <option v-for="item in options.dimensions" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            </AppSelect>
           </label>
           <label class="span-2">
             <span>指标名称<b>*</b></span>
@@ -182,9 +182,9 @@ function submit() {
           <div v-for="(example, index) in form.scoring_examples" :key="index" class="criterion-example-row">
             <label>
               <span>星级<b>*</b></span>
-              <select v-model.number="example.level">
+              <AppSelect v-model.number="example.level">
                 <option v-for="level in [1, 2, 3, 4, 5]" :key="level" :value="level">{{ level }} 星</option>
-              </select>
+              </AppSelect>
             </label>
             <label>
               <span>示例名称<b>*</b></span>

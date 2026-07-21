@@ -5,6 +5,9 @@ import LoginView from '@/views/LoginView.vue'
 const SuperAdminDashboard = () => import('@/views/super-admin/DashboardView.vue')
 const SchoolsView = () => import('@/views/super-admin/SchoolsView.vue')
 const SchoolAdminsView = () => import('@/views/super-admin/SchoolAdminsView.vue')
+const SuperAdminCollectionView = () => import('@/views/super-admin/CollectionView.vue')
+const SuperAdminAnalysisView = () => import('@/views/super-admin/AnalysisView.vue')
+const SuperAdminHealthView = () => import('@/views/super-admin/HealthView.vue')
 const SchoolAdminDashboard = () => import('@/views/school-admin/DashboardView.vue')
 const TeachersView = () => import('@/views/school-admin/TeachersView.vue')
 const StudentsView = () => import('@/views/school-admin/StudentsView.vue')
@@ -55,9 +58,9 @@ const routes: RouteRecordRaw[] = [
   { path: '/super-admin', component: SuperAdminDashboard, meta: { role: 'super_admin' } },
   { path: '/super-admin/schools', component: SchoolsView, meta: { role: 'super_admin' } },
   { path: '/super-admin/school-admins', component: SchoolAdminsView, meta: { role: 'super_admin' } },
-  { path: '/super-admin/collection', component: PlaceholderView, meta: { role: 'super_admin', title: '跨校数据采集' } },
-  { path: '/super-admin/analysis', component: PlaceholderView, meta: { role: 'super_admin', title: '跨校分析' } },
-  { path: '/super-admin/health', component: PlaceholderView, meta: { role: 'super_admin', title: '系统健康' } },
+  { path: '/super-admin/collection', component: SuperAdminCollectionView, meta: { role: 'super_admin' } },
+  { path: '/super-admin/analysis', component: SuperAdminAnalysisView, meta: { role: 'super_admin' } },
+  { path: '/super-admin/health', component: SuperAdminHealthView, meta: { role: 'super_admin' } },
   { path: '/school-admin', component: SchoolAdminDashboard, meta: { role: 'school_admin' } },
   { path: '/school-admin/teachers', component: TeachersView, meta: { role: 'school_admin' } },
   { path: '/school-admin/students', component: StudentsView, meta: { role: 'school_admin' } },

@@ -70,12 +70,17 @@ from learning.models import (
     PretestPaper,
     PretestQuestion,
     PretestSubmission,
+    QuestionBankItem,
     StratificationDecision,
     StudentWorkAttachment,
     TestAssessment,
     TestAttempt,
 )
 from learning.services.bands import resolve_student_band
+from learning.services.stratification_visibility import (
+    visible_published_decisions,
+    visible_teacher_decisions,
+)
 from learning_analytics.services.classroom_events import (
     ClassroomEventError,
     classroom_question,
@@ -467,6 +472,21 @@ def super_admin_dashboard(request):
         ).order_by("-student_count", "name")[:10]
     )
 
+    pending_imports = ImportBatch.objects.filter(
+        status=ImportBatch.Status.UPLOADED
+    ).count()
+    failed_imports = ImportBatch.objects.filter(
+        status=ImportBatch.Status.FAILED
+    ).count()
+    failed_training_jobs = TrainingJob.objects.filter(
+        status=TrainingJob.Status.FAILED
+    ).count()
+    pending_decisions = visible_published_decisions(
+        StratificationDecision.objects.filter(class_group__school__is_synthetic=False)
+    ).filter(
+        status=StratificationDecision.Status.PENDING,
+        decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+    ).count()
     data = {
         "metrics": [
             {
@@ -505,20 +525,40 @@ def super_admin_dashboard(request):
             },
         ],
         "status": {
-            "pending_imports": ImportBatch.objects.filter(
-                status=ImportBatch.Status.UPLOADED
-            ).count(),
-            "failed_imports": ImportBatch.objects.filter(
-                status=ImportBatch.Status.FAILED
-            ).count(),
+            "pending_imports": pending_imports,
+            "failed_imports": failed_imports,
             "model_versions": ModelVersion.objects.count(),
             "training_jobs_7d": TrainingJob.objects.filter(
                 created_at__gte=timezone.now() - timedelta(days=7)
             ).count(),
-            "pending_decisions": StratificationDecision.objects.filter(
-                status=StratificationDecision.Status.PENDING
-            ).count(),
+            "pending_decisions": pending_decisions,
         },
+        "status_rows": [
+            {
+                "label": "待校验采集包",
+                "count": pending_imports,
+                "level": "warn" if pending_imports else "ok",
+                "path": "/super-admin/collection?status=uploaded",
+            },
+            {
+                "label": "采集校验失败",
+                "count": failed_imports,
+                "level": "failed" if failed_imports else "ok",
+                "path": "/super-admin/collection?status=failed",
+            },
+            {
+                "label": "训练失败",
+                "count": failed_training_jobs,
+                "level": "failed" if failed_training_jobs else "ok",
+                "path": "/super-admin/health",
+            },
+            {
+                "label": "教师待确认层级",
+                "count": pending_decisions,
+                "level": "warn" if pending_decisions else "ok",
+                "path": "/super-admin/analysis",
+            },
+        ],
         "charts": {
             "school_status": _choice_counts(
                 operational_schools, "status", School.Status.choices
@@ -784,9 +824,10 @@ def school_admin_dashboard(request):
     students = StudentProfile.objects.filter(user__school=school)
     events = LearningEvent.objects.filter(class_group__school=school)
     training_jobs = TrainingJob.objects.filter(class_group__school=school)
-    decisions = StratificationDecision.objects.filter(class_group__school=school)
+    decisions = visible_published_decisions(
+        StratificationDecision.objects.filter(class_group__school=school)
+    )
     today = timezone.localdate()
-    inactive_accounts = users.filter(is_active=False).count()
     first_login_accounts = users.filter(is_first_login=True, is_active=True).count()
     pending_onboarding = StudentProfile.objects.filter(
         user__school=school, is_first_use=True, user__is_active=True
@@ -801,9 +842,23 @@ def school_admin_dashboard(request):
         )
         .count()
     )
+    students_without_class = students.filter(
+        user__is_active=True, class_group__isnull=True
+    ).count()
+    pending_resource_reviews = Resource.objects.filter(
+        owner__school=school,
+        visibility=Resource.Visibility.EXTERNAL,
+        publish_status=Resource.PublishStatus.PENDING,
+    ).count()
+    pending_question_reviews = QuestionBankItem.objects.filter(
+        school=school,
+        library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+        status=QuestionBankItem.Status.PENDING_REVIEW,
+    ).count()
     failed_training = training_jobs.filter(status=TrainingJob.Status.FAILED).count()
     pending_decisions = decisions.filter(
-        status=StratificationDecision.Status.PENDING
+        status=StratificationDecision.Status.PENDING,
+        decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
     ).count()
     failed_exports = ExportBatch.objects.filter(
         school=school, status=ExportBatch.Status.FAILED
@@ -821,6 +876,9 @@ def school_admin_dashboard(request):
     )
     last_7d_events = events.filter(occurred_at__gte=timezone.now() - timedelta(days=7))
     active_students = students.filter(user__is_active=True)
+    active_student_count_7d = last_7d_events.filter(actor__role="student").values(
+        "actor_id"
+    ).distinct().count()
     class_activity_rows = list(
         classes.annotate(
             event_count=Count(
@@ -854,15 +912,9 @@ def school_admin_dashboard(request):
                 "sub": "学习过程事件",
             },
             {
-                "label": "待处理",
-                "value": inactive_accounts
-                + first_login_accounts
-                + pending_onboarding
-                + pending_pretest
-                + failed_training
-                + pending_decisions
-                + failed_exports,
-                "sub": "账号、前测、训练和导出",
+                "label": "近 7 天活跃学生",
+                "value": active_student_count_7d,
+                "sub": "产生过学习行为",
             },
         ],
         "login_series": _day_series(
@@ -919,6 +971,23 @@ def school_admin_dashboard(request):
                 "status",
                 PretestPaper.Status.choices,
             ),
+            "pretest_completion": [
+                {
+                    "label": "已完成首次前测",
+                    "value": "completed",
+                    "count": active_students.filter(
+                        onboarding_status__in=[
+                            StudentProfile.OnboardingStatus.PRETEST_COMPLETED,
+                            StudentProfile.OnboardingStatus.ACTIVE,
+                        ]
+                    ).count(),
+                },
+                {
+                    "label": "尚未完成",
+                    "value": "pending",
+                    "count": pending_pretest,
+                },
+            ],
             "training_status": _choice_counts(
                 training_jobs, "status", TrainingJob.Status.choices
             ),
@@ -948,39 +1017,60 @@ def school_admin_dashboard(request):
         ],
         "status_rows": [
             {
-                "label": "停用账号",
-                "count": inactive_accounts,
-                "level": "warn" if inactive_accounts else "ok",
-            },
-            {
                 "label": "首次登录未改密",
                 "count": first_login_accounts,
                 "level": "warn" if first_login_accounts else "ok",
+                "detail": "启用账号尚未完成首次改密",
+                "path": "/school-admin/teachers",
             },
             {
-                "label": "新生首次使用",
+                "label": "新生入门未完成",
                 "count": pending_onboarding,
                 "level": "warn" if pending_onboarding else "ok",
+                "detail": "仍处于首次使用流程",
+                "path": "/school-admin/students",
             },
             {
-                "label": "未完成前测",
-                "count": pending_pretest,
-                "level": "warn" if pending_pretest else "ok",
+                "label": "未分班学生",
+                "count": students_without_class,
+                "level": "warn" if students_without_class else "ok",
+                "detail": "启用学生尚未匹配班级",
+                "path": "/school-admin/students",
+            },
+            {
+                "label": "待审核资源",
+                "count": pending_resource_reviews,
+                "level": "warn" if pending_resource_reviews else "ok",
+                "detail": "教师申请跨校共享的资源",
+                "path": "/school-admin/resource-reviews",
+            },
+            {
+                "label": "待审核题目",
+                "count": pending_question_reviews,
+                "level": "warn" if pending_question_reviews else "ok",
+                "detail": "教师提交到校内共享题库",
+                "path": "/school-admin/question-reviews",
             },
             {
                 "label": "训练失败",
                 "count": failed_training,
                 "level": "failed" if failed_training else "ok",
+                "detail": "需要查看失败原因或重新运行",
+                "path": "/school-admin/models",
             },
             {
-                "label": "待确认分层",
+                "label": "教师待确认层级",
                 "count": pending_decisions,
                 "level": "warn" if pending_decisions else "ok",
+                "detail": "由任课教师确认，不由学校管理员代替处理",
+                "path": "/school-admin/models",
             },
             {
                 "label": "导出失败",
                 "count": failed_exports,
                 "level": "failed" if failed_exports else "ok",
+                "detail": "数据采集包或报表导出失败",
+                "path": "/school-admin/data-quality",
             },
         ],
     }
@@ -1958,7 +2048,10 @@ def teacher_dashboard(request):
         user__school=school, class_group_id__in=class_ids
     )
     events = LearningEvent.objects.filter(class_group_id__in=class_ids)
-    decisions = StratificationDecision.objects.filter(class_group_id__in=class_ids)
+    decisions = visible_teacher_decisions(
+        teacher=request.user,
+        class_ids=class_ids,
+    )
     courses = Course.objects.filter(teacher=request.user)
     resources = Resource.objects.filter(owner=request.user)
     training_jobs = TrainingJob.objects.filter(class_group_id__in=class_ids)
@@ -1978,7 +2071,12 @@ def teacher_dashboard(request):
     )
     active_students = students.filter(user__is_active=True)
     pending_decisions = decisions.filter(
-        status=StratificationDecision.Status.PENDING
+        status=StratificationDecision.Status.PENDING,
+        decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+    ).count()
+    pending_support = decisions.filter(
+        status=StratificationDecision.Status.PENDING,
+        decision_kind=StratificationDecision.DecisionKind.SUPPORT,
     ).count()
     first_login_students = active_students.filter(user__is_first_login=True).count()
     pending_pretest = active_students.exclude(
@@ -2001,7 +2099,11 @@ def teacher_dashboard(request):
                 "value": events.filter(occurred_at__date=today).count(),
                 "sub": "任教班级内",
             },
-            {"label": "待确认分层", "value": pending_decisions, "sub": "AI 分层建议"},
+            {
+                "label": "待确认分层",
+                "value": pending_decisions,
+                "sub": "本人课程的层级建议",
+            },
         ],
         "charts": {
             "event_series": _day_series(events, "occurred_at", days=7),
@@ -2057,21 +2159,31 @@ def teacher_dashboard(request):
                 "label": "待确认分层",
                 "count": pending_decisions,
                 "level": "warn" if pending_decisions else "ok",
+                "path": "/teacher/stratification?view=pending",
+            },
+            {
+                "label": "待查看学习支持",
+                "count": pending_support,
+                "level": "warn" if pending_support else "ok",
+                "path": "/teacher/stratification?view=pending",
             },
             {
                 "label": "学生首次登录",
                 "count": first_login_students,
                 "level": "warn" if first_login_students else "ok",
+                "path": "/teacher/students",
             },
             {
                 "label": "未完成前测",
                 "count": pending_pretest,
                 "level": "warn" if pending_pretest else "ok",
+                "path": "/teacher/students",
             },
             {
                 "label": "停用学生账号",
                 "count": inactive_students,
                 "level": "failed" if inactive_students else "ok",
+                "path": "/teacher/students",
             },
         ],
     }
@@ -4212,7 +4324,7 @@ def _setup_classroom_group_collaboration(
     if session.status != ClassroomSession.Status.RUNNING:
         raise ServiceError("只有进行中的课堂可以开启小组合作。", status=409)
     group_size = _int_in_range(data.get("group_size"), 4, 2, 12)
-    storage_quota_mb = _int_in_range(data.get("storage_quota_mb"), 100, 10, 2048)
+    storage_quota_mb = _int_in_range(data.get("storage_quota_mb"), 20, 10, 2048)
     strategy = str(
         data.get("grouping_strategy")
         or ClassroomGroupCollaboration.GroupingStrategy.RANDOM

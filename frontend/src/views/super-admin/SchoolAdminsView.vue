@@ -26,17 +26,11 @@ import StatusBadge from '@/components/StatusBadge.vue'
 import { useBulkDisableDelete } from '@/composables/useBulkDisableDelete'
 import { usePageSelection } from '@/composables/usePageSelection'
 import type { FormField } from '@/types/forms'
+import { superAdminNav } from './nav'
 
 type FormModel = Record<string, string | number | boolean>
 
-const navItems = [
-  { label: '数据总览', path: '/super-admin' },
-  { label: '学校管理', path: '/super-admin/schools' },
-  { label: '学校管理员', path: '/super-admin/school-admins' },
-  { label: '跨校数据采集', path: '/super-admin/collection' },
-  { label: '跨校分析', path: '/super-admin/analysis' },
-  { label: '系统健康', path: '/super-admin/health' }
-]
+const navItems = superAdminNav('/super-admin/school-admins')
 
 const statusOptions = [
   { label: '全部状态', value: '' },
@@ -347,7 +341,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="学校管理员" eyebrow="超级管理员" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <ManagementPage
       v-model:query="query"
       v-model:status="status"

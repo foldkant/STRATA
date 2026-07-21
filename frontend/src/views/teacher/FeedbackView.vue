@@ -138,7 +138,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="留言反馈" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="noticeMessage" :message="noticeMessage" />
+    <NoticeLine v-if="noticeMessage" :message="noticeMessage" floating @dismiss="noticeMessage = ''" />
 
     <section class="metric-grid teacher-student-summary" aria-label="留言反馈概况">
       <article v-for="item in summary" :key="item.label" class="metric-card">
@@ -169,18 +169,18 @@ onMounted(async () => {
       <template #toolbar-actions>
         <label>
           <span>班级</span>
-          <select v-model="classFilter" @change="load(1)">
+          <AppSelect v-model="classFilter" @change="load(1)">
             <option value="">全部班级</option>
             <option v-for="item in classes" :key="item.id" :value="item.id">
               {{ item.grade ? `${item.grade} ` : '' }}{{ item.name }}
             </option>
-          </select>
+          </AppSelect>
         </label>
         <label>
           <span>分类</span>
-          <select v-model="categoryFilter" @change="load(1)">
+          <AppSelect v-model="categoryFilter" @change="load(1)">
             <option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
+          </AppSelect>
         </label>
       </template>
 

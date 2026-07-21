@@ -173,12 +173,12 @@ async function save() {
         <section v-if="step === 1" class="evaluation-form-grid">
           <label>
             <span>课程<b>*</b></span>
-            <select v-model="form.course" :disabled="courseLocked">
+            <AppSelect v-model="form.course" :disabled="courseLocked">
               <option value="" disabled>请选择课程</option>
               <option v-for="course in options.courses" :key="course.id" :value="course.id">
                 {{ course.subject.name }} · {{ course.title }}
               </option>
-            </select>
+            </AppSelect>
             <small v-if="courseLocked">已发布版本后，范围不能更换。</small>
             <small v-if="errors.course" class="field-error">{{ errors.course[0] }}</small>
           </label>

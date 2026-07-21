@@ -47,7 +47,7 @@ const quickLinks = [
   { label: '协作文档', path: '/teacher/documents', detail: '管理教案、课件、任务单和小组文档。' },
   { label: 'AI接入', path: '/teacher/ai', detail: '配置 DeepSeek Key，用于后续辅助备课和资源生成。' },
   { label: '查看学生账户', path: '/teacher/students', detail: '查询任教班级学生并重置课堂密码。' },
-  { label: '处理分层建议', path: '/teacher/stratification', detail: '查看 AI 建议并进行教师确认。' }
+  { label: '处理分层建议', path: '/teacher/stratification?view=pending', detail: '查看层级建议和学习支持提醒。' }
 ]
 </script>
 
@@ -85,13 +85,19 @@ const quickLinks = [
         <article class="panel">
           <div class="panel-heading">
             <h2>待处理</h2>
-            <p>面向本人任教班级的账号、前测与分层事项。</p>
+            <p>仅显示本人课程中需要处理的事项。</p>
           </div>
           <div class="status-stack">
-            <div v-for="row in data.todo_rows" :key="row.label" class="status-line" :class="row.level">
+            <RouterLink
+              v-for="row in data.todo_rows"
+              :key="row.label"
+              :to="row.path"
+              class="status-line status-line-link"
+              :class="row.level"
+            >
               <span>{{ row.label }}</span>
               <strong>{{ row.count }}</strong>
-            </div>
+            </RouterLink>
           </div>
         </article>
 

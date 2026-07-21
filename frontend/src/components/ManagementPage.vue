@@ -63,9 +63,9 @@ const emit = defineEmits<{
       </label>
       <label v-if="statusOptions?.length">
         <span>状态</span>
-        <select :value="status" @change="emit('update:status', ($event.target as HTMLSelectElement).value)">
+        <AppSelect :value="status" @change="emit('update:status', ($event.target as HTMLSelectElement).value)">
           <option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-        </select>
+        </AppSelect>
       </label>
       <button class="primary-button" type="submit">查询</button>
       <button class="secondary-button" type="button" @click="emit('reset')">重置</button>

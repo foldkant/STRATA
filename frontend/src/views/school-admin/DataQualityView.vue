@@ -223,7 +223,7 @@ onBeforeUnmount(clearPoll)
       </div>
     </section>
 
-    <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" />
+    <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" floating @dismiss="notice = ''" />
 
     <section v-if="loading" class="panel quality-loading" aria-live="polite">
       <strong>正在加载检查结果</strong>

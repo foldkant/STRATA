@@ -134,8 +134,8 @@ onMounted(loadPage)
 
 <template>
   <StudentShell title="首次使用" subtitle="完成基础设置后进入课程学习" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
-    <NoticeLine v-if="success" :message="success" tone="success" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
+    <NoticeLine v-if="success" :message="success" tone="success" floating @dismiss="success = ''" />
 
     <section v-if="loading || !data" class="student-panel">
       <p class="empty">正在加载首次使用流程</p>
@@ -178,10 +178,10 @@ onMounted(loadPage)
           </header>
           <label>
             <span>我的班级</span>
-            <select v-model="selectedClass">
+            <AppSelect v-model="selectedClass">
               <option value="">请选择班级</option>
               <option v-for="row in classes" :key="row.id" :value="String(row.id)">{{ classLabel(row) }}</option>
-            </select>
+            </AppSelect>
             <small v-if="fieldError('class_group')" class="field-error">{{ fieldError('class_group') }}</small>
           </label>
           <button class="student-primary-action" type="button" :disabled="savingClass" @click="submitClass">保存班级</button>

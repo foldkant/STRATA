@@ -137,7 +137,7 @@ onMounted(load)
 
 <template>
   <AppShell title="AI接入" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section v-if="loading" class="panel">
       <p class="empty">正在加载</p>
@@ -161,9 +161,9 @@ onMounted(load)
           <div class="ai-provider-fields">
             <label>
               <span>服务商</span>
-              <select v-model="form.provider">
+              <AppSelect v-model="form.provider">
                 <option value="deepseek">DeepSeek</option>
-              </select>
+              </AppSelect>
               <small v-if="errors.provider" class="field-error">{{ errors.provider[0] }}</small>
             </label>
 

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { ApiError } from '@/api/client'
 import { getSchoolAdminDashboard, type CountSlice, type SchoolAdminDashboard, type SeriesPoint } from '@/api/dashboards'
 import AppShell from '@/layouts/AppShell.vue'
 import EChartPanel from '@/components/EChartPanel.vue'
 import MetricGrid from '@/components/MetricGrid.vue'
+import NoticeLine from '@/components/NoticeLine.vue'
 import { barOption, lineOption, pieOption, stackedBarOption, total } from '@/utils/chartOptions'
 import { schoolAdminNav } from './nav'
 
@@ -12,6 +14,8 @@ type SchoolAdminCharts = NonNullable<SchoolAdminDashboard['charts']>
 const emptyRows: SeriesPoint[] = []
 const emptySlices: CountSlice[] = []
 const data = ref<SchoolAdminDashboard | null>(null)
+const loading = ref(false)
+const notice = ref('')
 const navItems = schoolAdminNav('/school-admin')
 
 const fallbackCharts = computed<Partial<SchoolAdminCharts>>(() => ({
@@ -29,16 +33,27 @@ const fallbackCharts = computed<Partial<SchoolAdminCharts>>(() => ({
   teacher_load: emptyRows,
   event_types: emptySlices,
   pretest_status: emptySlices,
+  pretest_completion: emptySlices,
   training_status: emptySlices,
   active_students_7d: emptyRows
 }))
 const charts = computed<Partial<SchoolAdminCharts>>(() => ({ ...fallbackCharts.value, ...(data.value?.charts || {}) }))
 const recentClasses = computed(() => data.value?.recent_classes || [])
 const statusRows = computed(() => data.value?.status_rows || [])
+const attentionRows = computed(() => statusRows.value.filter((row) => row.count > 0))
 
-onMounted(async () => {
-  data.value = await getSchoolAdminDashboard()
-})
+async function load() {
+  loading.value = true
+  try {
+    data.value = await getSchoolAdminDashboard()
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '管理首页加载失败。'
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
 
 const behaviorTrendOption = computed(() =>
   lineOption([
@@ -60,16 +75,27 @@ const classActivityOption = computed(() => barOption(charts.value.class_activity
 const eventTypeOption = computed(() => barOption(charts.value.event_types || emptySlices, true))
 const teacherLoadOption = computed(() => barOption(charts.value.teacher_load || emptyRows, true))
 const accountStatusOption = computed(() => pieOption(charts.value.account_status || emptySlices))
+const accountRoleOption = computed(() => pieOption(charts.value.account_roles || emptySlices))
+const pretestCompletionOption = computed(() => pieOption(charts.value.pretest_completion || emptySlices))
 const pretestOption = computed(() => pieOption(charts.value.pretest_status || emptySlices))
 const trainingOption = computed(() => pieOption(charts.value.training_status || emptySlices))
 </script>
 
 <template>
-  <AppShell title="管理首页" eyebrow="学校管理员" :nav-items="navItems">
-    <section v-if="!data" class="panel"><p class="empty">正在加载</p></section>
+  <AppShell title="管理首页" eyebrow="学校管理员" :nav-items="navItems" natural-scroll>
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
+    <header class="console-page-heading">
+      <div>
+        <h2>{{ data?.school.name || '学校运行概况' }}</h2>
+        <p>查看本校账号、班级、课程与近期学习活动。</p>
+      </div>
+      <button class="secondary-button" type="button" :disabled="loading" @click="load">{{ loading ? '更新中' : '更新数据' }}</button>
+    </header>
+    <section v-if="!data" class="panel"><p class="empty">{{ loading ? '正在加载' : '暂无数据' }}</p></section>
     <template v-else>
       <MetricGrid :metrics="data.metrics" />
 
+      <section class="dashboard-section-heading"><div><h2>学习运行</h2><p>近 7 天平台使用和学生入门进度。</p></div></section>
       <section class="chart-grid school-dashboard-hero-grid">
         <EChartPanel
           title="近 7 天学习趋势"
@@ -95,6 +121,7 @@ const trainingOption = computed(() => pieOption(charts.value.training_status || 
         />
       </section>
 
+      <section class="dashboard-section-heading"><div><h2>班级与任课</h2><p>班级规模、任课覆盖和近期学习活动。</p></div></section>
       <section class="chart-grid school-dashboard-work-grid">
         <EChartPanel
           title="班级规模"
@@ -112,30 +139,43 @@ const trainingOption = computed(() => pieOption(charts.value.training_status || 
         />
       </section>
 
-      <section class="chart-grid school-dashboard-grid">
-        <EChartPanel title="行为类型" :total="total(charts.event_types || emptySlices)" :option="eventTypeOption" />
-        <EChartPanel title="教师任课负载" :total="total(charts.teacher_load || emptyRows)" :option="teacherLoadOption" />
+      <section class="dashboard-section-heading"><div><h2>学生与账号</h2><p>账号启用、学生分层和首次前测完成情况。</p></div></section>
+      <section class="chart-grid school-dashboard-four-grid">
+        <EChartPanel title="账号角色" :total="total(charts.account_roles || emptySlices)" :option="accountRoleOption" />
+        <EChartPanel title="账号状态" :total="total(charts.account_status || emptySlices)" :option="accountStatusOption" />
         <EChartPanel title="学生分层" :total="total(charts.student_layers || emptySlices)" :option="studentLayerOption" />
+        <EChartPanel title="首次前测完成情况" :total="total(charts.pretest_completion || emptySlices)" :option="pretestCompletionOption" />
       </section>
 
-      <section class="chart-grid school-dashboard-grid">
-        <EChartPanel title="账号状态" :total="total(charts.account_status || emptySlices)" :option="accountStatusOption" />
-        <EChartPanel title="学科前测状态" :total="total(charts.pretest_status || emptySlices)" :option="pretestOption" />
+      <section class="dashboard-section-heading"><div><h2>内容与后台任务</h2><p>学习行为结构、任课负载、前测套卷和训练任务。</p></div></section>
+      <section class="chart-grid school-dashboard-four-grid">
+        <EChartPanel title="近 7 天行为类型" :total="total(charts.event_types || emptySlices)" :option="eventTypeOption" />
+        <EChartPanel title="教师任课负载" :total="total(charts.teacher_load || emptyRows)" :option="teacherLoadOption" />
+        <EChartPanel title="前测套卷状态" :total="total(charts.pretest_status || emptySlices)" :option="pretestOption" />
         <EChartPanel title="训练任务状态" :total="total(charts.training_status || emptySlices)" :option="trainingOption" />
       </section>
 
       <section class="screen-grid dashboard-bottom-grid">
         <article class="panel">
           <div class="panel-heading">
-            <h2>待处理</h2>
-            <p>{{ data.school.name }} 的账号、前测、训练与导出状态。</p>
+            <h2>管理提醒</h2>
+            <p>只显示需要跟进的事项，正常停用和归档不会计入。</p>
           </div>
           <div class="status-stack">
-            <div v-for="row in statusRows" :key="row.label" class="status-line" :class="row.level">
-              <span>{{ row.label }}</span>
+            <RouterLink
+              v-for="row in attentionRows"
+              :key="row.label"
+              class="status-line status-line-link"
+              :class="row.level"
+              :to="row.path"
+            >
+              <span><b>{{ row.label }}</b><small>{{ row.detail }}</small></span>
               <strong>{{ row.count }}</strong>
+            </RouterLink>
+            <div v-if="!attentionRows.length" class="dashboard-clear-state">
+              <strong>当前没有需要跟进的事项</strong>
+              <span>账号、审核、训练与导出状态正常。</span>
             </div>
-            <p v-if="!statusRows.length" class="empty">暂无待处理项</p>
           </div>
         </article>
         <article class="panel panel-large">

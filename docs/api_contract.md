@@ -64,7 +64,38 @@ API 前缀：
 - 学生通过直接 ID 提交未分配题目时返回 404；不能依靠前端隐藏控制权限。
 - 自动分组对学生统一显示“第 N 组”，聊天和 ONLYOFFICE 标题也使用中性组名。
 
-教师接口继续返回其任教班级所需的内容带和分组依据。未来教师分层接口必须接入 `SensitiveInferenceAccessLog`；`api/analytics/` 当前只建立独立路由包，尚未开放公共 analytics 路由。
+教师接口只返回其任教班级所需的内容带和分组依据；学生接口继续执行上述字段白名单。教师分层接口位于独立的 `api/analytics/` 路由包，并执行课程教师和任课班级双重校验。
+
+## 教师分层与手动调整
+
+```text
+GET  /api/v1/teacher/analytics/stratification/?class_group=&course=&status=
+GET  /api/v1/teacher/analytics/stratification/overview/?class_group=&course=
+POST /api/v1/teacher/analytics/stratification/batch-review/
+POST /api/v1/teacher/analytics/stratification/{id}/review/
+POST /api/v1/teacher/analytics/stratification/manual-adjust/
+```
+
+`review` 只处理仍为待确认的建议。学习支持建议只接受采用、保持或暂缓，不允许用 `adjust` 改变 A/B/C；正式内容层级建议才能采纳建议层级或调整建议层级。已处理记录再次提交返回 `409`。
+
+`batch-review` 用于教师批量处理待办建议，请求体如下：
+
+```json
+{
+  "ids": [101, 102],
+  "action": "accept|keep|defer",
+  "reason_code": "support_plan",
+  "note": "统一记录后续安排"
+}
+```
+
+批量接口与单条处理使用相同的教师课程、任教班级、已发布模型和待处理状态校验。单次最多 200 条；其中任意一条不存在、无权限、未发布、兼容历史或已处理，整批回滚且不写入任何结果。`accept` 对内容层级建议采用各自建议的 A/B/C，对学习支持建议只记录采用结果，不改变 A/B/C；`keep`、`defer` 必须填写结构化原因，原因选择“其他”时还必须填写 `note`。批量不允许人工指定 A/B/C，教师需要逐个调整时使用 `manual-adjust`，以保留每名学生的干预依据和审计记录。
+
+教师端“待处理建议”支持当前筛选结果的“全选”和“全不选”。选择状态跨分页保留，表头复选框只控制当前页；顶部全选控制当前筛选下的全部待处理建议，而不是仅当前 20 条。批量处理完成后重新加载列表，已处理记录从待办中移除。
+
+教师分层查询与教师首页共用可见范围：必须属于本人课程和任教班级；`m03-*` 模型候选只有关联发布状态为 `active` 时才返回。未发布候选、同班其他教师课程和兼容记录不返回。教师首页将正式 A/B/C 待办与学习支持待办分开计数。
+
+`manual-adjust` 请求体包括 `student`、`course`、`layer`、`reason_code` 和可选 `note`。教师必须实际任教该学生班级并拥有该课程。成功后关闭原 `StudentSubjectBand` 有效期，创建新的教师手动调整决策、层级有效期和变化审计；模型原建议与旧处理记录保持不变。
 
 ## 受保护文件访问
 
@@ -85,6 +116,27 @@ ONLYOFFICE 文档服务器无法使用浏览器 Session Cookie，因此资源附
 ## 认证
 
 使用 Django Session Cookie。
+
+## 超级管理员运行接口
+
+```text
+GET    /api/v1/super-admin/dashboard/
+GET    /api/v1/super-admin/collection/?q=&status=&page=
+POST   /api/v1/super-admin/collection/
+GET    /api/v1/super-admin/collection/{id}/
+DELETE /api/v1/super-admin/collection/{id}/
+GET    /api/v1/super-admin/collection/export/?q=&status=
+GET    /api/v1/super-admin/analysis/?include_test_data=1
+GET    /api/v1/super-admin/analysis/export/?include_test_data=1
+GET    /api/v1/super-admin/health/
+GET    /api/v1/super-admin/health/export/
+```
+
+数据采集包使用 `multipart/form-data` 的 `package_file` 字段上传，仅接受 ZIP，最大 1GB。服务端检查重复校验值、压缩包路径、文件数量、解压后大小、加密文件和根目录 `manifest.json`；清单至少包含 `school_code` 与 `system_version`。`validated` 表示基础校验通过，不代表采集内容已经汇入跨校分析库；`imported` 才表示已汇入，已汇入记录不能删除。
+
+跨校分析默认排除 `School.is_synthetic=True` 的测试学校，只有显式传入 `include_test_data=1` 才纳入，并在学校明细中返回 `is_test_data`。学校总量与生均行为、7 日活跃率、分层覆盖率同时返回，不能只按原始行为总数作学校质量排名。
+
+系统健康接口检查数据库连接和更新、Redis 端口、ONLYOFFICE 端口、媒体目录可写与剩余空间、Vue 构建文件、失败采集和失败/长时间运行训练。响应和 XLSX 不返回数据库密码、Redis 密码、JWT 或 API 密钥。
 
 ### 获取 CSRF
 
@@ -161,6 +213,7 @@ GET /api/v1/super-admin/dashboard/
 - 学习行为事件数。
 - 近期采集。
 - 近期日志。
+- “教师待确认层级”只统计正式学校中已经发布、尚未处理的 A/B/C 建议，不统计学习支持、未发布候选或测试学校数据。
 
 ### 学校列表
 
@@ -431,7 +484,8 @@ GET /api/v1/teacher/dashboard/
 - 我的课程数。
 - 今日课堂活动数。
 - 待批改任务数。
-- 待确认分层建议数。
+- 本人课程中已发布的待确认 A/B/C 层级建议数。
+- 已发布的待查看学习支持建议数。
 - 近 7 天任教班级学习事件趋势。
 - 任教班级活跃度对比。
 - 今日课堂列表。
@@ -658,7 +712,8 @@ POST /api/v1/student/classroom/{id}/activities/{activity_id}/response/
 
 规则：
 
-- 课堂场次必须选择教师自己的课程、该课程课时和该课程已绑定的任教班级。
+- 课堂场次必须选择教师自己的课程和该课程已绑定的任教班级；正式课时课堂应绑定该课程课时，临时课堂可以不指定课时。
+- 课时按课程内 `sort_order` 排列，不建立固定周次字段，也不限制为 8 个。课堂标题留空时优先生成“课时名称 - 班级”，未绑定课时时生成“课程名称 - 班级”。
 - 课堂状态为 `draft`、`running`、`finished`。
 - 只有 `draft` 未开始课堂可以删除。
 - 已结束课堂可以通过 `restart` 重新开始，重新开始会清空当前投放环节，学生端等待教师重新投放。
@@ -715,7 +770,7 @@ POST /api/v1/classroom/groups/{group_id}/office-callback/
   "group_size": 4,
   "grouping_strategy": "balanced_layer",
   "document_type": "docx",
-  "storage_quota_mb": 100,
+  "storage_quota_mb": 20,
   "allow_student_upload": true,
   "allow_onlyoffice_edit": true,
   "regenerate": false
@@ -728,9 +783,10 @@ POST /api/v1/classroom/groups/{group_id}/office-callback/
 - 教师只能为自己的课堂开启、关闭或重新分组。
 - `setup` 保留旧调用兼容；正式重新分组使用候选与确认接口，不删除已有文档、聊天、文件或成员历史。
 - 学生只有在课堂 `running`、小组合作 `open`、且自己属于该组时才能看到小组合作入口。
-- 候选工作流使用随机基线、任务准备度优先和合作稳定优先三个候选。教师可锁定学生、拖动或选择移动、调整角色、填写说明并确认。
+- 教师端分组方式显示为“日常随机、同进度练习、同伴互助、任务均衡、保持原组”，底层请求值继续使用 `random/same_layer/balanced_layer/ai_layer/stable_project`。自定义下拉菜单展开后，教师悬停或键盘聚焦任一选项时查看该选项用途；菜单绝对定位，同一行表单保持等高，不改变历史数据代码。
+- 候选工作流使用随机基线、任务准备度优先和合作稳定优先三个候选。教师可锁定学生、拖动或选择移动、调整角色、填写说明并确认；材料或计算条件不足而只能生成随机候选时，页面必须明确提示。
 - 锁定学生必须在当前班级且小组编号有效；三个候选都必须遵守锁定。重复确认同一候选幂等，改选其他候选返回 `409`。
-- `group_size` 范围为 2-12，`storage_quota_mb` 范围为 10-2048。
+- `group_size` 范围为 2-12，`storage_quota_mb` 单位为 MB，默认 20，范围为 10-2048。
 - 每组自动生成一份协作文档，类型为 `docx`、`pptx` 或 `xlsx`。
 - 有 ONLYOFFICE 时，同组学生打开同一个文档 `key` 协作编辑；教师可以打开任意小组文档。
 - 无 ONLYOFFICE 或服务不可用时，平台仍保留小组成员、文件上传、文件下载和课堂其他功能，只禁用在线协作编辑体验。
@@ -1677,6 +1733,12 @@ GET  /api/v1/school-admin/analytics/models/{id}/export/?include_test_data=1
 发布接口只接受当前学校、当前学科、相同测试标记且状态为 `candidate` 的班级校准运行。发布前后端均检查比较状态、阻塞清单、教师确认规则、模型文件路径和 SHA-256。成功返回 `release`；失败返回 `400/409`，当前 `active` 版本保持不变。
 
 `verify` 返回签名和文件校验结果；`rollback` 只允许回到同学校、同学科、同测试标记的历史版本，并在切换前重新验签。模型下载返回离线 ZIP，不返回学生逐行预测。每次发布、校验和回滚都产生不可修改 `ModelReleaseAudit`。
+
+发布或回滚会同步切换教师可处理的学习支持建议：当前版本的待处理建议启用，被替代版本的同类待处理建议暂缓。旧迁移曾将当前版本建议标为 `legacy` 时，系统依据原记录中的 `outcome_key`、`calibrated_prediction` 和支持规则重建新的 `support` 待办，原兼容记录保持不变；无法确定结果类型或优先级时不重建。该过程不生成 A/B/C 内容层级。
+
+教师查询和 `POST /api/v1/teacher/analytics/stratification/{id}/review/` 使用同一发布可见范围。未发布 MODEL-03 候选、其他教师课程和 `legacy` 记录均返回 `404`；发布后仍为待处理的 `support` 建议才可采用、保持或暂缓。
+
+模型查询返回 `created_at`、`finished_at`；发布记录返回 `released_at`、`deactivated_at` 和 `released_by`。学校管理员页面必须同时显示模型版本、训练开始/完成时间、发布时间和当前状态，不能只显示版本号。
 
 ## 共同测试版本
 

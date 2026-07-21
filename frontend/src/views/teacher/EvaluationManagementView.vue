@@ -182,7 +182,7 @@ onMounted(load)
 
 <template>
   <AppShell title="评价标准" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" />
+    <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" floating @dismiss="notice = ''" />
 
     <section class="evaluation-summary" aria-label="评价管理概况">
       <article v-for="item in summary" :key="item.label">

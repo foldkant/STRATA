@@ -471,23 +471,23 @@ onMounted(async () => {
 
 <template>
   <AppShell title="学生管理" eyebrow="学校管理员" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <div class="extra-filter">
       <label>
         <span>班级</span>
-        <select v-model="classId" @change="page = 1; load()">
+        <AppSelect v-model="classId" @change="page = 1; load()">
           <option value="">全部班级</option>
           <option v-for="item in classes" :key="item.id" :value="String(item.id)">
             {{ item.grade ? `${item.grade} ` : '' }}{{ item.name }}
           </option>
-        </select>
+        </AppSelect>
       </label>
       <label>
         <span>层级</span>
-        <select v-model="layer" @change="page = 1; load()">
+        <AppSelect v-model="layer" @change="page = 1; load()">
           <option v-for="item in layerOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-        </select>
+        </AppSelect>
       </label>
     </div>
 

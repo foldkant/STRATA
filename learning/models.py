@@ -166,6 +166,7 @@ class StratificationDecision(models.Model):
     window_end = models.DateTimeField(null=True, blank=True)
     rule_version = models.CharField(max_length=32, default="transparent-rules-v1")
     teacher_selected_layer = models.CharField(max_length=1, blank=True)
+    review_reason_code = models.CharField(max_length=32, blank=True)
     review_note = models.TextField(blank=True)
     model_version = models.ForeignKey(
         "aiops.ModelVersion", on_delete=models.SET_NULL, null=True, blank=True

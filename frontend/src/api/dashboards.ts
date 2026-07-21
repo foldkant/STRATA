@@ -31,6 +31,7 @@ export type SuperAdminDashboard = {
   }
   recent_imports: Array<Record<string, unknown>>
   recent_logs: Array<Record<string, unknown>>
+  status_rows: Array<{ label: string; count: number; level: string; path: string }>
 }
 
 export type SchoolAdminDashboard = {
@@ -51,13 +52,14 @@ export type SchoolAdminDashboard = {
     teacher_load: SeriesPoint[]
     event_types: CountSlice[]
     pretest_status: CountSlice[]
+    pretest_completion: CountSlice[]
     training_status: CountSlice[]
     login_series: SeriesPoint[]
     event_series: SeriesPoint[]
     active_students_7d: SeriesPoint[]
   }
   recent_classes: Array<Record<string, unknown>>
-  status_rows: Array<{ label: string; count: number; level: string }>
+  status_rows: Array<{ label: string; count: number; level: string; detail: string; path: string }>
 }
 
 export function getSuperAdminDashboard() {

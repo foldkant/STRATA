@@ -1207,7 +1207,7 @@ onMounted(loadLesson)
 
 <template>
   <AppShell title="课时设计" eyebrow="教师工作台" :nav-items="navItems" natural-scroll>
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section v-if="loading" class="panel"><p class="empty">正在加载课时设计</p></section>
     <section v-else class="lesson-designer-shell">
       <header class="lesson-designer-header lesson-designer-header-compact">
@@ -1404,11 +1404,11 @@ onMounted(loadLesson)
 
             <section class="resource-library-panel">
               <div class="resource-library-toolbar">
-                <select v-model="resourceScope" aria-label="资源库范围" @change="loadResources">
+                <AppSelect v-model="resourceScope" aria-label="资源库范围" @change="loadResources">
                   <option value="mine">我的资源</option>
                   <option value="school">校内资源</option>
                   <option value="external">跨校资源</option>
-                </select>
+                </AppSelect>
                 <input v-model.trim="resourceQuery" aria-label="搜索资源" placeholder="搜索资源" @keyup.enter="loadResources" />
                 <button class="secondary-button" type="button" :disabled="resourceLoading" @click="loadResources">
                   {{ resourceLoading ? '刷新中' : '刷新' }}
@@ -1525,9 +1525,9 @@ onMounted(loadLesson)
             </label>
             <label>
               <span>环节类型</span>
-              <select v-model="stepForm.step_type">
+              <AppSelect v-model="stepForm.step_type">
                 <option v-for="item in stepTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
+              </AppSelect>
               <small v-if="formErrors.step_type" class="field-error">{{ formErrors.step_type[0] }}</small>
             </label>
             <label>
@@ -1537,9 +1537,9 @@ onMounted(loadLesson)
             </label>
             <label>
               <span>适用层级</span>
-              <select v-model="stepForm.target_layer">
+              <AppSelect v-model="stepForm.target_layer">
                 <option v-for="item in targetLayerOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
+              </AppSelect>
             </label>
             <label class="settings-check-row">
               <input v-model="stepForm.is_required" type="checkbox" />
@@ -1633,9 +1633,9 @@ onMounted(loadLesson)
               </label>
               <label>
                 <span>题型</span>
-                <select v-model="aiQuestionForm.question_type">
+                <AppSelect v-model="aiQuestionForm.question_type">
                   <option v-for="item in aiQuestionTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-                </select>
+                </AppSelect>
                 <small v-if="aiQuestionErrors.question_type" class="field-error">{{ aiQuestionErrors.question_type[0] }}</small>
               </label>
               <label>
@@ -1738,9 +1738,9 @@ onMounted(loadLesson)
             <section class="question-builder-card modal-question-builder">
               <label>
                 <span>题型</span>
-                <select v-model="questionDraft.question_type" @change="onQuestionTypeChange">
+                <AppSelect v-model="questionDraft.question_type" @change="onQuestionTypeChange">
                   <option v-for="item in questionTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-                </select>
+                </AppSelect>
               </label>
               <label>
                 <span>基础分值</span>
@@ -1772,9 +1772,9 @@ onMounted(loadLesson)
                 <div v-if="questionLayerMode === 'layered_target'" class="layer-target-row">
                   <label>
                     <span>适用层级</span>
-                    <select v-model="questionDraft.target_layer" @change="onQuestionTargetLayerChange">
+                    <AppSelect v-model="questionDraft.target_layer" @change="onQuestionTargetLayerChange">
                       <option v-for="item in targetLayerSpecificOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-                    </select>
+                    </AppSelect>
                   </label>
                   <small>A/B 和 B/C 用于相邻层级共用题；第一版不开放 A/C。</small>
                 </div>

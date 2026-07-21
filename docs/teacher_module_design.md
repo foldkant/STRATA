@@ -686,21 +686,31 @@ WebSocket 房间：
 - 默认查看本人任教范围内的当前 A/B/C 和未分层学生名单。
 - 按班级、课程、层级和关键词筛选，导出当前分层 XLSX。
 - 查看本班待确认建议。
-- 单个采纳。
-- 单个拒绝。
-- 批量采纳。
-- 批量拒绝。
+- 单个处理建议。
+- 全选当前筛选下的待处理建议。
+- 全不选，清空已选建议。
+- 批量采用、保持当前安排或暂缓处理。
+- 批量弹窗显示已选总数、学习支持数和层级建议数。
 - 手动调整学生层级。
 - 查看分层变化历史。
 - 查看模型解释。
 - 分开查看学习依据和去重后的最新处理记录。
+- 教师首页的“待确认分层”可直接进入待处理页，只统计本人课程、已经发布且仍待处理的 A/B/C 学习内容层级建议。
+- 已发布的学习支持建议单独计为“待查看学习支持”；未发布模型候选、同班其他教师课程和兼容历史记录不进入教师待办。
 
 规则：
 
 - AI 模型不直接修改学生层级。
+- 学校管理员发布候选版本后，模型建议才进入教师可见范围；候选未发布时教师页明确显示暂无已发布待办。
+- 教师首页分别显示“待确认分层”和“待查看学习支持”：前者只计 A/B/C 内容层级，后者只计常规关注、持续关注、优先支持，二者不能合并。
+- 待处理列表每页显示 20 条；表头复选框只选择当前页，顶部“全选”选择当前筛选范围内的全部待处理建议，选择状态跨页保留。“全不选”会清空当前已选记录，批量处理完成后自动刷新待办列表。
+- 发布或回滚模型时，当前版本的学习支持待办会随版本切换；由旧兼容记录恢复出的待办仍属于学习支持，不得显示成 A/B/C。
 - 教师采纳后才写入学生当前层级。
 - 拒绝必须填写或选择原因。
-- 手动调整必须写审计日志。
+- “学习支持建议”和“学习内容层级建议”必须分开：支持建议只安排支架、订正或关注，不得通过“教师调整”改变 A/B/C。
+- 手动调整从“当前分层”或历史处理记录单独发起，必须选择结构化原因；每次生成新的 `StratificationDecision`、`StudentSubjectBand` 有效期和 `BandTransitionAudit`，不得覆盖模型原建议或旧层级记录。
+- 已处理建议不可再次改写；后续变化必须使用新的手动调整记录。
+- 批量处理只允许统一采用、保持或暂缓，不能批量直接改成 A/B/C；批量请求任意一条校验失败时全部回滚。
 - 分层结果不直接公开给学生，学生端只看到适配后的任务和资源。
 - 动态分组独立于内容层级。课堂中教师先选择任务目的，再从三个候选中调整确认；不允许模型自动替教师换组。
 
@@ -1172,13 +1182,10 @@ GET /api/v1/teacher/resources/export/
 分层建议：
 
 ```text
-GET /api/v1/teacher/stratification/?class=&status=&page=1
-GET /api/v1/teacher/stratification/{id}/
-POST /api/v1/teacher/stratification/{id}/accept/
-POST /api/v1/teacher/stratification/{id}/reject/
-POST /api/v1/teacher/stratification/bulk-accept/
-POST /api/v1/teacher/stratification/bulk-reject/
-POST /api/v1/teacher/stratification/manual-adjust/
+GET /api/v1/teacher/analytics/stratification/?class_group=&course=&status=
+GET /api/v1/teacher/analytics/stratification/overview/?class_group=&course=
+POST /api/v1/teacher/analytics/stratification/{id}/review/
+POST /api/v1/teacher/analytics/stratification/manual-adjust/
 ```
 
 公告：

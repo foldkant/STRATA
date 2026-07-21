@@ -33,6 +33,7 @@ function emptyGraphic(rows: ChartRow[]) {
 }
 
 export function pieOption(rows: ChartRow[]): EChartsCoreOption {
+  const visibleRows = rows.filter((item) => Number(item.count || 0) > 0)
   return {
     color: palette,
     graphic: emptyGraphic(rows),
@@ -50,6 +51,7 @@ export function pieOption(rows: ChartRow[]): EChartsCoreOption {
     series: [
       {
         type: 'pie',
+        showEmptyCircle: false,
         radius: ['46%', '72%'],
         center: ['50%', '44%'],
         avoidLabelOverlap: true,
@@ -61,7 +63,7 @@ export function pieOption(rows: ChartRow[]): EChartsCoreOption {
           length: 10,
           length2: 8
         },
-        data: rows.map((item) => ({ name: item.label, value: item.count }))
+        data: visibleRows.map((item) => ({ name: item.label, value: item.count }))
       }
     ]
   }
@@ -87,6 +89,7 @@ export function barOption(rows: ChartRow[], horizontal = false): EChartsCoreOpti
     xAxis: horizontal
       ? {
           type: 'value',
+          splitNumber: 4,
           axisLabel: axisText,
           splitLine: { lineStyle: { color: '#e2e8f0' } }
         }

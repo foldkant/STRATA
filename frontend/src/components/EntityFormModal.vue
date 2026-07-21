@@ -36,7 +36,7 @@ function setValue(model: Record<string, string | number | boolean>, name: string
           <label v-for="field in fields" :key="field.name" :class="{ 'span-2': field.type === 'textarea' }">
             <span>{{ field.label }}<b v-if="field.required">*</b></span>
 
-            <select
+            <AppSelect
               v-if="field.type === 'select'"
               :value="String(model[field.name] ?? '')"
               :required="field.required"
@@ -45,7 +45,7 @@ function setValue(model: Record<string, string | number | boolean>, name: string
               <option v-for="option in field.options || []" :key="String(option.value)" :value="String(option.value)">
                 {{ option.label }}
               </option>
-            </select>
+            </AppSelect>
 
             <textarea
               v-else-if="field.type === 'textarea'"

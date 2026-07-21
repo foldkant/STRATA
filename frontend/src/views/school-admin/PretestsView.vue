@@ -637,7 +637,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="学科与学科前测" eyebrow="学校管理员" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="screen-grid pretest-layout">
       <article class="panel subject-panel">
@@ -689,9 +689,9 @@ onMounted(async () => {
         <div class="extra-filter">
           <label>
             <span>前测类型</span>
-            <select v-model="selectedKind" @change="page = 1; load()">
+            <AppSelect v-model="selectedKind" @change="page = 1; load()">
               <option v-for="item in kindOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            </AppSelect>
           </label>
         </div>
         <ManagementPage
@@ -798,9 +798,9 @@ onMounted(async () => {
 
             <label>
               <span>题型 <b>*</b></span>
-              <select :value="activeQuestionType" @change="setQuestionType(($event.target as HTMLSelectElement).value)">
+              <AppSelect :value="activeQuestionType" @change="setQuestionType(($event.target as HTMLSelectElement).value)">
                 <option v-for="item in questionTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-              </select>
+              </AppSelect>
               <small v-if="questionFieldError('question_type')" class="field-error">{{ questionFieldError('question_type') }}</small>
             </label>
 

@@ -506,6 +506,7 @@ def build_grouping_candidates(
             if strategy == "stable_project"
             else "bridged"
         )
+        candidate_failure_reasons = []
         for key, label, objective in (
             ("task_preferred", "任务准备度优先", task_objective),
             ("stability_preferred", "合作稳定优先", "stable"),
@@ -537,6 +538,17 @@ def build_grouping_candidates(
                         },
                     }
                 )
+            elif reason:
+                candidate_failure_reasons.append(reason)
+        if len(candidates) == 1 and candidate_failure_reasons:
+            candidates[0]["metadata"]["fallback_reason"] = next(
+                (
+                    item
+                    for item in ("ortools_unavailable", "constraints_unsatisfied")
+                    if item in candidate_failure_reasons
+                ),
+                candidate_failure_reasons[0],
+            )
     else:
         candidates[0]["metadata"] = {
             "effective_strategy": "random_baseline",

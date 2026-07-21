@@ -151,26 +151,26 @@ onMounted(async () => {
 
 <template>
   <AppShell title="任课关系" eyebrow="学校管理员" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <div class="extra-filter">
       <label>
         <span>班级</span>
-        <select v-model="classId" @change="page = 1; load()">
+        <AppSelect v-model="classId" @change="page = 1; load()">
           <option value="">全部班级</option>
           <option v-for="item in options.classes" :key="item.id" :value="String(item.id)">
             {{ classLabel(item) }}
           </option>
-        </select>
+        </AppSelect>
       </label>
       <label>
         <span>教师</span>
-        <select v-model="teacherId" @change="page = 1; load()">
+        <AppSelect v-model="teacherId" @change="page = 1; load()">
           <option value="">全部教师</option>
           <option v-for="item in options.teachers" :key="item.id" :value="String(item.id)">
             {{ item.display_name || item.username }}
           </option>
-        </select>
+        </AppSelect>
       </label>
     </div>
 

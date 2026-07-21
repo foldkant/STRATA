@@ -423,7 +423,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="题库管理" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section class="metric-grid assessment-metric-grid">
       <article v-for="item in summary" :key="item.label" class="metric-card"><span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>{{ item.sub }}</small></article>
     </section>
@@ -446,12 +446,12 @@ onMounted(async () => {
           <button :class="{ active: scope === 'mine' }" type="button" @click="scope = 'mine'; load()">我的题目</button>
         </div>
         <input v-model.trim="query" aria-label="搜索题目" placeholder="搜索题干或知识点" @keyup.enter="load" />
-        <select v-model="subject" aria-label="按学科筛选" @change="load"><option value="">全部学科</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select>
-        <select v-model="questionType" aria-label="按题型筛选" @change="load"><option value="">全部题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select>
-        <select v-model="difficulty" aria-label="按难度筛选" @change="load"><option value="">全部难度</option><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select>
-        <select v-if="scope === 'mine'" v-model="status" aria-label="按状态筛选" @change="load"><option value="">全部状态</option><option v-for="item in options?.question_statuses" :key="item.value" :value="item.value">{{ item.value === 'draft' ? '个人可用 / 待修改' : item.label }}</option></select>
-        <select v-model="source" aria-label="按来源筛选" @change="load"><option value="">全部来源</option><option v-for="item in options?.question_sources" :key="item.value" :value="item.value">{{ item.label }}</option></select>
-        <select v-model="itemRole" aria-label="按题目用途筛选" @change="load"><option value="">全部用途</option><option v-for="item in options?.item_roles" :key="item.value" :value="item.value">{{ item.label }}</option></select>
+        <AppSelect v-model="subject" aria-label="按学科筛选" @change="load"><option value="">全部学科</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></AppSelect>
+        <AppSelect v-model="questionType" aria-label="按题型筛选" @change="load"><option value="">全部题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect>
+        <AppSelect v-model="difficulty" aria-label="按难度筛选" @change="load"><option value="">全部难度</option><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect>
+        <AppSelect v-if="scope === 'mine'" v-model="status" aria-label="按状态筛选" @change="load"><option value="">全部状态</option><option v-for="item in options?.question_statuses" :key="item.value" :value="item.value">{{ item.value === 'draft' ? '个人可用 / 待修改' : item.label }}</option></AppSelect>
+        <AppSelect v-model="source" aria-label="按来源筛选" @change="load"><option value="">全部来源</option><option v-for="item in options?.question_sources" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect>
+        <AppSelect v-model="itemRole" aria-label="按题目用途筛选" @change="load"><option value="">全部用途</option><option v-for="item in options?.item_roles" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect>
         <button class="secondary-button" type="button" @click="load">查询</button>
       </div>
 
@@ -503,11 +503,11 @@ onMounted(async () => {
         <header class="modal-header"><div><h2>{{ editing ? '编辑个人题目' : '新增题目' }}</h2><p>保存后立即进入“我的题目”，本人可直接组卷；申请共享时才进入审核。</p></div><button class="icon-button" type="button" aria-label="关闭" @click="modalOpen = false">×</button></header>
         <div class="assessment-modal-body">
           <div class="assessment-form-grid">
-            <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><select v-model="form.subject" required><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select><small v-if="errors.subject" class="field-error">{{ errors.subject[0] }}</small></label>
-            <label><span>题型 <b class="required-mark" aria-hidden="true">*</b></span><select :value="form.question_type" required @change="setType(($event.target as HTMLSelectElement).value)"><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-            <label><span>难度</span><select v-model="form.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-            <label><span>题目用途</span><select v-model="form.item_role" @change="form.layer_scope = form.item_role === 'layered' ? 'a' : 'all'"><option value="regular">普通题</option><option value="layered">分层题</option></select></label>
-            <label v-if="form.item_role === 'layered'"><span>适用层级 <b class="required-mark" aria-hidden="true">*</b></span><select v-model="form.layer_scope"><option v-for="item in options?.layer_scopes.filter((row) => row.value !== 'all')" :key="item.value" :value="item.value">{{ item.label }}</option></select><small v-if="errors.layer_scope" class="field-error">{{ errors.layer_scope[0] }}</small></label>
+            <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="form.subject" required><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></AppSelect><small v-if="errors.subject" class="field-error">{{ errors.subject[0] }}</small></label>
+            <label><span>题型 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect :value="form.question_type" required @change="setType(($event.target as HTMLSelectElement).value)"><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
+            <label><span>难度</span><AppSelect v-model="form.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
+            <label><span>题目用途</span><AppSelect v-model="form.item_role" @change="form.layer_scope = form.item_role === 'layered' ? 'a' : 'all'"><option value="regular">普通题</option><option value="layered">分层题</option></AppSelect></label>
+            <label v-if="form.item_role === 'layered'"><span>适用层级 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="form.layer_scope"><option v-for="item in options?.layer_scopes.filter((row) => row.value !== 'all')" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect><small v-if="errors.layer_scope" class="field-error">{{ errors.layer_scope[0] }}</small></label>
             <label><span>默认分值 <b class="required-mark" aria-hidden="true">*</b></span><input v-model.number="form.default_score" type="number" min="0.5" max="100" step="0.5" required /><small v-if="errors.default_score" class="field-error">{{ errors.default_score[0] }}</small></label>
           </div>
           <label class="assessment-wide-field"><span>题干 <b class="required-mark" aria-hidden="true">*</b></span><textarea v-model.trim="form.stem" rows="4" maxlength="2000" placeholder="请输入题目内容" required></textarea><small v-if="errors.stem" class="field-error">{{ errors.stem[0] }}</small></label>
@@ -546,12 +546,12 @@ onMounted(async () => {
               <strong>生成设置</strong>
               <a href="/app/teacher/ai" target="_blank" rel="noopener">AI 接入</a>
             </div>
-            <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><select v-model="aiForm.subject" required><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></select><small v-if="aiErrors.subject" class="field-error">{{ aiErrors.subject[0] }}</small></label>
+            <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="aiForm.subject" required><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></AppSelect><small v-if="aiErrors.subject" class="field-error">{{ aiErrors.subject[0] }}</small></label>
             <label><span>出题方向 <b class="required-mark" aria-hidden="true">*</b></span><textarea v-model.trim="aiForm.direction" rows="5" maxlength="1500" placeholder="例如：围绕二进制与十进制转换，考查位权理解和实际换算" required></textarea><small v-if="aiErrors.direction" class="field-error">{{ aiErrors.direction[0] }}</small></label>
             <label><span>知识点</span><input v-model.trim="aiForm.knowledge_point" maxlength="128" placeholder="例如 二进制编码" /><small v-if="aiErrors.knowledge_point" class="field-error">{{ aiErrors.knowledge_point[0] }}</small></label>
             <div class="assessment-ai-setting-grid">
-              <label><span>题型</span><select v-model="aiForm.question_type"><option value="mixed">混合题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-              <label><span>难度</span><select v-model="aiForm.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+              <label><span>题型</span><AppSelect v-model="aiForm.question_type"><option value="mixed">混合题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
+              <label><span>难度</span><AppSelect v-model="aiForm.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
               <label><span>数量</span><input v-model.number="aiForm.count" type="number" min="1" max="20" /><small v-if="aiErrors.count" class="field-error">{{ aiErrors.count[0] }}</small></label>
             </div>
             <label><span>补充要求</span><textarea v-model.trim="aiForm.requirement" rows="3" maxlength="1000" placeholder="可选：情境、语言风格、避免内容等"></textarea><small v-if="aiErrors.requirement" class="field-error">{{ aiErrors.requirement[0] }}</small></label>
@@ -572,8 +572,8 @@ onMounted(async () => {
                   <button type="button" aria-label="删除草稿" @click="removeAiDraft(draftIndex)">×</button>
                 </header>
                 <div class="assessment-ai-draft-meta">
-                  <label><span>题型</span><select :value="draft.question_type" @change="setAiDraftType(draft, ($event.target as HTMLSelectElement).value)"><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
-                  <label><span>难度</span><select v-model="draft.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></select></label>
+                  <label><span>题型</span><AppSelect :value="draft.question_type" @change="setAiDraftType(draft, ($event.target as HTMLSelectElement).value)"><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
+                  <label><span>难度</span><AppSelect v-model="draft.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
                   <label><span>分值</span><input v-model.number="draft.default_score" type="number" min="0.5" max="100" step="0.5" /></label>
                   <label><span>知识点</span><input v-model.trim="draft.knowledge_point" maxlength="128" /></label>
                 </div>

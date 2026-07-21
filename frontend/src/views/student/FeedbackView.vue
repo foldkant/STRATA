@@ -117,8 +117,8 @@ onMounted(loadRows)
 
 <template>
   <StudentShell title="留言反馈" subtitle="向任课教师提交问题或建议" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
-    <NoticeLine v-if="success" :message="success" tone="success" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
+    <NoticeLine v-if="success" :message="success" tone="success" floating @dismiss="success = ''" />
 
     <section class="student-feedback-layout">
       <article class="student-panel student-form-panel">
@@ -128,17 +128,17 @@ onMounted(loadRows)
         </header>
         <label>
           <span>任课教师</span>
-          <select v-model="form.teacher" :disabled="!hasTeacher">
+          <AppSelect v-model="form.teacher" :disabled="!hasTeacher">
             <option value="">请选择教师</option>
             <option v-for="teacher in teachers" :key="teacher.id" :value="teacher.id">{{ teacher.display_name }}</option>
-          </select>
+          </AppSelect>
           <small v-if="fieldError('teacher')" class="field-error">{{ fieldError('teacher') }}</small>
         </label>
         <label>
           <span>反馈类型</span>
-          <select v-model="form.category">
+          <AppSelect v-model="form.category">
             <option v-for="item in categories" :key="item.value" :value="item.value">{{ item.label }}</option>
-          </select>
+          </AppSelect>
           <small v-if="fieldError('category')" class="field-error">{{ fieldError('category') }}</small>
         </label>
         <label>

@@ -50,14 +50,14 @@ onMounted(load)
     <template #actions>
       <label class="student-archive-subject-filter">
         <span>学科</span>
-        <select v-model="selectedSubject" :disabled="loading" @change="load">
+        <AppSelect v-model="selectedSubject" :disabled="loading" @change="load">
           <option value="">全部学科</option>
           <option v-for="item in data?.subjects || []" :key="item.id" :value="item.id">{{ item.name }}</option>
-        </select>
+        </AppSelect>
       </label>
     </template>
 
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section v-if="loading && !data" class="student-panel"><p class="empty">正在整理学习档案</p></section>
 
     <template v-else-if="data">

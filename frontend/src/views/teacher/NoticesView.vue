@@ -200,7 +200,7 @@ onMounted(async () => {
 
 <template>
   <AppShell title="公告通知" eyebrow="教师工作台" :nav-items="navItems">
-    <NoticeLine v-if="noticeMessage" :message="noticeMessage" />
+    <NoticeLine v-if="noticeMessage" :message="noticeMessage" floating @dismiss="noticeMessage = ''" />
 
     <section class="metric-grid teacher-student-summary" aria-label="公告概况">
       <article v-for="item in summary" :key="item.label" class="metric-card">
@@ -233,12 +233,12 @@ onMounted(async () => {
       <template #toolbar-actions>
         <label>
           <span>接收班级</span>
-          <select v-model="classFilter" @change="load(1)">
+          <AppSelect v-model="classFilter" @change="load(1)">
             <option value="">全部班级</option>
             <option v-for="item in classes" :key="item.id" :value="item.id">
               {{ item.grade ? `${item.grade} ` : '' }}{{ item.name }}
             </option>
-          </select>
+          </AppSelect>
         </label>
       </template>
 
@@ -296,11 +296,11 @@ onMounted(async () => {
             </label>
             <label>
               <span>状态</span>
-              <select v-model="form.status">
+              <AppSelect v-model="form.status">
                 <option value="draft">草稿</option>
                 <option value="published">已发布</option>
                 <option value="archived">归档</option>
-              </select>
+              </AppSelect>
             </label>
             <label class="check-row notice-check-row">
               <input v-model="form.is_pinned" type="checkbox" />

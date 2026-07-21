@@ -83,7 +83,7 @@ onMounted(loadRows)
 
 <template>
   <AppShell title="资源审核" eyebrow="学校管理员" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="resource-review-head">
       <div>

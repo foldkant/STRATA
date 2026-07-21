@@ -29,8 +29,126 @@ from learning.services.mastery import (
     build_assessment_mastery_candidates,
     record_band_transition_review,
 )
+from learning.services.stratification_visibility import visible_teacher_decisions
 from ops.xlsx import build_workbook, workbook_response
 from school.models import StudentProfile, TeachingAssignment
+
+
+REVIEW_REASON_LABELS = {
+    "classroom_evidence": "课堂表现或作品提供了补充依据",
+    "recent_change": "学生近期状态发生变化",
+    "support_plan": "教师已有明确的教学支持安排",
+    "task_mismatch": "当前任务难度或学习机会不匹配",
+    "data_issue": "平台材料缺失或记录需要核查",
+    "other": "其他经教师核实的原因",
+}
+REVIEW_STATUS_MAP = {
+    "accept": StratificationDecision.Status.ACCEPTED,
+    "keep": StratificationDecision.Status.KEPT,
+    "adjust": StratificationDecision.Status.ADJUSTED,
+    "defer": StratificationDecision.Status.DEFERRED,
+}
+STRATIFICATION_BULK_LIMIT = 200
+
+
+class DecisionReviewError(Exception):
+    def __init__(self, message: str, *, status: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
+
+def _parse_review_payload(decision, data, *, allow_adjust: bool = True):
+    if decision.decision_kind == StratificationDecision.DecisionKind.LEGACY:
+        raise DecisionReviewError(
+            "该记录仅用于历史兼容，不能继续处理。", status=409
+        )
+    if decision.status != StratificationDecision.Status.PENDING:
+        raise DecisionReviewError(
+            "所选建议中包含已经处理的记录，请刷新后重新选择。", status=409
+        )
+
+    action = str(data.get("action") or "").strip()
+    if action not in REVIEW_STATUS_MAP:
+        raise DecisionReviewError("处理方式不正确。")
+    if action == "adjust" and not allow_adjust:
+        raise DecisionReviewError("批量处理不能调整 A/B/C，请逐个学生调整。")
+
+    is_content_band = (
+        decision.decision_kind == StratificationDecision.DecisionKind.CONTENT_BAND
+    )
+    if action == "adjust" and not is_content_band:
+        raise DecisionReviewError("学习支持建议不能直接调整层级，请使用手动调整。")
+
+    note = str(data.get("note") or "").strip()[:1000]
+    reason_code = str(data.get("reason_code") or "").strip()
+    if action in {"keep", "adjust", "defer"}:
+        if reason_code not in REVIEW_REASON_LABELS:
+            raise DecisionReviewError("请选择本次处理原因。")
+        if reason_code == "other" and not note:
+            raise DecisionReviewError("选择其他原因时请填写处理说明。")
+    else:
+        reason_code = ""
+
+    selected_layer = ""
+    if action == "accept" and is_content_band:
+        if not decision.suggested_layer:
+            raise DecisionReviewError("所选建议中有记录不能采纳层级变化。")
+        selected_layer = decision.suggested_layer
+    elif action == "keep" and is_content_band:
+        selected_layer = (
+            resolve_student_band(
+                student=decision.student,
+                subject=decision.subject,
+                course=decision.course,
+            )
+            or ""
+        )
+    elif action == "adjust" and is_content_band:
+        selected_layer = str(data.get("layer") or "").upper()
+        if selected_layer not in {"A", "B", "C"}:
+            raise DecisionReviewError("请选择 A、B 或 C。")
+
+    return {
+        "action": action,
+        "status": REVIEW_STATUS_MAP[action],
+        "selected_layer": selected_layer,
+        "reason_code": reason_code,
+        "note": note,
+        "is_content_band": is_content_band,
+    }
+
+
+def _apply_review(decision, review, *, actor):
+    if review["is_content_band"] and review["action"] in {"accept", "adjust"}:
+        apply_student_subject_band(
+            decision=decision,
+            selected_band=review["selected_layer"],
+            confirmed_by=actor,
+        )
+    decision.status = review["status"]
+    decision.teacher_selected_layer = review["selected_layer"]
+    decision.review_reason_code = review["reason_code"]
+    decision.review_note = review["note"]
+    decision.reviewed_by = actor
+    decision.reviewed_at = timezone.now()
+    decision.save(
+        update_fields=[
+            "status",
+            "teacher_selected_layer",
+            "review_reason_code",
+            "review_note",
+            "reviewed_by",
+            "reviewed_at",
+        ]
+    )
+    if review["is_content_band"]:
+        record_band_transition_review(
+            decision=decision,
+            action=review["action"],
+            final_band=review["selected_layer"],
+            actor=actor,
+        )
 
 
 def _teacher_class_ids(user):
@@ -200,15 +318,23 @@ def _decision_row(decision):
         "mastery_snapshot_id": decision.mastery_snapshot_id,
         "rule_version": decision.rule_version,
         "source_label": (
-            "班级校准候选"
+            "教师手动调整"
+            if decision.rule_version.startswith("teacher-manual-")
+            else "班级校准候选"
             if decision.rule_version.startswith("m03-")
-            else "透明规则建议"
+            else "学习支持建议"
+            if decision.decision_kind == StratificationDecision.DecisionKind.SUPPORT
+            else "共同测试层级建议"
         ),
         "window_start": decision.window_start,
         "window_end": decision.window_end,
         "status": decision.status,
         "status_label": decision.get_status_display(),
         "teacher_selected_layer": decision.teacher_selected_layer,
+        "review_reason_code": decision.review_reason_code,
+        "review_reason_label": REVIEW_REASON_LABELS.get(
+            decision.review_reason_code, ""
+        ),
         "review_note": decision.review_note,
         "reviewed_by": (
             decision.reviewed_by.display_name or decision.reviewed_by.username
@@ -222,10 +348,7 @@ def _decision_row(decision):
 
 def _visible_stratification_decisions(user, class_ids):
     return (
-        StratificationDecision.objects.filter(
-            class_group_id__in=class_ids,
-            course__teacher=user,
-        )
+        visible_teacher_decisions(teacher=user, class_ids=class_ids)
         .select_related(
             "student__student_profile",
             "class_group",
@@ -233,12 +356,6 @@ def _visible_stratification_decisions(user, class_ids):
             "course",
             "reviewed_by",
         )
-        .filter(
-            ~Q(rule_version__startswith="m03-")
-            | Q(calibration_run__releases__status="active")
-        )
-        .exclude(decision_kind=StratificationDecision.DecisionKind.LEGACY)
-        .distinct()
     )
 
 
@@ -736,94 +853,235 @@ def refresh_mastery_snapshots(request):
 @permission_classes([IsTeacher])
 def review_stratification_suggestion(request, pk: int):
     class_ids = _teacher_class_ids(request.user)
-    decision = (
-        StratificationDecision.objects.select_related(
-            "student", "class_group", "subject", "course"
-        )
-        .filter(
-            pk=pk,
-            class_group_id__in=class_ids,
-            course__teacher=request.user,
-        )
+    visible_id = (
+        _visible_stratification_decisions(request.user, class_ids)
+        .filter(pk=pk)
+        .values_list("pk", flat=True)
         .first()
     )
-    if decision is None:
+    if visible_id is None:
         return fail("学习安排建议不存在或无权处理。", status=404)
-    if decision.decision_kind == StratificationDecision.DecisionKind.LEGACY:
-        return fail("该记录仅用于历史兼容，不能继续处理。", status=409)
-    action = str(request.data.get("action") or "").strip()
-    status_map = {
-        "accept": StratificationDecision.Status.ACCEPTED,
-        "keep": StratificationDecision.Status.KEPT,
-        "adjust": StratificationDecision.Status.ADJUSTED,
-        "defer": StratificationDecision.Status.DEFERRED,
-    }
-    if action not in status_map:
-        return fail("处理方式不正确。", status=400)
-    selected_layer = ""
-    is_content_band = (
-        decision.decision_kind == StratificationDecision.DecisionKind.CONTENT_BAND
-    )
-    if action == "accept" and is_content_band:
-        if not decision.suggested_layer:
-            return fail("当前材料不足，不能采纳层级变化。", status=400)
-        selected_layer = decision.suggested_layer
-    elif action == "keep" and is_content_band:
-        selected_layer = (
-            resolve_student_band(
-                student=decision.student,
-                subject=decision.subject,
-                course=decision.course,
+    try:
+        with transaction.atomic():
+            decision = (
+                StratificationDecision.objects.select_for_update()
+                .select_related("student", "class_group", "subject", "course")
+                .filter(pk=visible_id)
+                .first()
             )
-            or ""
-        )
-    elif action == "adjust" and is_content_band:
-        selected_layer = str(request.data.get("layer") or "").upper()
-        if selected_layer not in {"A", "B", "C"}:
-            return fail("请选择 A、B 或 C。", status=400)
-    note = str(request.data.get("note") or "").strip()[:1000]
-    with transaction.atomic():
-        decision = StratificationDecision.objects.select_for_update().get(pk=decision.pk)
-        if is_content_band and action in {"accept", "adjust"}:
-            apply_student_subject_band(
-                decision=decision,
-                selected_band=selected_layer,
-                confirmed_by=request.user,
+            if decision is None:
+                raise DecisionReviewError(
+                    "学习安排建议不存在或无权处理。", status=404
+                )
+            review = _parse_review_payload(decision, request.data)
+            _apply_review(decision, review, actor=request.user)
+            write_audit(
+                request,
+                "teacher.stratification.review",
+                school=request.user.school,
+                target_type="stratification_decision",
+                target_id=decision.id,
+                detail={
+                    "action": review["action"],
+                    "selected_layer": review["selected_layer"],
+                    "reason_code": review["reason_code"],
+                    "layer_applied": review["is_content_band"]
+                    and review["action"] in {"accept", "adjust"},
+                },
             )
-        decision.status = status_map[action]
-        decision.teacher_selected_layer = selected_layer
-        decision.review_note = note
-        decision.reviewed_by = request.user
-        decision.reviewed_at = timezone.now()
-        decision.save(
-            update_fields=[
-                "status",
-                "teacher_selected_layer",
-                "review_note",
-                "reviewed_by",
-                "reviewed_at",
-            ]
-        )
-        if is_content_band:
-            record_band_transition_review(
-                decision=decision,
-                action=action,
-                final_band=selected_layer,
-                actor=request.user,
-            )
-    write_audit(
-        request,
-        "teacher.stratification.review",
-        school=request.user.school,
-        target_type="stratification_decision",
-        target_id=decision.id,
-        detail={
-            "action": action,
-            "selected_layer": selected_layer,
-            "layer_applied": is_content_band and action in {"accept", "adjust"},
-        },
-    )
+    except DecisionReviewError as exc:
+        return fail(exc.message, status=exc.status)
+
     decision = StratificationDecision.objects.select_related(
         "student__student_profile", "class_group", "subject", "course", "reviewed_by"
     ).get(pk=decision.pk)
     return ok(_decision_row(decision), "学习安排建议已处理。")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def bulk_review_stratification_suggestions(request):
+    raw_ids = request.data.get("ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return fail("请至少选择一条待处理建议。", status=400)
+    if len(raw_ids) > STRATIFICATION_BULK_LIMIT:
+        return fail(
+            f"单次最多处理 {STRATIFICATION_BULK_LIMIT} 条建议。", status=400
+        )
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in raw_ids):
+        return fail("建议编号格式不正确。", status=400)
+    ids = list(dict.fromkeys(raw_ids))
+    if len(ids) != len(raw_ids):
+        return fail("建议编号不能重复。", status=400)
+
+    action = str(request.data.get("action") or "").strip()
+    if action == "adjust":
+        return fail("批量处理不能调整 A/B/C，请逐个学生调整。", status=400)
+
+    class_ids = _teacher_class_ids(request.user)
+    visible_ids = set(
+        _visible_stratification_decisions(request.user, class_ids)
+        .filter(pk__in=ids)
+        .values_list("pk", flat=True)
+    )
+    if visible_ids != set(ids):
+        return fail("所选建议中包含不存在、未发布或无权处理的记录。", status=404)
+
+    try:
+        with transaction.atomic():
+            locked_rows = list(
+                StratificationDecision.objects.select_for_update()
+                .select_related("student", "class_group", "subject", "course")
+                .filter(pk__in=ids)
+            )
+            if len(locked_rows) != len(ids):
+                raise DecisionReviewError(
+                    "所选建议中包含不存在或无权处理的记录。", status=404
+                )
+            rows_by_id = {row.id: row for row in locked_rows}
+            ordered_rows = [rows_by_id[item_id] for item_id in ids]
+            prepared = [
+                (row, _parse_review_payload(row, request.data, allow_adjust=False))
+                for row in ordered_rows
+            ]
+            for row, review in prepared:
+                _apply_review(row, review, actor=request.user)
+            write_audit(
+                request,
+                "teacher.stratification.bulk_review",
+                school=request.user.school,
+                target_type="stratification_decision_batch",
+                detail={
+                    "ids": ids,
+                    "count": len(ids),
+                    "action": action,
+                    "reason_code": str(request.data.get("reason_code") or "").strip(),
+                    "content_band_count": sum(
+                        int(review["is_content_band"]) for _row, review in prepared
+                    ),
+                    "support_count": sum(
+                        int(not review["is_content_band"]) for _row, review in prepared
+                    ),
+                },
+            )
+    except DecisionReviewError as exc:
+        return fail(exc.message, status=exc.status)
+
+    return ok(
+        {"updated_count": len(ids), "ids": ids, "action": action},
+        f"已批量处理 {len(ids)} 条建议。",
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def manually_adjust_stratification(request):
+    try:
+        student_id = int(request.data.get("student") or 0)
+        course_id = int(request.data.get("course") or 0)
+    except (TypeError, ValueError):
+        return fail("学生或课程参数不正确。", status=400)
+    selected_layer = str(request.data.get("layer") or "").strip().upper()
+    if selected_layer not in {"A", "B", "C"}:
+        return fail("请选择 A、B 或 C。", status=400)
+    reason_code = str(request.data.get("reason_code") or "").strip()
+    if reason_code not in REVIEW_REASON_LABELS:
+        return fail("请选择本次调整原因。", status=400)
+    note = str(request.data.get("note") or "").strip()[:1000]
+    if reason_code == "other" and not note:
+        return fail("选择其他原因时请填写说明。", status=400)
+
+    class_ids = set(_teacher_class_ids(request.user))
+    profile = (
+        StudentProfile.objects.select_related("user", "class_group")
+        .filter(
+            user_id=student_id,
+            user__school=request.user.school,
+            user__is_active=True,
+            class_group_id__in=class_ids,
+        )
+        .first()
+    )
+    course = (
+        Course.objects.select_related("subject")
+        .filter(
+            pk=course_id,
+            teacher=request.user,
+            subject__school=request.user.school,
+            course_classes__class_group_id=profile.class_group_id if profile else None,
+        )
+        .distinct()
+        .first()
+    )
+    if profile is None or course is None:
+        return fail("学生或课程不存在，或无权调整。", status=404)
+
+    current_layer = resolve_student_band(
+        student=profile.user,
+        subject=course.subject,
+        course=course,
+    ) or ""
+    if current_layer == selected_layer:
+        return fail(f"该学生当前已经是 {selected_layer} 层。", status=400)
+
+    now = timezone.now()
+    with transaction.atomic():
+        decision = StratificationDecision.objects.create(
+            student=profile.user,
+            class_group=profile.class_group,
+            subject=course.subject,
+            course=course,
+            previous_layer=current_layer,
+            suggested_layer="",
+            confidence=0,
+            reasons=[REVIEW_REASON_LABELS[reason_code]],
+            missing_data=[],
+            learning_summary={
+                "source": "teacher_manual_adjustment",
+                "reason_code": reason_code,
+                "confidence_status": "not_applicable",
+            },
+            support_suggestion="",
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+            policy_version="teacher-manual-v1",
+            transition_checks={
+                "manual_override": True,
+                "reason_code": reason_code,
+            },
+            window_start=now,
+            window_end=now,
+            rule_version=f"teacher-manual-{now.strftime('%y%m%d%H%M%S%f')}"[:32],
+            teacher_selected_layer=selected_layer,
+            review_reason_code=reason_code,
+            review_note=note,
+            status=StratificationDecision.Status.ADJUSTED,
+            reviewed_by=request.user,
+            reviewed_at=now,
+        )
+        apply_student_subject_band(
+            decision=decision,
+            selected_band=selected_layer,
+            confirmed_by=request.user,
+            effective_at=now,
+        )
+        record_band_transition_review(
+            decision=decision,
+            action="manual_adjust",
+            final_band=selected_layer,
+            actor=request.user,
+        )
+    write_audit(
+        request,
+        "teacher.stratification.manual_adjust",
+        school=request.user.school,
+        target_type="stratification_decision",
+        target_id=decision.id,
+        detail={
+            "student_id": profile.user_id,
+            "course_id": course.id,
+            "previous_layer": current_layer,
+            "selected_layer": selected_layer,
+            "reason_code": reason_code,
+        },
+    )
+    return ok(_decision_row(decision), "学生层级已调整。")

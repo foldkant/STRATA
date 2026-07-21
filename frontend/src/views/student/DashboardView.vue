@@ -42,7 +42,7 @@ onMounted(async () => {
 
 <template>
   <StudentShell title="学习首页" :subtitle="className" :nav-items="navItems">
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section v-if="!data" class="student-panel"><p class="empty">正在加载学习空间</p></section>
 
     <template v-else>

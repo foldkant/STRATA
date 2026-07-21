@@ -123,20 +123,20 @@ async function save() {
         <div class="trial-form-grid">
           <label class="span-2">
             <span>评价标准版本<b>*</b></span>
-            <select v-model="form.standard_version" :disabled="locked">
+            <AppSelect v-model="form.standard_version" :disabled="locked">
               <option value="" disabled>请选择已发布评价标准</option>
               <option v-for="version in options.standard_versions" :key="version.id" :value="version.id">
                 {{ version.subject.name }} · {{ version.title }} v{{ version.version_no }}
               </option>
-            </select>
+            </AppSelect>
             <small v-if="errors.standard_version" class="field-error">{{ errors.standard_version[0] }}</small>
           </label>
 
           <label>
             <span>记录类型<b>*</b></span>
-            <select v-model="form.record_type" :disabled="locked">
+            <AppSelect v-model="form.record_type" :disabled="locked">
               <option v-for="item in options.trial_types" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            </AppSelect>
           </label>
           <label>
             <span>日期<b>*</b></span>
@@ -152,9 +152,9 @@ async function save() {
 
           <label>
             <span>当前状态<b>*</b></span>
-            <select v-model="form.status" :disabled="locked">
+            <AppSelect v-model="form.status" :disabled="locked">
               <option v-for="item in options.trial_statuses" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            </AppSelect>
           </label>
           <label>
             <span>参与人数<b v-if="isCompleted">*</b></span>
@@ -172,9 +172,9 @@ async function save() {
           </label>
           <label :class="{ 'span-2': !isScoringCheck }">
             <span>处理结论<b v-if="isCompleted">*</b></span>
-            <select v-model="form.conclusion" :disabled="locked || !isCompleted">
+            <AppSelect v-model="form.conclusion" :disabled="locked || !isCompleted">
               <option v-for="item in options.trial_conclusions" :key="item.value" :value="item.value">{{ item.label }}</option>
-            </select>
+            </AppSelect>
             <small v-if="!isCompleted">完成后再选择结论。</small>
             <small v-if="errors.conclusion" class="field-error">{{ errors.conclusion[0] }}</small>
           </label>

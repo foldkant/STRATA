@@ -40,6 +40,7 @@ frontend/
       dashboards.ts
       management.ts
     components/
+      AppSelect.vue
       ClassChipList.vue
       ConfirmDialog.vue
       EntityFormModal.vue
@@ -89,6 +90,15 @@ frontend/
     App.vue
     main.ts
 ```
+
+## 共享下拉控件
+
+- 正式业务页面统一使用全局注册的 `AppSelect.vue`，不在各页面重复实现下拉菜单。
+- 控件兼容 `v-model`、`v-model.number`、禁用项、必填校验和原有 `change` 事件；支持方向键、Enter、Space、Home、End、Escape 和点击外部关闭。
+- 展开菜单使用 `Teleport` 放到页面根层，并根据可用空间自动向上或向下展开，避免被弹窗、表格和局部滚动容器裁切。
+- 选项可通过 `title` 或 `data-description` 提供简短说明；鼠标悬停和键盘聚焦时使用同一说明区域，不依赖浏览器原生 `option` 提示。
+- `AppSelect` 内部保留一个不可见的原生 `select`，只用于浏览器表单校验和字段提交兼容。该内部元素不得替换为 `AppSelect`，否则会形成组件递归并导致页面无法挂载。
+- AI 学习网页运行在独立沙箱 iframe 中，不能直接挂载 Vue 组件；其中由系统生成的表单控件继续使用沙箱自身样式和校验逻辑。
 
 ## 前后端边界
 
@@ -200,6 +210,9 @@ Vue 登录流程：
 - `/super-admin`
 - `/super-admin/schools`
 - `/super-admin/school-admins`
+- `/super-admin/collection`
+- `/super-admin/analysis`
+- `/super-admin/health`
 - `/school-admin`
 - `/school-admin/teachers`
 - `/school-admin/students`
@@ -216,7 +229,9 @@ Vue 登录流程：
 - `/teacher/resources`
 - `/student/resources`
 
-其它路由后续接 API 时补页面。
+超级管理员上述六个路由均已接入真实 API。跨校采集、跨校分析和系统健康不再使用 `PlaceholderView`；严重故障与最近操作日志收敛在系统健康页面的独立页签中，避免继续扩大侧栏。
+
+超级管理员页面菜单统一由 `views/super-admin/nav.ts` 生成，页面不得各自复制菜单数组。采集包上传复用 `FilePicker`，图表继续复用 `EChartPanel` 与 `chartOptions`；操作日志动作名称由 `utils/auditLabels.ts` 统一转换为用户可读文字，同时保留内部动作编码供排查。
 
 教师端路由设计详见 `docs/teacher_module_design.md`。当前教师端已经完成“工作台、学生管理、公告通知、留言反馈、课程管理、课堂活动”第一版。后续继续扩展题库、资源、测试、项目、学生档案画像和分层建议。
 
@@ -360,6 +375,14 @@ Django 提供 /api/v1/ 和 /ws/
 页面必须在 `390x844`、`768x900` 和 `1440x900` 检查无横向溢出、弹窗操作栏可见、字段错误靠近输入项。临时截图审查后删除。
 
 评价页面不再与课程列表共用旧 `CourseEvaluationModal`。课程列表不提供课程级评价编辑；课时设计器只显示已发布标准选择和自评、互评、师评开关；课堂控制台只显示开启、执行和查看。
+
+## 页面反馈规则
+
+- 页面级异步操作结果复用 `NoticeLine floating`，由 `App.vue` 的全局反馈区域统一承载；不得在每个页面复制定位、动画和关闭样式。
+- 成功和普通信息自动消失，警告和错误由用户关闭；页面必须监听 `dismiss` 并清空对应状态，保证相同操作可重复反馈。
+- 持久说明、数据环境提示和表单字段错误使用普通内联模式，放在相关内容附近，不进入全局反馈区域。
+- 多条反馈由全局区域纵向排列；移动端宽度限制在视口内，不遮挡页面宽度或制造横向滚动。
+- 长页面的本页页签和高频操作可以使用局部停靠工具栏，但必须使用实色背景、明确边界和响应式换行，不能让正文透出或覆盖控件。
 
 ## 共同题与学习情况页面
 

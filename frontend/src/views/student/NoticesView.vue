@@ -47,7 +47,7 @@ onMounted(loadRows)
       <input v-model.trim="query" class="student-search-input" aria-label="搜索公告" placeholder="搜索公告" />
     </template>
 
-    <NoticeLine v-if="notice" :message="notice" />
+    <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <section v-if="loading" class="student-panel">
       <p class="empty">正在加载公告</p>
     </section>
