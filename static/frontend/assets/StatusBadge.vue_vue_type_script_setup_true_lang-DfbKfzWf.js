@@ -1,0 +1,1 @@
+import{d as t,a as e,f as s,t as n,n as c}from"./index-CTUbcA7G.js";const r=t({__name:"StatusBadge",props:{active:{type:Boolean}},setup(a){return(o,i)=>(e(),s("span",{class:c(["status-pill",a.active?"status-active":"status-disabled"])},n(a.active?"启用":"停用"),3))}});export{r as _};
