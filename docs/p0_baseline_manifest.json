@@ -1,10 +1,10 @@
 {
   "baseline_id": "P0-GOV-20260722-v1",
-  "captured_at": "2026-07-22T12:27:36+08:00",
-  "scope": "P0 terminology, permissions, version rules, data purposes, migration ledger, rollback and explicit historical/manual test-data governance",
+  "captured_at": "2026-07-22T12:46:16+08:00",
+  "scope": "P0 terminology, permissions, version rules, data purposes, migration and rollback; P1 curriculum-standard lifecycle, traceable exports and retrieval",
   "repository": {
     "branch": "feature/p0-p1-curriculum-governance",
-    "head": "0a7d5cd0e755c2656f65fdf1e45fa0c4a8af8287",
+    "head": "f1ab81240a10b7fabdd212f5ed0dde4a98318406",
     "head_semantics": "Last content/build commit before the manifest metadata commit; the annotated release tag points to the final manifest commit.",
     "working_tree_clean": true,
     "status_entries": 0,
@@ -12,7 +12,7 @@
     "untracked_entries": 0,
     "deleted_entries": 0,
     "code_byte_restore_available": true,
-    "release_commit": "0a7d5cd0e755c2656f65fdf1e45fa0c4a8af8287",
+    "release_commit": "f1ab81240a10b7fabdd212f5ed0dde4a98318406",
     "release_tag": "baseline/p0-p1-20260722",
     "source_archive_path": null,
     "source_archive_sha256": null,
@@ -29,8 +29,8 @@
     },
     {
       "path": "docs/p0_as_is_to_be.md",
-      "bytes": 11036,
-      "sha256": "0e2c684591b5cd2296e94701cc4529890eaaad68f5af1daf5b742cc1797a3dd3"
+      "bytes": 11088,
+      "sha256": "0107b496b7951dab1dd52eb3837ee85a91c8350c575491ca5ba27029e3e97748"
     },
     {
       "path": "docs/p0_governance_freeze.md",
@@ -39,8 +39,8 @@
     },
     {
       "path": "docs/p0_data_migration_ledger.md",
-      "bytes": 11941,
-      "sha256": "0b5aa022ec884756a87b87eba9c8b58f340854e2d201da768244ef223c0ff2c6"
+      "bytes": 12026,
+      "sha256": "b2bf91611d1ef470f35ef9be9d8d3daf0dcaa17dbcbfab4a3ba9c6a0d9eee0ad"
     },
     {
       "path": "docs/p0_rollback_runbook.md",
@@ -49,13 +49,18 @@
     },
     {
       "path": "docs/p0_p1_curriculum_governance_acceptance.md",
-      "bytes": 30749,
-      "sha256": "5b4292871dd8ae48f5846f7f634aa97475b108d6460b9a6a87ba903013811a26"
+      "bytes": 31106,
+      "sha256": "85b8e9ff752f4ff9fc453f1553bbec0a51e9f64bfda5a5e00a97642ab6d741fa"
+    },
+    {
+      "path": "docs/p1_curriculum_retrieval.md",
+      "bytes": 2537,
+      "sha256": "15480482e24901d5ebc3a249c8d213f91d097778a64b49f73504a7859710c8d6"
     },
     {
       "path": "docs/README.md",
-      "bytes": 11864,
-      "sha256": "a7130cb0abe47d0f2a462e5c01bada4ba334ad50d11cf51c73ec5c093d3689d5"
+      "bytes": 12076,
+      "sha256": "1e1f744cc5fe77ae44dcd5e0a925d953e4ed9fe22bd36e0993429778df83fe0f"
     },
     {
       "path": "docs/data_model.md",
@@ -71,6 +76,41 @@
       "path": "docs/evaluation_stratification_grouping_sci_design_rounds_11_30.md",
       "bytes": 114613,
       "sha256": "f7888fabe7b60697e996de44508ec5b8cabab01a454db6e77f230268f212a3df"
+    },
+    {
+      "path": "curriculum_standards/models.py",
+      "bytes": 40744,
+      "sha256": "9655dd624488ffb62a976c95f99433d74d5135e10dc7797eaaf59ea011b055fa"
+    },
+    {
+      "path": "curriculum_standards/services.py",
+      "bytes": 65816,
+      "sha256": "54b60b663d52b5a363a7dbda10e15d01386bb536e374bac53cfff6f96fe395ce"
+    },
+    {
+      "path": "curriculum_standards/retrieval.py",
+      "bytes": 20029,
+      "sha256": "d4cc269e36188d5478d93dfb449f58859c8f75b083a6c9ec4f512b17d7623bfc"
+    },
+    {
+      "path": "curriculum_standards/views.py",
+      "bytes": 70744,
+      "sha256": "da6480ea977b321710643aaa24581c16ea3cc2ff189a1d4e44d8c28c4f0033d5"
+    },
+    {
+      "path": "curriculum_standards/tests/test_p1_acceptance_lifecycle.py",
+      "bytes": 15598,
+      "sha256": "676a70ce1bd48964b21fcafa46c22833d6542ee27d764a9301170b17014c4217"
+    },
+    {
+      "path": "frontend/src/views/super-admin/CurriculumStandardsView.vue",
+      "bytes": 70558,
+      "sha256": "b89bf634e5f59905ed19c384228e8b0abf91a79ff165155ccaefdec50074a4c1"
+    },
+    {
+      "path": "frontend/scripts/prune-build-assets.mjs",
+      "bytes": 2190,
+      "sha256": "5dad78c2c488f696073a25fe6f258a3ff4171ebd99145b7fef9ac6258abf6711"
     },
     {
       "path": "learning_analytics/models.py",
@@ -121,8 +161,8 @@
   "database": {
     "active_development_database": {
       "path": "storage/dev.sqlite3",
-      "captured_bytes": 138215424,
-      "captured_last_write": "2026-07-22T12:22:30.6395763+08:00",
+      "captured_bytes": 138395648,
+      "captured_last_write": "2026-07-22T12:45:56.9983494+08:00",
       "quick_check": "ok",
       "sha256_omitted": "The low-priority OCR worker was active; a changing live file is not an immutable baseline. Use the verified final-migration backup for rollback.",
       "migration_count": 140,
@@ -248,7 +288,7 @@
       "learning_analytics.tests.test_privacy_surfaces",
       "learning_analytics.tests.test_security_baseline"
     ],
-    "tests_passed": 88,
+    "tests_passed": 90,
     "tests_failed": 0,
     "test_database": "isolated Django test database; active development database migrations and integrity were verified separately",
     "frontend_test_files": 10,
@@ -256,15 +296,25 @@
     "frontend_tests_failed": 0,
     "frontend_type_check": "passed",
     "frontend_production_build": "passed",
+    "curriculum_tests_passed": 37,
+    "curriculum_tests_failed": 0,
+    "frontend_build_asset_cleanup": {
+      "stale_files_removed": 85,
+      "retained_asset_files": 182
+    },
     "published_curriculum_strict_audit": {
       "versions": 2,
       "errors": 0,
       "warnings": 0
     },
     "curriculum_retrieval": {
-      "indexes": 33,
-      "chunks": 4389,
-      "build_failures": 0
+      "snapshot_at": "2026-07-22T12:46:16+08:00",
+      "completed_versions": 34,
+      "needs_ocr_versions": 14,
+      "indexes": 34,
+      "chunks": 4411,
+      "build_failures": 0,
+      "remaining_processing_boundary": "The 14 remaining scan-based draft versions continue one at a time in the low-priority background queue and are never auto-published."
     }
   }
 }
