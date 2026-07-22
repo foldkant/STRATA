@@ -1,4 +1,5 @@
 import { apiRequest, toJsonBody } from './client'
+import type { CurriculumNode } from './curriculumStandards'
 
 export type EvaluationChoice = {
   value: string
@@ -9,7 +10,8 @@ export type EvaluationChoice = {
 export type EvaluationCourse = {
   id: number
   title: string
-  subject: { id: number; name: string }
+  subject: { id: number; name: string; code?: string }
+  school_stage?: 'k1_k9' | 'k10_k12'
   is_active: boolean
 }
 
@@ -77,6 +79,7 @@ export type EvaluationPlanPayload = {
   support_options: string[]
   scoring_rules: { approach: string; decision_rule: string }
   follow_up_suggestion: string
+  curriculum_node_ids: number[]
 }
 
 export type EvaluationPlanRow = {
@@ -103,6 +106,9 @@ export type EvaluationPlanRow = {
   support_options?: string[]
   scoring_rules?: { approach?: string; decision_rule?: string }
   follow_up_suggestion?: string
+  curriculum_node_ids?: number[]
+  curriculum_references?: CurriculumNode[]
+  curriculum_reference_count?: number
   versions?: EvaluationVersion[]
   created_at: string
   updated_at: string

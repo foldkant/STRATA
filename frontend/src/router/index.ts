@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { resolveRouteAccess } from '@/domain/access'
 import LoginView from '@/views/LoginView.vue'
 
 const SuperAdminDashboard = () => import('@/views/super-admin/DashboardView.vue')
@@ -8,6 +9,7 @@ const SchoolAdminsView = () => import('@/views/super-admin/SchoolAdminsView.vue'
 const SuperAdminCollectionView = () => import('@/views/super-admin/CollectionView.vue')
 const SuperAdminAnalysisView = () => import('@/views/super-admin/AnalysisView.vue')
 const SuperAdminHealthView = () => import('@/views/super-admin/HealthView.vue')
+const SuperAdminCurriculumStandardsView = () => import('@/views/super-admin/CurriculumStandardsView.vue')
 const SchoolAdminDashboard = () => import('@/views/school-admin/DashboardView.vue')
 const TeachersView = () => import('@/views/school-admin/TeachersView.vue')
 const StudentsView = () => import('@/views/school-admin/StudentsView.vue')
@@ -61,6 +63,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/super-admin/collection', component: SuperAdminCollectionView, meta: { role: 'super_admin' } },
   { path: '/super-admin/analysis', component: SuperAdminAnalysisView, meta: { role: 'super_admin' } },
   { path: '/super-admin/health', component: SuperAdminHealthView, meta: { role: 'super_admin' } },
+  { path: '/super-admin/curriculum-standards', component: SuperAdminCurriculumStandardsView, meta: { role: 'super_admin' } },
   { path: '/school-admin', component: SchoolAdminDashboard, meta: { role: 'school_admin' } },
   { path: '/school-admin/teachers', component: TeachersView, meta: { role: 'school_admin' } },
   { path: '/school-admin/students', component: StudentsView, meta: { role: 'school_admin' } },
@@ -156,20 +159,5 @@ router.beforeEach(async (to) => {
   if (!auth.loaded) {
     await auth.load()
   }
-  if (to.meta.public) {
-    return auth.isAuthenticated ? auth.homePath : true
-  }
-  if (!auth.isAuthenticated) {
-    return '/login'
-  }
-  const requiredRole = to.meta.role
-  if (requiredRole && auth.user?.role !== requiredRole) {
-    return auth.homePath
-  }
-  const requiredRoles = Array.isArray(to.meta.roles) ? to.meta.roles.filter((role): role is string => typeof role === 'string') : []
-  const currentRole = auth.user?.role
-  if (requiredRoles.length && (!currentRole || !requiredRoles.includes(currentRole))) {
-    return auth.homePath
-  }
-  return true
+  return resolveRouteAccess(to.meta, auth.user?.role || null)
 })

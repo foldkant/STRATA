@@ -25,7 +25,9 @@ export default defineConfig({
   },
   build: {
     outDir: '../static/frontend',
-    // Keep hashed chunks from the previous release so already-open tabs can finish navigation.
-    emptyOutDir: false
+    // The post-build cleanup retains the current and previous manifests so open tabs
+    // can still finish lazy-loading while older hashed assets are removed.
+    emptyOutDir: false,
+    manifest: true
   }
 })

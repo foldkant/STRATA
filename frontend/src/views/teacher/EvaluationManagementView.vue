@@ -54,7 +54,7 @@ const summary = computed(() => [
 
 const pageTitle = computed(() => activeTab.value === 'plans' ? '评价方案' : activeTab.value === 'standards' ? '评价标准' : '试用记录')
 const pageDescription = computed(() => activeTab.value === 'plans'
-  ? '围绕本人课程明确学习目标、评价依据和学习任务。'
+  ? '依据已发布课程标准和实际课程内容，明确学习目标、评价依据、学习任务与评分规则。'
   : activeTab.value === 'standards'
     ? '为每个评价指标设置具体表现、星级说明和评分示例。'
     : '记录内容审核、课堂试用、评分培训和评分一致性检查。')
@@ -149,7 +149,29 @@ function exportTrials() {
   window.location.href = evaluationTrialExportUrl()
 }
 
-function requestPublish(type: 'plan' | 'standard', row: EvaluationPlanRow | EvaluationStandardRow) {
+async function requestPublish(type: 'plan' | 'standard', row: EvaluationPlanRow | EvaluationStandardRow) {
+  if (type === 'plan') {
+    try {
+      const detail = await getEvaluationPlan(row.id)
+      const present = new Set((detail.curriculum_references || []).map((item) => item.node_type))
+      const required = [
+        ['core_competency', '核心素养'],
+        ['course_objective', '课程目标'],
+        ['course_content', '课程内容'],
+        ['academic_quality', '学业质量']
+      ] as const
+      const missing = required.filter(([value]) => !present.has(value)).map(([, label]) => label)
+      if (missing.length) {
+        notice.value = `发布前请补充课程标准依据：${missing.join('、')}。`
+        noticeTone.value = 'warning'
+        return
+      }
+    } catch (error) {
+      notice.value = error instanceof ApiError ? error.message : '课程标准依据检查失败。'
+      noticeTone.value = 'error'
+      return
+    }
+  }
   publishTarget.value = { type, id: row.id, title: row.title }
 }
 
@@ -235,7 +257,7 @@ onMounted(load)
             <tr v-for="row in plans" :key="row.id">
               <td data-label="方案"><strong>{{ row.title }}</strong><small>内容版本 {{ row.content_version || '未填写' }}</small></td>
               <td data-label="课程"><strong>{{ row.course?.title || '未绑定课程' }}</strong><small>{{ row.subject.name }}</small></td>
-              <td data-label="内容"><span>{{ row.goal_count }} 个目标</span><span>{{ row.basis_count }} 条依据</span><span>{{ row.task_count }} 个任务</span></td>
+              <td data-label="内容"><span>{{ row.goal_count }} 个目标</span><span>{{ row.basis_count }} 条依据</span><span>{{ row.task_count }} 个任务</span><span>{{ row.curriculum_reference_count ?? row.curriculum_references?.length ?? 0 }} 条课程标准依据</span></td>
               <td data-label="范围">{{ row.scope_label }}</td>
               <td data-label="版本"><span class="evaluation-version" :class="{ published: row.latest_version }">{{ versionLabel(row) }}</span></td>
               <td data-label="操作">

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ApiError } from '@/api/client'
+import { buildStudentStepAnswer } from '@/domain/studentAnswers'
 import {
   acknowledgeClassroomScoreFeedback,
   getStudentClassroom,
@@ -518,12 +519,11 @@ async function submitCurrentStepAnswer() {
   }
   if (!validateQuestionAnswers()) return
   const hasStructuredQuestions = currentQuestions.value.length > 0
-  const answer = hasStructuredQuestions
-    ? {
-        questions: questionAnswerDrafts.value[String(currentStep.value.id)] || {},
-        text: answerDraft.value.trim()
-      }
-    : answerDraft.value.trim()
+  const answer = buildStudentStepAnswer(
+    hasStructuredQuestions,
+    questionAnswerDrafts.value[String(currentStep.value.id)],
+    answerDraft.value
+  )
   if (!hasStructuredQuestions && !String(answer || '').trim()) {
     notice.value = '请先填写内容后再提交。'
     return

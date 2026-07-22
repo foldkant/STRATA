@@ -1,3 +1,5 @@
+import { findStudentPrivacyViolations, isStudentApiUrl, sanitizeStudentPayload } from '@/domain/studentPrivacy'
+
 export type FieldErrors = Record<string, string[]>
 
 export type ApiEnvelope<T> = {
@@ -61,6 +63,15 @@ function errorMessage(payload: unknown, fallback: string): string {
   return fallback
 }
 
+function applyStudentPrivacyBoundary<T>(url: string, data: T): T {
+  if (!isStudentApiUrl(url)) return data
+  const violations = findStudentPrivacyViolations(data)
+  if (import.meta.env.DEV && violations.length) {
+    console.warn('[student-privacy] Removed internal fields from API response:', violations)
+  }
+  return violations.length ? sanitizeStudentPayload(data) : data
+}
+
 export async function apiRequest<T>(url: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   const method = String(options.method || 'GET').toUpperCase()
@@ -95,7 +106,7 @@ export async function apiRequest<T>(url: string, options: RequestInit = {}): Pro
     throw new ApiError(errorMessage(payload, '请求失败'), response.status, payload?.errors || {})
   }
 
-  return (payload as ApiEnvelope<T>).data
+  return applyStudentPrivacyBoundary(url, (payload as ApiEnvelope<T>).data)
 }
 
 export async function uploadRequest<T>(url: string, formData: FormData, method = 'POST'): Promise<T> {
@@ -130,7 +141,7 @@ export async function uploadRequest<T>(url: string, formData: FormData, method =
     throw new ApiError(errorMessage(payload, '上传失败'), response.status, payload?.errors || {})
   }
 
-  return (payload as ApiEnvelope<T>).data
+  return applyStudentPrivacyBoundary(url, (payload as ApiEnvelope<T>).data)
 }
 
 export function toJsonBody(data: unknown): BodyInit {

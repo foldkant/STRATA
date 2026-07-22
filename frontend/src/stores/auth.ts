@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { getCsrf, login, logout, me, type CurrentUser } from '@/api/auth'
+import { homePathForRole } from '@/domain/access'
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -8,13 +9,7 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isAuthenticated: (state) => Boolean(state.user),
-    homePath: (state) => {
-      if (state.user?.role === 'super_admin') return '/super-admin'
-      if (state.user?.role === 'school_admin') return '/school-admin'
-      if (state.user?.role === 'teacher') return '/teacher'
-      if (state.user?.role === 'student') return '/student'
-      return '/login'
-    }
+    homePath: (state) => homePathForRole(state.user?.role)
   },
   actions: {
     async load() {

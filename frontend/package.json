@@ -5,7 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "prebuild": "node scripts/preserve-build-manifest.mjs",
     "build": "vue-tsc --noEmit && vite build",
+    "postbuild": "node scripts/prune-build-assets.mjs",
+    "assets:prune:dry": "node scripts/prune-build-assets.mjs --dry-run",
+    "test": "vitest",
+    "test:run": "vitest run",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
@@ -17,5 +22,10 @@
     "vue": "^3.5.25",
     "vue-router": "^4.6.3",
     "vue-tsc": "^3.1.8"
+  },
+  "devDependencies": {
+    "@vue/test-utils": "^2.4.11",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.10"
   }
 }

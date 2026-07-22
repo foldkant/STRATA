@@ -66,10 +66,12 @@ import {
   type StudentWorkAttachmentRow
 } from '@/api/teacher'
 import NoticeLine from '@/components/NoticeLine.vue'
-import OnlyOfficeEditor from '@/components/OnlyOfficeEditor.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
 import ClassroomChatDock from '@/components/ClassroomChatDock.vue'
-import EvaluationRatingInput from '@/components/evaluation/EvaluationRatingInput.vue'
+import ClassroomEvaluationModal from '@/components/teacher/ClassroomEvaluationModal.vue'
+import ClassroomGroupCollaborationModal from '@/components/teacher/ClassroomGroupCollaborationModal.vue'
+import ClassroomInteractionModals from '@/components/teacher/ClassroomInteractionModals.vue'
+import { classroomControlState } from '@/domain/classroomState'
 import type { EvaluationNotAssessedEntry } from '@/domain/evaluation'
 
 const EChartPanel = defineAsyncComponent(() => import('@/components/EChartPanel.vue'))
@@ -223,7 +225,15 @@ const randomPickDisplayStudent = computed(() => randomPickCurrentStudent.value |
 const selectedStepIndex = computed(() => steps.value.findIndex((item) => item.id === selectedStep.value?.id))
 const currentStepIndex = computed(() => steps.value.findIndex((item) => item.id === currentStep.value?.id))
 const isCurrentSelected = computed(() => Boolean(selectedStep.value && currentStep.value?.id === selectedStep.value.id))
-const canControlStep = computed(() => Boolean(session.value && selectedStep.value && session.value.status !== 'finished'))
+const classroomControls = computed(() => classroomControlState({
+  sessionStatus: session.value?.status || 'draft',
+  stepStatus: session.value?.current_step_status || 'idle',
+  hasSelectedStep: Boolean(selectedStep.value),
+  hasCurrentStep: Boolean(session.value?.current_step),
+  stepCount: steps.value.length,
+  currentStepIndex: currentStepIndex.value
+}))
+const canControlStep = computed(() => classroomControls.value.canPublishStep)
 const stepStatusText = computed(() => session.value?.current_step_status_label || '未投放')
 
 const classroomStats = computed(() => [
@@ -469,11 +479,6 @@ const attendanceStatusOptions: Array<{ status: Exclude<AttendanceStatus, 'not_si
   { status: 'absent', label: '缺勤' }
 ]
 
-const quickAnswerScoreActions = [
-  { action: 'plus', label: '加分' },
-  { action: 'minus', label: '减分' }
-] as const
-
 const filteredAttendanceRows = computed(() => {
   const rows = attendanceData.value?.rows || []
   if (attendanceFilter.value === 'all') return rows
@@ -609,37 +614,6 @@ function isQuickAnswerActivity(activity: ClassroomActivityRow) {
 
 function isRandomPickActivity(activity: ClassroomActivityRow) {
   return activity.metadata?.command === 'random_pick'
-}
-
-function attendanceStatusClass(status: AttendanceStatus) {
-  if (status === 'signed') return 'status-active'
-  if (status === 'late') return 'status-warning'
-  if (status === 'leave') return 'status-locked'
-  if (status === 'absent') return 'status-closed'
-  return 'status-disabled'
-}
-
-function quickAnswerScoreClass(row: QuickAnswerRow) {
-  if (row.score_action === 'plus') return 'status-active'
-  if (row.score_action === 'minus') return 'status-closed'
-  return 'status-disabled'
-}
-
-function quickAnswerScoreText(row: QuickAnswerRow) {
-  if (row.score === null || row.score === undefined) return '未评分'
-  return row.score > 0 ? `+${row.score}` : String(row.score)
-}
-
-function randomPickScoreClass(row: RandomPickStudentRow | null) {
-  if (!row || row.score === null || row.score === undefined) return 'status-disabled'
-  if (row.score_action === 'plus' || row.score > 0) return 'status-active'
-  if (row.score_action === 'minus' || row.score < 0) return 'status-closed'
-  return 'status-disabled'
-}
-
-function randomPickScoreText(row: RandomPickStudentRow | null) {
-  if (!row || row.score === null || row.score === undefined) return '未评分'
-  return row.score > 0 ? `+${row.score}` : String(row.score)
 }
 
 function progressStatusClass(row: ClassroomStepProgressRow) {
@@ -810,10 +784,6 @@ function onGroupingDrop(groupNo: number) {
   draggedGroupingStudentId.value = null
 }
 
-function groupingStudentGroup(studentId: number) {
-  return groupingDraft.value.find((group) => group.members.some((member) => member.student_id === studentId))?.group_no || 1
-}
-
 function setGroupingStudentGroup(studentId: number, event: Event) {
   const target = event.target as HTMLSelectElement | null
   if (target) moveGroupingStudent(studentId, Number(target.value))
@@ -861,28 +831,6 @@ async function closeGroupCollaboration() {
   } finally {
     groupCollabLoading.value = false
   }
-}
-
-function openGroupDocument(group: ClassroomGroupRow) {
-  activeGroupDocument.value = group
-}
-
-function closeGroupDocument() {
-  activeGroupDocument.value = null
-}
-
-function groupMembersText(group: ClassroomGroupRow) {
-  return group.members.map((member) => member.display_name || member.username).join('、') || '暂无成员'
-}
-
-function groupStoragePercent(group: ClassroomGroupRow) {
-  const quota = Number(groupCollaboration.value?.storage_quota_mb || 0) * 1024 * 1024
-  if (!quota) return 0
-  return Math.min(100, Math.round((group.used_storage_bytes / quota) * 100))
-}
-
-function groupStorageStyle(group: ClassroomGroupRow) {
-  return { width: `${groupStoragePercent(group)}%` }
 }
 
 function handleRealtimeClassroomEvent(payload: { type?: string }) {
@@ -989,10 +937,6 @@ function setTeacherEvaluationNotAssessed(criterionId: string, value: EvaluationN
   }
   teacherEvaluationRatings.value = ratings
   teacherEvaluationNotAssessed.value = notAssessed
-}
-
-function ratingAverageText(value: number | null | undefined) {
-  return value === null || value === undefined ? '暂无' : `${value.toFixed(1)} 星`
 }
 
 async function submitTeacherEvaluation() {
@@ -1808,9 +1752,9 @@ onUnmounted(() => {
           <RouterLink class="secondary-button" to="/teacher/classroom">课堂列表</RouterLink>
           <RouterLink v-if="session.lesson" class="secondary-button" :to="`/teacher/lessons/${session.lesson.id}/design`">课时设计</RouterLink>
           <button class="secondary-button" type="button" :disabled="loading" @click="refreshConsole">刷新状态</button>
-          <button v-if="session.status === 'draft'" class="primary-button" type="button" :disabled="saving" @click="startSession">开始课堂</button>
-          <button v-if="session.status === 'running'" class="primary-button danger" type="button" :disabled="saving" @click="finishSession">结束课堂</button>
-          <button v-if="session.status === 'finished'" class="primary-button" type="button" :disabled="saving" @click="restartSession">重新开始</button>
+          <button v-if="classroomControls.canStart" class="primary-button" type="button" :disabled="saving" @click="startSession">开始课堂</button>
+          <button v-if="classroomControls.canFinish" class="primary-button danger" type="button" :disabled="saving" @click="finishSession">结束课堂</button>
+          <button v-if="classroomControls.canRestart" class="primary-button" type="button" :disabled="saving" @click="restartSession">重新开始</button>
         </div>
       </header>
 
@@ -1897,13 +1841,13 @@ onUnmounted(() => {
               <button class="primary-button" type="button" :disabled="saving || !canControlStep" @click="publishSelectedStep">
                 {{ session.status === 'draft' ? '开始并投放' : isCurrentSelected ? '重新投放' : '投放此环节' }}
               </button>
-              <button class="secondary-button" type="button" :disabled="saving || session.current_step_status !== 'open'" @click="lockCurrentStep">
+              <button class="secondary-button" type="button" :disabled="saving || !classroomControls.canLockStep" @click="lockCurrentStep">
                 锁定提交
               </button>
-              <button class="secondary-button" type="button" :disabled="saving || !session.current_step || session.current_step_status === 'closed'" @click="closeCurrentStep">
+              <button class="secondary-button" type="button" :disabled="saving || !classroomControls.canCloseStep" @click="closeCurrentStep">
                 关闭环节
               </button>
-              <button class="secondary-button" type="button" :disabled="saving || session.status === 'finished' || !steps.length || currentStepIndex >= steps.length - 1" @click="publishNextStep">
+              <button class="secondary-button" type="button" :disabled="saving || !classroomControls.canPublishNextStep" @click="publishNextStep">
                 下一环节
               </button>
             </div>
@@ -2181,369 +2125,61 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <div v-if="evaluationOpen" class="modal-backdrop classroom-evaluation-backdrop" role="presentation" @click.self="evaluationOpen = false">
-        <section class="entity-modal classroom-evaluation-modal runtime-evaluation-modal" role="dialog" aria-modal="true" aria-labelledby="classroom-evaluation-title">
-          <header class="modal-header">
-            <div>
-              <h2 id="classroom-evaluation-title">课堂评价情况</h2>
-              <p>{{ session.title }} · {{ classLabel() }} · 评价内容来自课时设计</p>
-            </div>
-            <button class="icon-button" type="button" aria-label="关闭" :disabled="evaluationLoading" @click="evaluationOpen = false">×</button>
-          </header>
+      <ClassroomEvaluationModal
+        :open="evaluationOpen"
+        :session-title="session.title"
+        :class-label="classLabel()"
+        :loading="evaluationLoading"
+        :runtime-enabled="runtimeEvaluationEnabled"
+        :enabled-count="evaluationEnabledCount"
+        :summary-items="evaluationSummaryItems"
+        :data="evaluationData"
+        :enable-teacher="evaluationForm.enable_teacher"
+        :selected-student-id="selectedTeacherEvalStudentId"
+        :selected-student="selectedTeacherEvalStudent"
+        :teacher-criteria="teacherEvaluationCriteria"
+        :ratings="teacherEvaluationRatings"
+        :not-assessed="teacherEvaluationNotAssessed"
+        :comment="teacherEvaluationComment"
+        @close="evaluationOpen = false"
+        @refresh="loadEvaluation()"
+        @toggle-runtime="setRuntimeEvaluationEnabled"
+        @select-student="selectTeacherEvaluationStudent"
+        @rating="setTeacherEvaluationRating"
+        @not-assessed="setTeacherEvaluationNotAssessed"
+        @update:comment="teacherEvaluationComment = $event"
+        @submit="submitTeacherEvaluation"
+      />
 
-          <div class="classroom-evaluation-body runtime-evaluation-body">
-            <section class="evaluation-summary-panel runtime-evaluation-overview">
-              <header class="evaluation-section-head">
-                <div>
-                  <span>完成情况</span>
-                  <strong>按 5 星评价统计</strong>
-                </div>
-                <button class="secondary-button mini" type="button" :disabled="evaluationLoading" @click="loadEvaluation()">刷新</button>
-              </header>
-              <div class="evaluation-runtime-switch-card" :class="{ active: runtimeEvaluationEnabled }">
-                <div>
-                  <span>{{ runtimeEvaluationEnabled ? '课堂评价已开启' : '课堂评价未开启' }}</span>
-                  <strong>{{ runtimeEvaluationEnabled ? `${evaluationEnabledCount} 类评价已开放` : '默认关闭' }}</strong>
-                </div>
-                <button
-                  class="primary-button mini"
-                  type="button"
-                  :class="{ danger: runtimeEvaluationEnabled }"
-                  :disabled="evaluationLoading"
-                  @click="setRuntimeEvaluationEnabled(!runtimeEvaluationEnabled)"
-                >
-                  {{ runtimeEvaluationEnabled ? '关闭评价' : '开启评价' }}
-                </button>
-              </div>
-              <div class="evaluation-summary-grid">
-                <article v-for="item in evaluationSummaryItems" :key="item.type">
-                  <span>{{ item.label }}{{ item.summary?.enabled ? ' · 已配置' : ' · 未配置' }}</span>
-                  <strong>{{ item.summary?.submitted || 0 }}/{{ item.summary?.total || 0 }}</strong>
-                  <small>
-                    已评分 {{ item.summary?.rated_item_count || 0 }}/{{ item.summary?.total_item_count || 0 }} 项
-                    <template v-if="item.summary?.not_assessed_item_count"> · 暂不评价 {{ item.summary.not_assessed_item_count }} 项</template>
-                    · 平均 {{ ratingAverageText(item.summary?.average) }}
-                  </small>
-                </article>
-              </div>
-
-              <div class="runtime-evaluation-criteria-list">
-                <section v-for="item in evaluationSummaryItems" :key="`criteria-${item.type}`">
-                  <header>
-                    <strong>{{ item.label }}评价项</strong>
-                    <span>{{ item.criteria.length }} 项</span>
-                  </header>
-                  <article v-for="criterion in item.criteria" :key="criterion.id">
-                    <strong>{{ criterion.title }}</strong>
-                    <small>{{ criterion.description || '未填写观察说明。' }}</small>
-                  </article>
-                  <p v-if="!item.criteria.length" class="empty">未在课时设计中设置{{ item.label }}评价项。</p>
-                </section>
-              </div>
-            </section>
-
-            <section class="teacher-evaluation-panel">
-              <header class="evaluation-section-head">
-                <div>
-                  <span>师评</span>
-                  <strong>选择学生后填写星级或暂不评价</strong>
-                </div>
-              </header>
-              <div class="teacher-evaluation-layout">
-                <div class="teacher-evaluation-student-list">
-                  <button
-                    v-for="row in evaluationData?.students || []"
-                    :key="row.student.id"
-                    type="button"
-                    :class="{ active: selectedTeacherEvalStudentId === row.student.id }"
-                    @click="selectTeacherEvaluationStudent(row.student.id)"
-                  >
-                    <strong>{{ row.student.display_name || row.student.username }}</strong>
-                    <span>
-                      {{ row.profile?.student_no || row.student.username }}
-                      <template v-if="row.peer_submission_count"> · 互评 {{ row.peer_submission_count }}</template>
-                      <template v-if="row.teacher_submission"> · 已师评</template>
-                    </span>
-                  </button>
-                  <p v-if="!(evaluationData?.students || []).length" class="empty">当前班级暂无学生。</p>
-                </div>
-
-                <div class="teacher-evaluation-form">
-                  <p v-if="!evaluationForm.enable_teacher" class="evaluation-warning">师评未在课时设计中开启，课堂内不能填写师评。</p>
-                  <template v-if="selectedTeacherEvalStudent">
-                    <div class="teacher-evaluation-target">
-                      <strong>{{ selectedTeacherEvalStudent.student.display_name || selectedTeacherEvalStudent.student.username }}</strong>
-                      <span>
-                        自评：{{ selectedTeacherEvalStudent.self_submission ? '已提交' : '未提交' }} ·
-                        互评平均：{{ ratingAverageText(selectedTeacherEvalStudent.peer_average) }}
-                      </span>
-                    </div>
-                    <div class="evaluation-star-list">
-                      <EvaluationRatingInput
-                        v-for="criterion in teacherEvaluationCriteria"
-                        :key="criterion.id"
-                        :criterion="criterion"
-                        :rating="teacherEvaluationRatings[criterion.id] || 0"
-                        :not-assessed="teacherEvaluationNotAssessed[criterion.id] || null"
-                        :disabled="evaluationLoading"
-                        @rating="setTeacherEvaluationRating"
-                        @not-assessed="setTeacherEvaluationNotAssessed"
-                      />
-                      <p v-if="!teacherEvaluationCriteria.length" class="empty">请先回到课时设计设置师评评价项。</p>
-                    </div>
-                    <label class="evaluation-comment-box">
-                      <span>师评备注</span>
-                      <textarea v-model="teacherEvaluationComment" maxlength="1000" rows="3" placeholder="可选，记录课堂观察或后续辅导建议。"></textarea>
-                    </label>
-                  </template>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <footer class="modal-actions evaluation-modal-actions">
-            <span>评价内容在课时设计中维护；没有足够材料时选择暂不评价。</span>
-            <button class="secondary-button" type="button" :disabled="evaluationLoading" @click="evaluationOpen = false">关闭</button>
-            <button class="primary-button" type="button" :disabled="evaluationLoading || !selectedTeacherEvalStudent || !evaluationForm.enable_teacher" @click="submitTeacherEvaluation">
-              保存师评
-            </button>
-          </footer>
-        </section>
-      </div>
-
-      <div v-if="groupCollabOpen" class="modal-backdrop" role="presentation" @click.self="groupCollabOpen = false">
-        <section class="entity-modal group-collaboration-modal" role="dialog" aria-modal="true" aria-labelledby="group-collaboration-title">
-          <header class="modal-header">
-            <div>
-              <h2 id="group-collaboration-title">小组分组合作</h2>
-              <p>{{ session.title }} · {{ classLabel() }}</p>
-            </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="groupCollabOpen = false">×</button>
-          </header>
-
-          <div class="group-collaboration-body">
-            <section class="group-collaboration-settings">
-              <label>
-                <span>每组人数</span>
-                <input v-model.number="groupCollabForm.group_size" type="number" min="2" max="12" />
-              </label>
-              <label>
-                <span>分组方式</span>
-                <AppSelect v-model="groupCollabForm.grouping_strategy" aria-label="分组方式">
-                  <option
-                    v-for="item in groupingStrategyOptions"
-                    :key="item.value"
-                    :value="item.value"
-                    :title="item.description"
-                  >
-                    {{ item.label }}
-                  </option>
-                </AppSelect>
-              </label>
-              <label>
-                <span>协作文档</span>
-                <AppSelect v-model="groupCollabForm.document_type">
-                  <option value="docx">Word 文档</option>
-                  <option value="pptx">PPT 演示</option>
-                  <option value="xlsx">Excel 表格</option>
-                </AppSelect>
-              </label>
-              <label>
-                <span>小组空间</span>
-                <div class="group-storage-input">
-                  <input
-                    v-model.number="groupCollabForm.storage_quota_mb"
-                    type="number"
-                    min="10"
-                    max="2048"
-                    aria-label="小组空间容量"
-                  />
-                  <span>MB</span>
-                </div>
-              </label>
-              <label class="group-collaboration-check">
-                <input v-model="groupCollabForm.allow_onlyoffice_edit" type="checkbox" />
-                <span>允许学生在线协作编辑</span>
-              </label>
-              <label class="group-collaboration-check">
-                <input v-model="groupCollabForm.allow_student_upload" type="checkbox" />
-                <span>允许学生上传小组共享文件</span>
-              </label>
-              <div class="group-collaboration-actions">
-                <button class="primary-button" type="button" :disabled="groupCollabLoading" @click="saveGroupCollaboration(false)">
-                  {{ groupCollaboration ? '保存设置' : '开启小组合作' }}
-                </button>
-                <button class="secondary-button" type="button" :disabled="groupCollabLoading || !groupCollaboration" @click="saveGroupCollaboration(true)">
-                  {{ groupingRun ? '重新计算' : '生成分组候选' }}
-                </button>
-                <button
-                  v-if="groupCollaboration?.status === 'open'"
-                  class="secondary-button danger"
-                  type="button"
-                  :disabled="groupCollabLoading"
-                  @click="closeGroupCollaboration"
-                >
-                  关闭合作
-                </button>
-              </div>
-            </section>
-
-            <section v-if="groupingRun" class="grouping-candidate-workspace">
-              <header class="grouping-candidate-header">
-                <div>
-                  <span>{{ groupingRun.status_label }}</span>
-                  <strong>选择并调整分组方案</strong>
-                </div>
-                <small>锁定的学生在重新计算时保持当前小组</small>
-              </header>
-
-              <p v-if="groupingFallbackMessage" class="grouping-fallback-message" role="status">{{ groupingFallbackMessage }}</p>
-
-              <div class="grouping-candidate-tabs" role="tablist" aria-label="分组候选">
-                <button
-                  v-for="candidate in groupingRun.candidates"
-                  :key="candidate.key"
-                  type="button"
-                  :class="{ active: groupingCandidateKey === candidate.key }"
-                  @click="selectGroupingCandidate(candidate.key)"
-                >
-                  <strong>{{ candidate.label }}</strong>
-                  <span>{{ candidate.assignments.length }} 组 · 人数差 {{ candidate.fairness.group_size_gap }}</span>
-                </button>
-              </div>
-
-              <div v-if="selectedGroupingCandidate" class="grouping-plan-editor">
-                <article
-                  v-for="group in groupingDraft"
-                  :key="group.group_no"
-                  class="grouping-draft-group"
-                  @dragover.prevent
-                  @drop="onGroupingDrop(group.group_no)"
-                >
-                  <header>
-                    <strong>第{{ group.group_no }}组</strong>
-                    <span>{{ group.members.length }} 人</span>
-                  </header>
-                  <div class="grouping-draft-members">
-                    <div
-                      v-for="member in group.members"
-                      :key="member.student_id"
-                      class="grouping-draft-member"
-                      :class="{ locked: groupingLocks[member.student_id] }"
-                      :draggable="!groupingLocks[member.student_id]"
-                      @dragstart="onGroupingDragStart(member.student_id)"
-                      @dragend="draggedGroupingStudentId = null"
-                    >
-                      <div>
-                        <strong>{{ member.display_name || member.username }}</strong>
-                        <small>{{ member.student_no || member.username }}</small>
-                      </div>
-                      <label>
-                        <span class="sr-only">调整小组</span>
-                        <AppSelect
-                          :value="groupingStudentGroup(member.student_id)"
-                          :disabled="groupingLocks[member.student_id]"
-                          @change="setGroupingStudentGroup(member.student_id, $event)"
-                        >
-                          <option v-for="target in groupingDraft" :key="target.group_no" :value="target.group_no">第{{ target.group_no }}组</option>
-                        </AppSelect>
-                      </label>
-                      <label>
-                        <span class="sr-only">调整角色</span>
-                        <AppSelect v-model="member.role">
-                          <option value="coordinator">协调</option>
-                          <option value="recorder">记录</option>
-                          <option value="resource">资源</option>
-                          <option value="presenter">展示</option>
-                          <option value="verifier">核验</option>
-                          <option value="member">成员</option>
-                        </AppSelect>
-                      </label>
-                      <label class="grouping-lock-toggle">
-                        <input v-model="groupingLocks[member.student_id]" type="checkbox" />
-                        <span>锁定</span>
-                      </label>
-                    </div>
-                  </div>
-                </article>
-              </div>
-
-              <div class="grouping-confirm-row">
-                <label>
-                  <span>调整说明</span>
-                  <input v-model="groupingNote" maxlength="500" placeholder="可选，记录本次人工调整原因" />
-                </label>
-                <button class="primary-button" type="button" :disabled="groupCollabLoading || !selectedGroupingCandidate" @click="confirmGroupingPlan">
-                  确认启用
-                </button>
-              </div>
-            </section>
-
-            <section class="group-collaboration-list">
-              <header>
-                <div>
-                  <span>{{ groupCollaborationOpenText }}</span>
-                  <strong>分组与共享空间</strong>
-                </div>
-                <button class="secondary-button mini" type="button" :disabled="groupCollabLoading" @click="loadGroupCollaboration()">刷新</button>
-              </header>
-
-              <div v-if="groupRows.length" class="group-card-grid">
-                <article v-for="group in groupRows" :key="group.id" class="group-card">
-                  <header>
-                    <div>
-                      <span>{{ group.members.length }} 名成员</span>
-                      <strong>{{ group.name }}</strong>
-                    </div>
-                    <button class="primary-button mini" type="button" @click="openGroupDocument(group)">打开协作文档</button>
-                  </header>
-                  <p>{{ groupMembersText(group) }}</p>
-                  <div class="group-member-chips">
-                    <span v-for="member in group.members" :key="member.id" :class="{ leader: member.role === 'leader' }">
-                      {{ member.display_name || member.username }}{{ member.role === 'leader' ? ' · 组长' : '' }}
-                    </span>
-                  </div>
-                  <div class="group-storage-line">
-                    <div>
-                      <strong>{{ group.used_storage_mb }}MB</strong>
-                      <span>/ {{ groupCollaboration?.storage_quota_mb || 0 }}MB</span>
-                    </div>
-                    <i><em :style="groupStorageStyle(group)"></em></i>
-                  </div>
-                  <div class="group-file-list">
-                    <strong>共享文件 {{ group.file_count }}</strong>
-                    <a v-for="file in group.files.slice(0, 4)" :key="file.id" :href="file.attachment_url" download>
-                      {{ file.attachment_name }} · {{ formatFileSize(file.file_size) }}
-                    </a>
-                    <span v-if="!group.files.length">暂无上传文件</span>
-                  </div>
-                </article>
-              </div>
-              <p v-else class="empty">保存设置后系统会按当前班级学生生成默认分组。</p>
-            </section>
-          </div>
-
-          <footer class="modal-actions">
-            <span>学生只看到小组、角色和任务，不显示内部判断依据。</span>
-            <button class="primary-button" type="button" @click="groupCollabOpen = false">完成</button>
-          </footer>
-        </section>
-      </div>
-
-      <div v-if="activeGroupDocument" class="modal-backdrop group-document-backdrop" role="presentation" @click.self="closeGroupDocument">
-        <section class="entity-modal group-document-modal" role="dialog" aria-modal="true" aria-labelledby="group-document-title">
-          <header class="modal-header">
-            <div>
-              <h2 id="group-document-title">{{ activeGroupDocument.name }}协作文档</h2>
-              <p>{{ activeGroupDocument.document.attachment_name }}</p>
-            </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeGroupDocument">×</button>
-          </header>
-          <div class="group-document-editor">
-            <OnlyOfficeEditor :group-id="activeGroupDocument.id" mode="edit" />
-          </div>
-        </section>
-      </div>
+      <ClassroomGroupCollaborationModal
+        v-model:form="groupCollabForm"
+        v-model:candidate-key="groupingCandidateKey"
+        v-model:grouping-draft="groupingDraft"
+        v-model:grouping-locks="groupingLocks"
+        v-model:grouping-note="groupingNote"
+        v-model:active-document="activeGroupDocument"
+        :open="groupCollabOpen"
+        :loading="groupCollabLoading"
+        :session-title="session.title"
+        :class-label="classLabel()"
+        :collaboration="groupCollaboration"
+        :strategy-options="groupingStrategyOptions"
+        :grouping-run="groupingRun"
+        :selected-candidate="selectedGroupingCandidate"
+        :fallback-message="groupingFallbackMessage"
+        :collaboration-status-text="groupCollaborationOpenText"
+        :groups="groupRows"
+        @close="groupCollabOpen = false"
+        @save="saveGroupCollaboration"
+        @close-collaboration="closeGroupCollaboration"
+        @select-candidate="selectGroupingCandidate"
+        @drag-start="onGroupingDragStart"
+        @drag-end="draggedGroupingStudentId = null"
+        @drop="onGroupingDrop"
+        @set-student-group="setGroupingStudentGroup"
+        @confirm="confirmGroupingPlan"
+        @refresh="loadGroupCollaboration()"
+      />
 
       <div v-if="broadcastDialogOpen" class="modal-backdrop" role="presentation" @click.self="closeBroadcastDialog">
         <section class="entity-modal broadcast-setup-modal" role="dialog" aria-modal="true" aria-labelledby="broadcast-setup-title">
@@ -2614,266 +2250,41 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <div v-if="attendanceOpen && attendanceActivity" class="modal-backdrop" role="presentation" @click.self="attendanceOpen = false">
-        <section class="entity-modal attendance-modal" role="dialog" aria-modal="true" aria-labelledby="attendance-title">
-          <header class="modal-header">
-            <div>
-              <h2 id="attendance-title">课堂签到</h2>
-              <p>{{ session.title }} · {{ classLabel() }}</p>
-            </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="attendanceOpen = false">×</button>
-          </header>
+      <ClassroomInteractionModals
+        v-model:attendance-filter="attendanceFilter"
+        :session-title="session.title"
+        :class-label="classLabel()"
+        :attendance-open="attendanceOpen"
+        :attendance-loading="attendanceLoading"
+        :attendance-activity="attendanceActivity"
+        :attendance-data="attendanceData"
+        :attendance-rows="filteredAttendanceRows"
+        :attendance-actions="attendanceStatusOptions"
+        :quick-answer-open="quickAnswerOpen"
+        :quick-answer-loading="quickAnswerLoading"
+        :quick-answer-activity="quickAnswerActivity"
+        :quick-answer-data="quickAnswerData"
+        :random-pick-open="randomPickOpen"
+        :random-pick-loading="randomPickLoading"
+        :random-pick-activity="randomPickActivity"
+        :random-pick-data="randomPickData"
+        :random-pick-animating="randomPickAnimating"
+        :random-pick-students="randomPickStudents"
+        :random-pick-current-student-id="randomPickCurrentStudentId"
+        :random-pick-picked-student="randomPickPickedStudent"
+        :random-pick-display-student="randomPickDisplayStudent"
+        @close-attendance="attendanceOpen = false"
+        @refresh-attendance="openAttendancePanel"
+        @close-activity="closeActivity"
+        @mark-attendance="markAttendance"
+        @close-quick-answer="closeQuickAnswerPanel"
+        @score-quick-answer="scoreQuickAnswer"
+        @close-random-pick="closeRandomPickPanel"
+        @start-random-pick="startRandomPickDraw"
+        @score-random-pick="scoreRandomPick"
+      />
 
-          <div class="attendance-summary-grid">
-            <button type="button" :class="{ active: attendanceFilter === 'all' }" @click="attendanceFilter = 'all'">
-              <strong>{{ attendanceData?.summary.total || 0 }}</strong>
-              <span>全部</span>
-            </button>
-            <button type="button" :class="{ active: attendanceFilter === 'signed' }" @click="attendanceFilter = 'signed'">
-              <strong>{{ attendanceData?.summary.signed || 0 }}</strong>
-              <span>已签到</span>
-            </button>
-            <button type="button" :class="{ active: attendanceFilter === 'late' }" @click="attendanceFilter = 'late'">
-              <strong>{{ attendanceData?.summary.late || 0 }}</strong>
-              <span>迟到</span>
-            </button>
-            <button type="button" :class="{ active: attendanceFilter === 'leave' }" @click="attendanceFilter = 'leave'">
-              <strong>{{ attendanceData?.summary.leave || 0 }}</strong>
-              <span>请假</span>
-            </button>
-            <button type="button" :class="{ active: attendanceFilter === 'absent' }" @click="attendanceFilter = 'absent'">
-              <strong>{{ attendanceData?.summary.absent || 0 }}</strong>
-              <span>缺勤</span>
-            </button>
-            <button type="button" :class="{ active: attendanceFilter === 'not_signed' }" @click="attendanceFilter = 'not_signed'">
-              <strong>{{ attendanceData?.summary.not_signed || 0 }}</strong>
-              <span>未签到</span>
-            </button>
-          </div>
-
-          <div class="attendance-toolbar">
-            <span>{{ attendanceActivity.status_label }} · {{ formatDateTime(attendanceActivity.opened_at) }}</span>
-            <div>
-              <button class="secondary-button mini" type="button" :disabled="attendanceLoading" @click="openAttendancePanel(attendanceActivity)">刷新名单</button>
-              <button class="secondary-button mini" type="button" :disabled="attendanceLoading" @click="closeActivity(attendanceActivity); attendanceOpen = false">关闭签到</button>
-            </div>
-          </div>
-
-          <div class="attendance-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>学生</th>
-                  <th>账号</th>
-                  <th>学号</th>
-                  <th>层级</th>
-                  <th>状态</th>
-                  <th>时间/备注</th>
-                  <th>手工标记</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in filteredAttendanceRows" :key="row.student_id">
-                  <td>{{ row.display_name }}</td>
-                  <td>{{ row.username }}</td>
-                  <td>{{ row.student_no || '-' }}</td>
-                  <td>{{ row.current_layer ? `${row.current_layer} ${row.current_layer_label}` : '-' }}</td>
-                  <td><span class="status-pill" :class="attendanceStatusClass(row.status)">{{ row.status_label }}</span></td>
-                  <td>
-                    <span class="attendance-note">
-                      {{ row.occurred_at ? formatDateTime(row.occurred_at) : '-' }}
-                      <template v-if="row.note"> · {{ row.note }}</template>
-                    </span>
-                  </td>
-                  <td>
-                    <div class="attendance-actions">
-                      <button
-                        v-for="item in attendanceStatusOptions"
-                        :key="`${row.student_id}-${item.status}`"
-                        type="button"
-                        :disabled="attendanceLoading"
-                        @click="markAttendance(row, item.status)"
-                      >
-                        {{ item.label }}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-if="attendanceLoading" class="empty">正在加载签到信息...</p>
-            <p v-else-if="!filteredAttendanceRows.length" class="empty">当前筛选下没有学生。</p>
-          </div>
-        </section>
-      </div>
-
-      <div v-if="quickAnswerOpen && quickAnswerActivity" class="modal-backdrop" role="presentation" @click.self="closeQuickAnswerPanel">
-        <section class="entity-modal attendance-modal quick-answer-modal" role="dialog" aria-modal="true" aria-labelledby="quick-answer-title">
-          <header class="modal-header">
-            <div>
-              <h2 id="quick-answer-title">课堂抢答</h2>
-              <p>{{ session.title }} · {{ classLabel() }}</p>
-            </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeQuickAnswerPanel">×</button>
-          </header>
-
-          <div class="attendance-summary-grid quick-answer-summary-grid">
-            <button type="button" class="active">
-              <strong>{{ quickAnswerData?.summary.total || 0 }}</strong>
-              <span>抢答人数</span>
-            </button>
-            <button type="button">
-              <strong>{{ quickAnswerData?.summary.scored || 0 }}</strong>
-              <span>已评分</span>
-            </button>
-            <button type="button">
-              <strong>+{{ quickAnswerData?.score_defaults.plus ?? 2 }}</strong>
-              <span>默认加分</span>
-            </button>
-            <button type="button">
-              <strong>{{ quickAnswerData?.score_defaults.minus ?? -1 }}</strong>
-              <span>默认减分</span>
-            </button>
-          </div>
-
-          <div class="attendance-toolbar">
-            <span>{{ quickAnswerActivity.status_label }} · {{ formatDateTime(quickAnswerActivity.opened_at) }}</span>
-            <div>
-              <span class="live-refresh-indicator">自动更新中</span>
-              <button class="secondary-button mini" type="button" :disabled="quickAnswerLoading" @click="closeActivity(quickAnswerActivity); closeQuickAnswerPanel()">关闭抢答</button>
-            </div>
-          </div>
-
-          <div class="attendance-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>顺序</th>
-                  <th>学生</th>
-                  <th>账号</th>
-                  <th>学号</th>
-                  <th>层级</th>
-                  <th>抢答时间</th>
-                  <th>得分</th>
-                  <th>评分</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in quickAnswerData?.rows || []" :key="row.event_id">
-                  <td><span class="quick-rank-badge">{{ row.rank }}</span></td>
-                  <td>{{ row.display_name }}</td>
-                  <td>{{ row.username }}</td>
-                  <td>{{ row.student_no || '-' }}</td>
-                  <td>{{ row.current_layer ? `${row.current_layer} ${row.current_layer_label}` : '-' }}</td>
-                  <td>{{ formatDateTime(row.responded_at) }}</td>
-                  <td><span class="status-pill" :class="quickAnswerScoreClass(row)">{{ quickAnswerScoreText(row) }}</span></td>
-                  <td>
-                    <div class="attendance-actions quick-answer-actions">
-                      <button
-                        v-for="item in quickAnswerScoreActions"
-                        :key="`${row.student_id}-${item.action}`"
-                        type="button"
-                        :class="item.action === 'minus' ? 'danger-action' : ''"
-                        :disabled="quickAnswerLoading"
-                        @click="scoreQuickAnswer(row, item.action)"
-                      >
-                        {{ item.label }}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-if="quickAnswerLoading" class="empty">正在加载抢答结果...</p>
-            <p v-else-if="!(quickAnswerData?.rows || []).length" class="empty">抢答已开启，等待学生响应。</p>
-          </div>
-        </section>
-      </div>
-
-      <div v-if="randomPickOpen" class="modal-backdrop" role="presentation" @click.self="closeRandomPickPanel">
-        <section class="entity-modal attendance-modal random-pick-modal" role="dialog" aria-modal="true" aria-labelledby="random-pick-title">
-          <header class="modal-header">
-            <div>
-              <h2 id="random-pick-title">随机点名</h2>
-              <p>{{ session.title }} · {{ classLabel() }}</p>
-            </div>
-            <button class="icon-button" type="button" aria-label="关闭" @click="closeRandomPickPanel">×</button>
-          </header>
-
-          <div class="random-pick-layout">
-            <section class="random-pick-draw-panel">
-              <div class="random-pick-spotlight" :class="{ rolling: randomPickAnimating, picked: Boolean(randomPickPickedStudent) }">
-                <span>{{ randomPickAnimating ? '正在抽取' : randomPickPickedStudent ? '已抽中' : '准备点名' }}</span>
-                <strong>{{ randomPickDisplayStudent?.display_name || randomPickDisplayStudent?.username || '点击随机抽取' }}</strong>
-                <small>
-                  默认加分 +{{ randomPickData?.score_defaults.plus ?? 2 }} · 默认减分 {{ randomPickData?.score_defaults.minus ?? -1 }}
-                </small>
-              </div>
-              <button
-                class="primary-button random-pick-main-button"
-                type="button"
-                :disabled="randomPickLoading || randomPickAnimating || Boolean(randomPickActivity) || !randomPickStudents.length"
-                @click="startRandomPickDraw"
-              >
-                {{ randomPickActivity ? '已投放给学生' : randomPickAnimating ? '抽取中...' : '随机抽取' }}
-              </button>
-              <button
-                v-if="randomPickActivity"
-                class="secondary-button"
-                type="button"
-                :disabled="randomPickLoading"
-                @click="closeActivity(randomPickActivity)"
-              >
-                关闭点名
-              </button>
-            </section>
-
-            <section class="random-pick-list-panel">
-              <div class="class-check-header">
-                <span>共 {{ randomPickStudents.length }} 名学生</span>
-                <span v-if="randomPickLoading">正在同步...</span>
-              </div>
-              <div class="random-pick-student-grid">
-                <span
-                  v-for="row in randomPickStudents"
-                  :key="row.student_id"
-                  class="random-pick-student-chip"
-                  :class="{
-                    rolling: randomPickCurrentStudentId === row.student_id && randomPickAnimating,
-                    picked: randomPickPickedStudent?.student_id === row.student_id
-                  }"
-                >
-                  <strong>{{ row.display_name || row.username }}</strong>
-                  <small>{{ row.student_no || row.username }}{{ row.current_layer ? ` · ${row.current_layer}` : '' }}</small>
-                </span>
-              </div>
-              <p v-if="!randomPickLoading && !randomPickStudents.length" class="empty">当前班级没有可点名学生。</p>
-            </section>
-
-            <section v-if="randomPickPickedStudent" class="random-pick-score-panel">
-              <header>
-                <div>
-                  <span>评分</span>
-                  <strong>{{ randomPickPickedStudent.display_name || randomPickPickedStudent.username }}</strong>
-                </div>
-                <span class="status-pill" :class="randomPickScoreClass(randomPickPickedStudent)">
-                  {{ randomPickScoreText(randomPickPickedStudent) }}
-                </span>
-              </header>
-              <p>教师评分后，学生端会收到一次性弹窗反馈。</p>
-              <div class="attendance-actions random-pick-score-actions">
-                <button type="button" :disabled="randomPickLoading || !randomPickActivity" @click="scoreRandomPick('plus')">
-                  加分 +{{ randomPickData?.score_defaults.plus ?? 2 }}
-                </button>
-                <button class="danger-action" type="button" :disabled="randomPickLoading || !randomPickActivity" @click="scoreRandomPick('minus')">
-                  减分 {{ randomPickData?.score_defaults.minus ?? -1 }}
-                </button>
-              </div>
-            </section>
-          </div>
-        </section>
-      </div>
-    </section>
+      </section>
     <ClassroomChatDock
       v-if="session"
       :session-id="session.id"

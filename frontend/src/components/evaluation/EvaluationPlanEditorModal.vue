@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ApiError, type FieldErrors } from '@/api/client'
+import type { CurriculumNode, CurriculumNodeType } from '@/api/curriculumStandards'
 import {
   saveEvaluationPlan,
   type EvaluationPlanPayload,
   type EvaluationPlanRow,
   type EvaluationOptions
 } from '@/api/evaluation'
+import CurriculumReferencePickerModal from '@/components/curriculum/CurriculumReferencePickerModal.vue'
+import CurriculumReferenceTraceModal from '@/components/curriculum/CurriculumReferenceTraceModal.vue'
 
 const props = defineProps<{
   draft: EvaluationPlanRow | null
@@ -22,6 +25,9 @@ const step = ref(1)
 const saving = ref(false)
 const notice = ref('')
 const errors = ref<FieldErrors>({})
+const referencePicker = ref(false)
+const traceReferenceId = ref<number | null>(null)
+const curriculumReferences = ref<CurriculumNode[]>(cloneJson(props.draft?.curriculum_references || []))
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -43,11 +49,48 @@ const form = reactive<EvaluationPlanPayload>({
     approach: props.draft?.scoring_rules?.approach || '按评价指标分别判断',
     decision_rule: props.draft?.scoring_rules?.decision_rule || ''
   },
-  follow_up_suggestion: props.draft?.follow_up_suggestion || ''
+  follow_up_suggestion: props.draft?.follow_up_suggestion || '',
+  curriculum_node_ids: [...(props.draft?.curriculum_node_ids || props.draft?.curriculum_references?.map((item) => item.id) || [])]
 })
 
 const modalTitle = computed(() => props.draft ? '编辑评价方案' : '新建评价方案')
 const courseLocked = computed(() => Boolean(props.draft?.latest_version))
+const selectedCourse = computed(() => props.options.courses.find((item) => item.id === Number(form.course)) || null)
+const selectedReferenceTypes = computed(() => new Set(curriculumReferences.value.map((item) => item.node_type)))
+const curriculumTypeOrder: CurriculumNodeType[] = ['core_competency', 'course_objective', 'course_content', 'academic_quality']
+
+function curriculumTypeLabel(type: CurriculumNodeType) {
+  return {
+    core_competency: '核心素养',
+    course_objective: '课程目标',
+    course_content: '课程内容',
+    academic_quality: '学业质量'
+  }[type]
+}
+
+function curriculumPageLabel(reference: CurriculumNode) {
+  if (!reference.source_page_start) return '原文页码未标注'
+  if (!reference.source_page_end || reference.source_page_end === reference.source_page_start) return `第 ${reference.source_page_start} 页`
+  return `第 ${reference.source_page_start}—${reference.source_page_end} 页`
+}
+
+function applyCurriculumReferences(references: CurriculumNode[]) {
+  curriculumReferences.value = references
+  form.curriculum_node_ids = references.map((item) => item.id)
+  referencePicker.value = false
+}
+
+function removeCurriculumReference(id: number) {
+  curriculumReferences.value = curriculumReferences.value.filter((item) => item.id !== id)
+  form.curriculum_node_ids = curriculumReferences.value.map((item) => item.id)
+}
+
+watch(() => form.course, (next, previous) => {
+  if (previous && next !== previous && curriculumReferences.value.length) {
+    curriculumReferences.value = []
+    form.curriculum_node_ids = []
+  }
+})
 
 function lines(value: string) {
   return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
@@ -156,13 +199,13 @@ async function save() {
       <header class="modal-header">
         <div>
           <h2 :id="`plan-editor-${draft?.id || 'new'}`">{{ modalTitle }}</h2>
-          <p>学习目标、评价依据、学习任务和评分规则</p>
+          <p>课程标准依据、学习目标、评价依据、学习任务和评分规则</p>
         </div>
         <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">×</button>
       </header>
 
       <nav class="evaluation-stepper" aria-label="评价方案编辑步骤">
-        <button type="button" :class="{ active: step === 1 }" @click="step = 1"><span>1</span>范围与目标</button>
+        <button type="button" :class="{ active: step === 1 }" @click="step = 1"><span>1</span>课程标准与范围</button>
         <button type="button" :class="{ active: step === 2 }" @click="step = 2"><span>2</span>依据与任务</button>
         <button type="button" :class="{ active: step === 3 }" @click="step = 3"><span>3</span>评分设置</button>
       </nav>
@@ -187,6 +230,48 @@ async function save() {
             <input v-model.trim="form.content_version" maxlength="64" placeholder="例如 1.0" />
             <small v-if="errors.content_version" class="field-error">{{ errors.content_version[0] }}</small>
           </label>
+          <section class="curriculum-reference-field span-2" aria-labelledby="curriculum-reference-field-title">
+            <header>
+              <div>
+                <strong id="curriculum-reference-field-title">课程标准依据</strong>
+                <small>从超级管理员发布的课程标准中选择相关原文，作为本方案学习目标与评价设计的依据。</small>
+              </div>
+              <button class="secondary-button" type="button" :disabled="!selectedCourse" @click="referencePicker = true">
+                {{ curriculumReferences.length ? '调整课程标准依据' : '选择课程标准依据' }}
+              </button>
+            </header>
+
+            <div class="curriculum-reference-chain" aria-label="课程标准内容类型">
+              <div v-for="type in curriculumTypeOrder" :key="type" :class="{ selected: selectedReferenceTypes.has(type) }">
+                <span aria-hidden="true">{{ selectedReferenceTypes.has(type) ? '✓' : '—' }}</span>
+                <strong>{{ curriculumTypeLabel(type) }}</strong>
+              </div>
+            </div>
+            <p class="curriculum-reference-help">
+              四类内容相互联系，不直接换算为分数。请选择与本次课程内容和评价用途相关的条目；学业质量用于提供阶段性表现参照。
+            </p>
+
+            <div v-if="curriculumReferences.length" class="selected-curriculum-references">
+              <article v-for="reference in curriculumReferences" :key="reference.id">
+                <div class="selected-reference-content">
+                  <em>{{ curriculumTypeLabel(reference.node_type) }}</em>
+                  <strong>{{ reference.code }} · {{ reference.title }}</strong>
+                  <small>
+                    {{ reference.standard_title || selectedCourse?.subject.name }}
+                    · {{ reference.version_label || '版本待加载' }}
+                    · {{ curriculumPageLabel(reference) }}
+                  </small>
+                </div>
+                <div class="selected-reference-actions">
+                  <button class="reference-trace-button" type="button" @click="traceReferenceId = reference.id">查看原文</button>
+                  <button class="reference-remove-button" type="button" aria-label="移除课程标准依据" @click="removeCurriculumReference(reference.id)">移除</button>
+                </div>
+              </article>
+            </div>
+            <p v-else class="curriculum-reference-empty">
+              尚未选择课程标准依据。草案可以先保存，但发布前应完成原文引用和适用范围复核。
+            </p>
+          </section>
           <label class="span-2">
             <span>方案名称<b>*</b></span>
             <input v-model.trim="form.title" maxlength="160" placeholder="例如 数据表达与解释评价方案" />
@@ -296,6 +381,20 @@ async function save() {
         <button v-else class="primary-button" type="button" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存草案' }}</button>
       </footer>
     </section>
+    <CurriculumReferencePickerModal
+      v-if="referencePicker"
+      :selected="curriculumReferences"
+      :subject-code="selectedCourse?.subject.code"
+      :subject-name="selectedCourse?.subject.name"
+      :school-stage="selectedCourse?.school_stage || ''"
+      @close="referencePicker = false"
+      @apply="applyCurriculumReferences"
+    />
+    <CurriculumReferenceTraceModal
+      v-if="traceReferenceId !== null"
+      :node-id="traceReferenceId"
+      @close="traceReferenceId = null"
+    />
   </div>
 </template>
 
@@ -529,6 +628,134 @@ async function save() {
   font-size: 12px;
 }
 
+.curriculum-reference-field {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+  padding: 14px;
+  background: #f8fbff;
+}
+
+.curriculum-reference-field > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.curriculum-reference-field > header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.curriculum-reference-field > header small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.curriculum-reference-chain {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.curriculum-reference-chain > div {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--muted);
+}
+
+.curriculum-reference-chain > div.selected {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.curriculum-reference-help,
+.curriculum-reference-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.curriculum-reference-empty {
+  border: 1px dashed #b8c6d8;
+  border-radius: 6px;
+  padding: 12px;
+  text-align: center;
+}
+
+.selected-curriculum-references {
+  display: grid;
+  gap: 8px;
+}
+
+.selected-curriculum-references article {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.selected-curriculum-references .selected-reference-content {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.selected-curriculum-references em {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #e8f1ff;
+  color: var(--primary-dark);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.selected-curriculum-references small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.selected-curriculum-references .selected-reference-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.selected-curriculum-references .selected-reference-actions button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.selected-curriculum-references .reference-trace-button {
+  color: var(--primary-dark);
+  font-weight: 600;
+}
+
+.selected-curriculum-references .reference-remove-button {
+  color: var(--danger);
+}
+
 @media (max-width: 900px) {
   .evaluation-chain-row,
   .evidence-row,
@@ -581,6 +808,25 @@ async function save() {
 
   .evaluation-modal-actions > span {
     width: 100%;
+  }
+
+  .curriculum-reference-field > header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .curriculum-reference-chain {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .selected-curriculum-references article {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .selected-curriculum-references .selected-reference-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 }
 </style>
