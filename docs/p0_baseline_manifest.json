@@ -1,0 +1,270 @@
+{
+  "baseline_id": "P0-GOV-20260722-v1",
+  "captured_at": "2026-07-22T12:23:00+08:00",
+  "scope": "P0 terminology, permissions, version rules, data purposes, migration ledger, rollback and explicit historical/manual test-data governance",
+  "repository": {
+    "branch": "feature/p0-p1-curriculum-governance",
+    "head": "0a7d5cd0e755c2656f65fdf1e45fa0c4a8af8287",
+    "head_semantics": "Last content/build commit before the manifest metadata commit; the annotated release tag points to the final manifest commit.",
+    "working_tree_clean": true,
+    "status_entries": 0,
+    "modified_entries": 0,
+    "untracked_entries": 0,
+    "deleted_entries": 0,
+    "code_byte_restore_available": true,
+    "release_commit": "0a7d5cd0e755c2656f65fdf1e45fa0c4a8af8287",
+    "release_tag": "baseline/p0-p1-20260722",
+    "source_archive_path": null,
+    "source_archive_sha256": null,
+    "backfill_after_review": [
+      "source_archive_path and source_archive_sha256 only if the Git tag is not used as the deployment artifact"
+    ],
+    "release_requirement": "The local annotated Git tag restores this development baseline. Push the branch and tag to a controlled remote, or create an immutable source archive, before cross-machine or production deployment."
+  },
+  "artifacts": [
+    {
+      "path": "docs/terminology.md",
+      "bytes": 12442,
+      "sha256": "e57a15bbed6946609e87836e1729383b82424d2ce2ed9191c5e74586d32167c7"
+    },
+    {
+      "path": "docs/p0_as_is_to_be.md",
+      "bytes": 11036,
+      "sha256": "0e2c684591b5cd2296e94701cc4529890eaaad68f5af1daf5b742cc1797a3dd3"
+    },
+    {
+      "path": "docs/p0_governance_freeze.md",
+      "bytes": 11399,
+      "sha256": "16ea85ee15f9deab7f446b6c3a50c1c8613ea30327a9abcca989d5dd9abf8be1"
+    },
+    {
+      "path": "docs/p0_data_migration_ledger.md",
+      "bytes": 11941,
+      "sha256": "0b5aa022ec884756a87b87eba9c8b58f340854e2d201da768244ef223c0ff2c6"
+    },
+    {
+      "path": "docs/p0_rollback_runbook.md",
+      "bytes": 11892,
+      "sha256": "0cf26f1565936ef9b8f1d319265adbc30fd07b5dccd9b74d971e5510440fcff2"
+    },
+    {
+      "path": "docs/p0_p1_curriculum_governance_acceptance.md",
+      "bytes": 30749,
+      "sha256": "5b4292871dd8ae48f5846f7f634aa97475b108d6460b9a6a87ba903013811a26"
+    },
+    {
+      "path": "docs/README.md",
+      "bytes": 11864,
+      "sha256": "a7130cb0abe47d0f2a462e5c01bada4ba334ad50d11cf51c73ec5c093d3689d5"
+    },
+    {
+      "path": "docs/data_model.md",
+      "bytes": 48774,
+      "sha256": "73d039ff6db1ef11ef667e364fcd04dcfa6685fee82ef8962e74b0acc5dad28d"
+    },
+    {
+      "path": "docs/private_deployment.md",
+      "bytes": 17439,
+      "sha256": "adb29b8fa3a0314f0ad4e7b7a4299ba853a8002fe71cccd10d2954051a87c97d"
+    },
+    {
+      "path": "docs/evaluation_stratification_grouping_sci_design_rounds_11_30.md",
+      "bytes": 114613,
+      "sha256": "f7888fabe7b60697e996de44508ec5b8cabab01a454db6e77f230268f212a3df"
+    },
+    {
+      "path": "learning_analytics/models.py",
+      "bytes": 80223,
+      "sha256": "16039485a55dfee7b280911ea12f0c9076852820dca9bdc359b696e78bb9a390"
+    },
+    {
+      "path": "learning_analytics/test_data_governance_models.py",
+      "bytes": 6992,
+      "sha256": "6ed538907ce5c1c3a33dbfab057c1d7ca7e8280d2db02115fb9c1a763b1d68c1"
+    },
+    {
+      "path": "learning_analytics/services/test_data_governance.py",
+      "bytes": 6639,
+      "sha256": "015eae78c3afcbe6d3ee8a7c79b1f1e861607e2787b88ac629df756377ff886e"
+    },
+    {
+      "path": "learning_analytics/management/commands/register_test_data_batch.py",
+      "bytes": 6786,
+      "sha256": "a5a91eb6d107bec08f2b2d5185f6d1f58da4c969a776a18df5d747ac29b1d352"
+    },
+    {
+      "path": "learning_analytics/management/commands/revoke_test_data_marker.py",
+      "bytes": 4254,
+      "sha256": "560837c48a5c8b1a394564bd0354b4a02921d62778ad9a658e6c7accbd4e7c67"
+    },
+    {
+      "path": "learning_analytics/management/commands/migrate_legacy_evaluation_standards.py",
+      "bytes": 13862,
+      "sha256": "3b6fce4d9b09b46ebd46bbb931801603345897225d8e80ad63c9fcf938b56a64"
+    },
+    {
+      "path": "learning_analytics/migrations/0032_testdatabatch_testdataobjectmarker.py",
+      "bytes": 5667,
+      "sha256": "f72841892f7eec8a420ea1a63c7b85b93ab98732486861e815af94aba60a486b"
+    },
+    {
+      "path": "learning_analytics/tests/test_test_data_governance.py",
+      "bytes": 9555,
+      "sha256": "6b2be930383eff71fb35ba25e7aec74000ec9b7326a9f6ba9a040d6033a72952"
+    },
+    {
+      "path": "learning_analytics/tests/test_legacy_evaluation_migration.py",
+      "bytes": 3253,
+      "sha256": "7f9d7e9b3247bf4c44c0183dea61f922ce3e1a7ae29db3b1a63a94c37d50b104"
+    }
+  ],
+  "database": {
+    "active_development_database": {
+      "path": "storage/dev.sqlite3",
+      "captured_bytes": 138215424,
+      "captured_last_write": "2026-07-22T12:22:30.6395763+08:00",
+      "quick_check": "ok",
+      "sha256_omitted": "The low-priority OCR worker was active; a changing live file is not an immutable baseline. Use the verified final-migration backup for rollback.",
+      "migration_count": 140,
+      "learning_analytics_0032_applied": true,
+      "curriculum_standards_0004_applied": true
+    },
+    "backups": [
+      {
+        "purpose": "before legacy evaluation migration",
+        "path": "storage/backups/dev-before-evaluation-migration-20260721-221407.sqlite3",
+        "bytes": 93810688,
+        "sha256": "f1cacffff0e50a88d0fe5c8f3f1aa3b717b6f042b8eaa9ccb0a366cc96227ec0",
+        "quick_check": "ok"
+      },
+      {
+        "purpose": "before P0-P1 work",
+        "path": "storage/cleanup_backups/dev-before-p0-p1-20260722-084350.sqlite3",
+        "bytes": 93810688,
+        "sha256": "0ee6f1f2c6af4ca1779c5a2c42ffa7b4cdc14d9cd9f620872df599b159fb2e6a",
+        "quick_check": "ok"
+      },
+      {
+        "purpose": "before curriculum processing queue migrations",
+        "path": "storage/cleanup_backups/dev-before-curriculum-queue-20260722-104511.sqlite3",
+        "bytes": 110886912,
+        "sha256": "d38d8f64ede4e32f7ae5ae2259897d780472876ba64e8252d9a3fbb935e38c95",
+        "quick_check": "ok"
+      },
+      {
+        "purpose": "before final P0-P1 live migrations and formal test-data registration",
+        "path": "storage/cleanup_backups/dev-before-p0-p1-final-20260722-120728.sqlite3",
+        "bytes": 111587328,
+        "sha256": "781cbbb46369d7b30d995debca35a6b983493401a8b87c5178bc96245a93c513",
+        "quick_check": "ok"
+      }
+    ],
+    "restore_drill": {
+      "source_backup_sha256": "d38d8f64ede4e32f7ae5ae2259897d780472876ba64e8252d9a3fbb935e38c95",
+      "copy_hash_matched_before_migration": true,
+      "forward_migrations": [
+        "curriculum_standards.0002",
+        "curriculum_standards.0003",
+        "curriculum_standards.0004",
+        "learning_analytics.0032"
+      ],
+      "post_migration_bytes": 111116288,
+      "post_migration_sha256": "e967f345ffcc95149f26585f5455a94319203f483bd6d2b58b677d8bdf0f3590",
+      "post_migration_count": 140,
+      "post_migration_quick_check": "ok",
+      "django_check_issues": 0,
+      "revocation_fields_present": true,
+      "active_database_modified": false
+    }
+  },
+  "curriculum_standard_media": {
+    "root": "storage/media/curriculum_standards/official",
+    "file_count": 70,
+    "total_bytes": 498750733,
+    "manifest_algorithm": "SHA-256 over UTF-8 lines sorted by relative path; each line is relative_path, tab, byte_count, tab, lowercase_file_sha256",
+    "manifest_sha256": "deccd6415fafe0bde17b495dcefd56a2f5eaa9eb3bacdbfc0743087fab2526e9",
+    "scopes": [
+      {
+        "scope": "K1-K9/2022",
+        "files": 17,
+        "bytes": 363208531
+      },
+      {
+        "scope": "K10-K12/2020",
+        "files": 21,
+        "bytes": 54840184
+      },
+      {
+        "scope": "K10-K12/2025",
+        "files": 10,
+        "bytes": 29954207
+      },
+      {
+        "scope": "K10-K12/current",
+        "files": 21,
+        "bytes": 50746771
+      },
+      {
+        "scope": "README.md",
+        "files": 1,
+        "bytes": 1040
+      }
+    ]
+  },
+  "test_data_dry_run": {
+    "batch_code": "TEST-MANUAL-COURSE-4-20260722",
+    "target": "courses.course:4",
+    "object_label": "test",
+    "purpose": "acceptance_testing",
+    "source_kind": "historical_manual",
+    "target_count": 1,
+    "manifest_hash": "92505de37c556175d6568be3b710c77195d125dc304bb2ab78e2d2f576554988",
+    "database_writes": 0,
+    "formal_registration_pending": false,
+    "formal_registration_first_result": "CREATED",
+    "formal_registration_repeat_result": "UNCHANGED",
+    "batch_count": 1,
+    "active_marker_count": 1
+  },
+  "pollution_audit": {
+    "decision_points": 49,
+    "training_dataset_versions": 6,
+    "training_dataset_rows": 3456,
+    "training_dataset_versions_with_synthetic_run": 6,
+    "formal_scope_training_dataset_versions": 0,
+    "decision_points_for_course_ids_1_4_16": 0,
+    "result": "No current frozen training dataset was found outside an explicit SyntheticDatasetRun. This is a point-in-time development-database audit, not a permanent guarantee."
+  },
+  "validation": {
+    "ruff_check": "passed",
+    "ruff_format_check": "passed",
+    "learning_analytics_migration_check": "no changes detected",
+    "test_modules": [
+      "curriculum_standards",
+      "learning_analytics.tests.test_legacy_evaluation_migration",
+      "learning_analytics.tests.test_test_data_governance",
+      "learning_analytics.tests.test_evaluation_management",
+      "learning_analytics.tests.test_dynamic_stratification_grouping",
+      "learning_analytics.tests.test_privacy_surfaces",
+      "learning_analytics.tests.test_security_baseline"
+    ],
+    "tests_passed": 88,
+    "tests_failed": 0,
+    "test_database": "isolated Django test database; active development database migrations and integrity were verified separately",
+    "frontend_test_files": 10,
+    "frontend_tests_passed": 30,
+    "frontend_tests_failed": 0,
+    "frontend_type_check": "passed",
+    "frontend_production_build": "passed",
+    "published_curriculum_strict_audit": {
+      "versions": 2,
+      "errors": 0,
+      "warnings": 0
+    },
+    "curriculum_retrieval": {
+      "indexes": 33,
+      "chunks": 4389,
+      "build_failures": 0
+    }
+  }
+}
