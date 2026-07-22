@@ -1,0 +1,1 @@
+import{J as o,B as s,j as l}from"./index-ZFtkEsaG.js";function f(){const u=o(),e=l(!1);s(()=>u.fullPath,()=>{e.value=!1});function t(){e.value=!1}function a(){e.value=!e.value}return{isOpen:e,close:t,toggle:a}}export{f as u};
