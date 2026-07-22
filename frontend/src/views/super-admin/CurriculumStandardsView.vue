@@ -833,6 +833,7 @@ onMounted(() => load(true))
                   <div class="curriculum-text-actions">
                     <span>{{ (selectedVersion.structured_text?.length || 0).toLocaleString('zh-CN') }} 字符</span>
                     <a v-if="selectedVersion.structured_markdown_url" :href="selectedVersion.structured_markdown_url">下载 Markdown</a>
+                    <a v-if="selectedVersion.structured_json_url" :href="selectedVersion.structured_json_url">下载 JSON</a>
                     <a v-if="selectedVersion.structured_jsonl_url" :href="selectedVersion.structured_jsonl_url">下载 JSONL</a>
                   </div>
                 </header>

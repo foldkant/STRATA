@@ -20,7 +20,7 @@
 | 教育术语 | `docs/terminology.md` | 评价方案、评价标准、评价指标、学习状态、学习内容层级、分层建议、分组候选方案、课程标准内容条目等已有统一名称 | 工程冻结不等于学科专家、评价专家或伦理审查结论；研究文档中的学术术语不能直接成为产品栏目 |
 | 课程标准 | `CurriculumStandard`、`CurriculumStandardVersion`、`CurriculumStandardPage`、`CurriculumStandardNode`、`CurriculumStandardAuditLog` | K1—K9 与 K10—K12 分线；原 PDF、来源、版本、文件校验值、逐页文本、四类内容条目、复核状态和操作记录已建模；信息科技义务教育 2022 版与普通高中 2025 修订版已设为当前使用 | 两个信息科技版本使用开发环境治理豁免并留痕，不冒充独立学科专家复核；其余版本保持草稿，处理完成也不会自动发布 |
 | 课程标准处理 | `CurriculumProcessingJob`、`CurriculumProcessingPage` 和独立 `curriculum_ocr` 队列 | 一个任务处理一个版本；状态、页级进度、取消、失败和重试写入数据库；Web 请求不直接执行整份 OCR | SQLite 单机队列只是开发环境方案；不能替代生产 Redis、资源隔离和运维监控 |
-| 课程标准检索 | `CurriculumRetrievalIndex`、`CurriculumRetrievalChunk`、页码化 Markdown、JSONL 和追溯接口 | 33 个已处理版本已生成 4,389 个稳定片段；默认只检索已发布且当前使用版本，返回版本、页码、原文和校验值 | 当前关键词后端适用于本阶段小规模课标库；AI 评价初稿尚未开放，正式使用仍受独立复核门槛约束 |
+| 课程标准检索 | `CurriculumRetrievalIndex`、`CurriculumRetrievalChunk`、页码化 Markdown、结构化 JSON、JSONL 和追溯接口 | 2026-07-22 12:40 验收快照中，34 个已处理版本已生成 4,411 个稳定片段；默认只检索已发布且当前使用版本，返回版本、页码、原文和校验值 | 当前关键词后端适用于本阶段小规模课标库；AI 评价初稿尚未开放，正式使用仍受独立复核门槛约束 |
 | 教师评价 | `EvaluationPlan/Version`、`EvaluationStandard/Version`、`EvaluationCriterionVersion`、试用记录和课堂冻结引用 | 评价方案、标准、指标、星级表现说明、发布版本和旧配置迁移草稿已有工程对象 | 当前目标、依据和任务仍主要是 Text/JSON；课标引用、评价材料资格、用途准入和多种评价方式尚未完成后续重构 |
 | 学习状态与动态分层 | `StudentMasterySnapshot`、`StratificationDecision`、`StudentSubjectBand`、`ContentBandPolicyVersion` | 已有共同题/测试链、拒绝建议、边界提示和教师确认的工程基础 | 尚未形成面向项目、操作、表现任务等多类评价材料的通用目标级测量与追加式状态链；不得把当前对象称为已验证的通用动态模型 |
 | 动态分组 | `GroupingDecisionPoint`、`GroupingCandidateRun`、`GroupingTeacherDecision`、`GroupingPlanVersion` 等 | 已有任务条件、候选、教师确认和历史计划对象 | 当前计划机会不等于实际获得机会；角色、实际暴露、独立结果和政策效果研究仍需后续阶段完成 |

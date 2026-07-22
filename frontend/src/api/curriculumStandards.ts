@@ -189,6 +189,7 @@ export type CurriculumStandardVersion = {
   page_quality_counts?: Partial<Record<CurriculumPageQualityStatus, number>>
   unreviewed_page_count?: number
   structured_markdown_url?: string
+  structured_json_url?: string
   structured_jsonl_url?: string
   independent_review?: boolean | null
   independent_publication?: boolean | null

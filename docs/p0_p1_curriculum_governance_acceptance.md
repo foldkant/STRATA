@@ -109,7 +109,7 @@ P0 不是只统一栏目名称，还要明确哪些错误不能被总体平均�
 - 解析方式、解析版本、解析时间、人工复核状态及复核人；
 - 草稿、待复核、已发布、已取代或已归档等生命周期状态；
 - 当前使用版本关系、替代关系和全部操作记录。
-- 供后续检索使用的页码化 Markdown 与 JSONL 输出；每条机器可读记录必须包含课程标准版本、文件校验值、内容条目校验值和原文位置，不能只输出脱离来源的纯文本。
+- 供后续检索使用的页码化 Markdown、单个结构化 JSON 与流式 JSONL 输出；每条机器可读记录必须包含课程标准版本、文件校验值、内容条目校验值和原文位置，不能只输出脱离来源的纯文本。
 
 结构化内容条目必须至少支持“核心素养、课程目标、课程内容、学业质量”。PDF 中无法可靠识别的页面或段落必须标为待复核，不能生成看似确定的正式内容条目。版本进入正式发布前，必须能够核对逐页处理状态；需要文字识别、识别置信度较低或内容为空的页面必须由独立复核人员明确确认，处理失败页则必须修复后才能发布，均不得被静默视为已复核。
 
@@ -215,7 +215,7 @@ P0 不是只统一栏目名称，还要明确哪些错误不能被总体平均�
 - [x] K1—K9 2022、K10—K12 2020 及现有 K10—K12 2025 文件可以批量登记；同文件重复导入不产生重复正式版本。
 - [x] 高中同学科已有已发布 2025 版时选择 2025 版，否则选择已发布 2020 版；选择结果可解释、可审计。
 - [x] 结构化文本和内容条目可由后续检索接口读取，但本阶段没有 AI 自动生成评价入口。
-- [x] 页码化 Markdown 和 JSONL 输出可下载、可重放，且保留版本、校验值及原文位置；未登录用户不能读取。
+- [x] 页码化 Markdown、结构化 JSON 和 JSONL 输出可下载、可重放，且保留版本、校验值及原文位置；未登录用户不能读取。
 - [x] PDF 解析和文字识别通过专用后台任务执行；队列、并发、预取、取消、心跳、失联恢复和结果原子替换边界已固化，Web 请求不直接承担重处理。
 
 ### 5.3 后台任务运行边界
@@ -245,7 +245,7 @@ python manage.py test curriculum_standards
 - 超级管理员可以对课程标准进行受控管理；
 - 测试数据能够验证版本、权限、比较和恢复流程；
 - 后续评价方案可以引用一个明确、不可静默改写的课程标准版本。
-- 经过授权的后续服务可以读取页码化 Markdown 或 JSONL，但当前没有调用外部 AI，也没有自动生成评价。
+- 经过授权的后续服务可以读取页码化 Markdown、结构化 JSON 或 JSONL，但当前没有调用外部 AI，也没有自动生成评价。
 
 仍不允许声称：
 
@@ -269,24 +269,24 @@ P1 工程专项迁移、权限、版本不可变、解析失败处理、差异�
 | Django 系统检查 | `python manage.py check` | 通过，0 个问题 | 2026-07-22 本地命令记录 |
 | 迁移一致性 | `python manage.py makemigrations --check --dry-run` | 通过，无待生成迁移 | `curriculum_standards/migrations/0001`—`0004`、`learning_analytics/migrations/0032_testdatabatch_testdataobjectmarker.py` |
 | 迁移应用 | 隔离恢复副本与现有 `storage/dev.sqlite3` 分别执行 | 均通过；最终迁移前停 Web 和专用 worker，备份为 111,587,328 字节并通过 SHA-256 与 `quick_check`；迁移后全库 140 条已应用迁移 | `storage/cleanup_backups/dev-before-p0-p1-final-20260722-120728.sqlite3`；SHA-256 `781CBBB46369D7B30D995DEBCA35A6B983493401A8B87C5178BC96245A93C513` |
-| P0—P1 后端专项测试 | `python manage.py test curriculum_standards` | 35/35 通过；覆盖后台任务、检索片段完整性、权限、追溯、OCR 回滚与版本治理 | `curriculum_standards/tests/` |
-| 既有评价/分层/分组联合回归 | 课程标准、旧评价迁移、测试数据治理、评价管理、动态分层/分组、隐私和安全基线 | 88/88 通过，用时 120.831 秒 | `curriculum_standards/tests/`、`learning_analytics/tests/` |
+| P0—P1 后端专项测试 | `python manage.py test curriculum_standards` | 37/37 通过，用时 29.421 秒；覆盖后台任务、检索片段完整性、权限、原文追溯、结构化 JSON、K1—K9 生命周期、停用/启用、归档/恢复、OCR 回滚与版本治理 | `curriculum_standards/tests/` |
+| 既有评价/分层/分组联合回归 | 课程标准、旧评价迁移、测试数据治理、评价管理、动态分层/分组、隐私和安全基线 | 90/90 通过，用时 125.108 秒 | `curriculum_standards/tests/`、`learning_analytics/tests/` |
 | 义务教育信息科技完整处理 | 74 页扫描版离线文字识别与四类内容条目重建 | 74/74 页、42,685 个页级正文字符；平均置信度 0.9917，最低 0.9580；74 页质量状态均为“完整”；页码标记 1—74 完整连续；核心素养 11—13 页、课程目标 11—18 页、课程内容 19—50 页、学业质量 51—53 页 | 版本 ID 14；内容哈希 `4f91f1f86aa210b2841a6e50dc2affcc2aed86b44ae473a4ca88bf39963089a5` |
 | OCR 失败回滚与修复 | 首次完整识别后的置信度写库 | 首次因二进制浮点尾差违反四位小数字段而失败，事务完整回滚为 74 个原始空页；修复为四位 `Decimal` 并新增回归测试，第二次成功写入；未保留半成品 | `curriculum_standards/services.py`、`test_ocr_confidence_float_noise_is_normalized_before_page_validation` |
 | 普通高中信息学科抽查 | 2020 与 2025 两个版本 | 2020 正式题名保持“信息技术”，83 页、50,730 个页级正文字符；2025 正式题名保持“信息科技”，64 页、37,306 个页级正文字符；两版均生成四类内容条目，当前使用版本为 2025 修订版 | 版本 ID 20、48 |
-| 本地课程标准登记 | K1—K9 2022、K10—K12 2020、K10—K12 2025；排除 `current` 副本 | 基线为 38 个档案、48 个版本；33 个版本已完成文本处理，另外 15 个扫描版本由低优先级专用队列逐个处理 | `import_curriculum_standards`、`enqueue_curriculum_ocr --all-needs-ocr` 和任务状态实际记录 |
+| 本地课程标准登记 | K1—K9 2022、K10—K12 2020、K10—K12 2025；排除 `current` 副本 | 基线为 38 个档案、48 个版本；2026-07-22 12:40 验收快照中 34 个版本已完成文本处理，另外 14 个扫描版本由低优先级专用队列逐个处理 | `import_curriculum_standards`、`enqueue_curriculum_ocr --all-needs-ocr` 和任务状态实际记录 |
 | 版本选择核对 | 高中已有已发布 2025 版则当前使用 2025 版，否则使用已发布 2020 版 | 状态流转与替代/恢复测试通过；信息科技当前使用版本为义务教育 2022 版（ID 14）和普通高中 2025 修订版（ID 48）。两次发布使用开发环境治理豁免并完整留痕，不声称已经完成独立学科专家复核 | `test_replacement_compare_and_published_content_is_immutable`、课程标准审计记录 |
 | 重复导入 | 同一目录连续执行并在信息科技处理后再次执行 | 首次新增 48；后续均为新增 0、跳过 48；档案、版本和审计不重复 | `test_import_curriculum_standards.py` 及开发库实际命令 |
 | 职责分离 | 创建/提交、逐页复核、版本复核、发布使用不同责任人验证 | 生产设置下同人复核、同人发布均被服务端拒绝；开发环境豁免会明确留痕 | `test_production_review_and_publish_require_separate_people` |
-| 版本差异与历史恢复 | 比较两个版本后恢复历史版本为当前使用版本 | 自动化测试通过，已发布内容不可变，恢复不删除后续版本 | `test_replacement_compare_and_published_content_is_immutable` |
+| 版本差异与历史恢复 | 比较两个版本后归档并恢复历史版本为当前使用版本 | 自动化测试实际调用归档/恢复接口并通过；已发布内容不可变，PDF/页/内容条目/检索片段与审计保留 | `test_replacement_compare_and_published_content_is_immutable`、`test_p1_acceptance_lifecycle.py` |
 | 普通角色权限 | 匿名、学校管理员、教师、学生验证读写范围 | 匿名检索返回 403；教师实测只检索到 `current_published` 范围；所有写入仅限超级管理员 | `test_reader_and_writer_permissions_are_separated_by_role`、2026-07-22 Django Client 实测 |
-| 机器可读导出与检索 | 超管读取信息科技 Markdown、JSONL、PDF，并构建/查询可追溯片段 | 导出接口通过；33 个版本生成 33 个索引和 4,389 个片段。片段保留课程标准、版本、页码/内容条目、PDF 与内容校验值；发布版本严格审计 2 个版本、0 错误、0 警告 | `curriculum_standards/retrieval.py`、`build_curriculum_retrieval_index`、`audit_curriculum_standards --published-only --strict` |
+| 机器可读导出与检索 | 超管读取信息科技 Markdown、结构化 JSON、JSONL、PDF，并构建/查询可追溯片段 | 导出接口通过；12:40 快照中 34 个版本生成 34 个索引和 4,411 个片段。片段保留课程标准、版本、页码/内容条目、PDF 与内容校验值；发布版本严格审计 2 个版本、0 错误、0 警告 | `curriculum_standards/retrieval.py`、`build_curriculum_retrieval_index`、`audit_curriculum_standards --published-only --strict` |
 | 测试数据批次登记 | 课程 4 dry-run、正式登记与重复执行 | 首次结果 `CREATED`，重复结果 `UNCHANGED`；批次 1、活动对象标记 1，清单哈希保持一致 | `TEST-MANUAL-COURSE-4-20260722`、`docs/p0_data_migration_ledger.md` |
 | 前端测试、类型检查和生产构建 | `npm.cmd run test:run`、`npm.cmd run build` | 10 个测试文件、30/30 通过；`vue-tsc` 通过；861 个模块构建通过 | `frontend/` 实际命令记录 |
-| 构建产物清理 | `postbuild` 自动清理 | 删除 84 个陈旧哈希资源，只保留当前与上一构建清单引用的 183 个资源文件 | `frontend/scripts/prune-build-assets.mjs` |
+| 构建产物清理 | `postbuild` 自动清理 | 最终构建删除 85 个陈旧哈希资源，只保留当前与上一构建清单引用的 182 个资源文件 | `frontend/scripts/prune-build-assets.mjs` |
 | 键盘与响应式约束 | 超级管理员课程标准管理页面代码审查 | 已实现可见标签、焦点初始定位、Esc 关闭、Tab/Shift+Tab 焦点约束、关闭后焦点恢复及响应式布局；本轮未执行独立浏览器多视口截图对比 | `frontend/src/components/curriculum/`、`CurriculumStandardsView.vue` |
 | 后台队列资源隔离与真实领取 | 安全取消旧任务、迁移后重新入队 15 份扫描文件并启动专用 worker | worker 真实连接 filesystem broker；并发 1、预取 1、`BelowNormal`，CPU 亲和性限制为 2 个逻辑处理器。重启验收时 1 份运行、14 份等待；任务成功后自动重建对应检索索引 | `config/settings.py`、`scripts/start_curriculum_ocr_worker.ps1`、任务 ID 18—32、`docs/private_deployment.md` |
 
 只有表中各项产生真实运行结果后，才能把第 5 节对应工程项改为已完成。若某项因环境或数据条件未执行，应明确写“未执行”和原因，不能用“代码已实现”替代运行证据。
 
-上述记录证明 P0 与 P1 的工程链路、信息科技课标检索和原文追溯已经完成开发验收。开发环境为打通只读引用链而使用的治理豁免，不是逐页人工校对或学科专家复核；正式教学评价使用前仍须由独立责任人依据 PDF 原文完成复核。其余 15 个扫描版本继续后台处理，保持草稿，不因处理完成而自动发布。
+上述记录证明 P0 与 P1 的工程链路、信息科技课标检索和原文追溯已经完成开发验收。开发环境为打通只读引用链而使用的治理豁免，不是逐页人工校对或学科专家复核；正式教学评价使用前仍须由独立责任人依据 PDF 原文完成复核。12:40 快照中的其余 14 个扫描版本继续后台处理，保持草稿，不因处理完成而自动发布。

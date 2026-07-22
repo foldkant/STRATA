@@ -40,6 +40,7 @@ function version(id = 1): CurriculumStandardVersion {
     pdf_page_count: 74,
     structured_text: '信息科技课程标准正文。'.repeat(180),
     structured_markdown_url: '/standard.md',
+    structured_json_url: '/standard.json',
     structured_jsonl_url: '/standard.jsonl',
     extraction_status: 'completed',
     extraction_status_label: '处理完成',
@@ -201,6 +202,7 @@ describe('curriculum standards management layout', () => {
     expect(preview.length).toBeLessThan(selectedVersion.structured_text!.length)
     expect(view.text()).toContain('当前仅显示前 1,200 个字符')
     expect(view.find('.curriculum-text-toggle').exists()).toBe(false)
+    expect(view.get('a[href="/standard.json"]').text()).toBe('下载 JSON')
   })
 
   it('shows the audit timeline and disables a standard only after confirmation', async () => {

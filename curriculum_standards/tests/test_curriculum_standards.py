@@ -126,13 +126,43 @@ class CurriculumStandardApiTests(TestCase):
 
     def _add_framework_items(self, version_id, suffix=""):
         definitions = (
-            (CurriculumNodeType.CORE_COMPETENCY, "CS.CORE", "核心素养", 1, "（一）学科核心素养内涵", "核心素养原文"),
-            (CurriculumNodeType.COURSE_OBJECTIVE, "CS.OBJECTIVE", "课程目标", 2, "三、课程目标", "课程目标原文"),
-            (CurriculumNodeType.COURSE_CONTENT, "CS.CONTENT", "课程内容", 3, "五、课程内容", "课程内容原文"),
-            (CurriculumNodeType.ACADEMIC_QUALITY, "CS.QUALITY", "学业质量", 4, "六、学业质量", "学业质量原文"),
+            (
+                CurriculumNodeType.CORE_COMPETENCY,
+                "CS.CORE",
+                "核心素养",
+                1,
+                "（一）学科核心素养内涵",
+                "核心素养原文",
+            ),
+            (
+                CurriculumNodeType.COURSE_OBJECTIVE,
+                "CS.OBJECTIVE",
+                "课程目标",
+                2,
+                "三、课程目标",
+                "课程目标原文",
+            ),
+            (
+                CurriculumNodeType.COURSE_CONTENT,
+                "CS.CONTENT",
+                "课程内容",
+                3,
+                "五、课程内容",
+                "课程内容原文",
+            ),
+            (
+                CurriculumNodeType.ACADEMIC_QUALITY,
+                "CS.QUALITY",
+                "学业质量",
+                4,
+                "六、学业质量",
+                "学业质量原文",
+            ),
         )
         ids = []
-        for order, (node_type, code, title, page, paragraph, content) in enumerate(definitions):
+        for order, (node_type, code, title, page, paragraph, content) in enumerate(
+            definitions
+        ):
             response = self.client.post(
                 reverse(
                     "api_super_admin_curriculum_standard_version_nodes",
@@ -237,7 +267,9 @@ class CurriculumStandardApiTests(TestCase):
             {"subject_code": "01", "subject_name": "信息技术"},
         )
         self.assertEqual(options.status_code, 200)
-        self.assertEqual(options.data["data"]["standards"][0]["current_version"]["id"], version_id)
+        self.assertEqual(
+            options.data["data"]["standards"][0]["current_version"]["id"], version_id
+        )
         trace = self.client.get(
             reverse("api_curriculum_standard_node_trace", kwargs={"pk": node_ids[0]})
         )
@@ -252,6 +284,27 @@ class CurriculumStandardApiTests(TestCase):
         )
         self.assertContains(jsonl, '"pdf_size_bytes":')
         self.assertContains(jsonl, '"record_type":"content_item"')
+        structured_json = self.client.get(
+            reverse("api_curriculum_standard_json", kwargs={"pk": version_id})
+        )
+        self.assertEqual(structured_json.status_code, 200)
+        self.assertEqual(
+            structured_json["Content-Disposition"],
+            f'attachment; filename="curriculum-standard-{version_id}.json"',
+        )
+        self.assertEqual(structured_json["ETag"], f'"{version.content_hash}"')
+        structured_payload = structured_json.json()
+        self.assertEqual(structured_payload["schema"], "curriculum_standard_export_v1")
+        self.assertEqual(structured_payload["version"]["id"], version_id)
+        self.assertEqual(len(structured_payload["pages"]), 4)
+        self.assertEqual(
+            len(structured_payload["content_items"]),
+            CurriculumStandardNode.objects.filter(version_id=version_id).count(),
+        )
+        self.assertEqual(structured_payload["pages"][0]["page_number"], 1)
+        self.assertTrue(structured_payload["pages"][0]["text"])
+        self.assertEqual(structured_payload["content_items"][0]["source_page_start"], 1)
+        self.assertIsNotNone(structured_payload["retrieval"])
 
     def test_replacement_compare_and_published_content_is_immutable(self):
         first_id = self._create_version("2017-2020", "first")
@@ -318,7 +371,9 @@ class CurriculumStandardApiTests(TestCase):
         self.assertEqual(response.status_code, 409, response.data)
 
     def test_discard_imported_draft_never_deletes_official_asset(self):
-        official = Path(self.media_root) / "curriculum_standards" / "official" / "source.pdf"
+        official = (
+            Path(self.media_root) / "curriculum_standards" / "official" / "source.pdf"
+        )
         official.parent.mkdir(parents=True)
         official.write_bytes(pdf_bytes("official", pages=1))
         standard = CurriculumStandard.objects.get(pk=self.standard_id)
@@ -352,14 +407,18 @@ class CurriculumStandardApiTests(TestCase):
             "目录\n三、课程目标\n五、课程内容\n六、学业质量",
             "",
             "三、课程目标\n（一）学科核心素养内涵\n核心素养正文" + "内容" * 40,
-            "三、课程目标\n核心素养续页正文" + "内容" * 40 + "\n（二）目标要求\n要求正文",
+            "三、课程目标\n核心素养续页正文"
+            + "内容" * 40
+            + "\n（二）目标要求\n要求正文",
             "五、课程内容\n课程内容正文" + "内容" * 40,
             "五、课程内容\n课程内容续页正文" + "内容" * 40,
             "六、学业质量\n学业质量正文" + "内容" * 40,
             "六、学业质量\n学业质量续页正文" + "内容" * 40,
         ]
         rows = suggest_framework_nodes(pages)
-        self.assertEqual({row["node_type"] for row in rows}, set(CurriculumNodeType.values))
+        self.assertEqual(
+            {row["node_type"] for row in rows}, set(CurriculumNodeType.values)
+        )
         self.assertTrue(all(row["source_page_start"] >= 3 for row in rows))
         by_type = {row["node_type"]: row for row in rows}
         self.assertEqual(
@@ -458,7 +517,9 @@ class CurriculumStandardApiTests(TestCase):
             self.client.force_authenticate(reader)
             self.assertEqual(self.client.get(reader_url).status_code, 200)
             self.assertEqual(
-                self.client.patch(write_url, {"title": "unauthorized"}, format="json").status_code,
+                self.client.patch(
+                    write_url, {"title": "unauthorized"}, format="json"
+                ).status_code,
                 403,
             )
 
@@ -689,13 +750,36 @@ class EvaluationCurriculumReferenceTests(TestCase):
             content_version="第一单元",
             target_students="高一年级学生",
             learning_goal="学生能够运用信息科技方法解决真实问题。",
-            learning_goals=[{"code": "G1", "title": "问题解决", "description": "能够运用数字工具完成真实问题解决任务。"}],
-            evaluation_basis=[{"code": "E1", "goal_codes": ["G1"], "description": "根据学生完成任务时形成的作品和说明进行评价。", "source_types": ["学生作品"]}],
-            learning_tasks=[{"code": "T1", "title": "完成项目任务", "basis_codes": ["E1"], "description": "完成项目作品并说明问题解决过程和改进依据。"}],
+            learning_goals=[
+                {
+                    "code": "G1",
+                    "title": "问题解决",
+                    "description": "能够运用数字工具完成真实问题解决任务。",
+                }
+            ],
+            evaluation_basis=[
+                {
+                    "code": "E1",
+                    "goal_codes": ["G1"],
+                    "description": "根据学生完成任务时形成的作品和说明进行评价。",
+                    "source_types": ["学生作品"],
+                }
+            ],
+            learning_tasks=[
+                {
+                    "code": "T1",
+                    "title": "完成项目任务",
+                    "basis_codes": ["E1"],
+                    "description": "完成项目作品并说明问题解决过程和改进依据。",
+                }
+            ],
             content_scope=["数据与计算"],
             thinking_requirements=["apply"],
             support_options=[],
-            scoring_rules={"approach": "按评价标准评分", "decision_rule": "依据作品证据逐项判断达成表现并保留原始记录。"},
+            scoring_rules={
+                "approach": "按评价标准评分",
+                "decision_rule": "依据作品证据逐项判断达成表现并保留原始记录。",
+            },
             follow_up_suggestion="根据学生的具体表现提供针对性的学习支持。",
             created_by=self.teacher,
             updated_by=self.teacher,
@@ -725,7 +809,9 @@ class EvaluationCurriculumReferenceTests(TestCase):
         )
         second_plan_version = publish_plan(plan, published_by=self.teacher).version
         self.assertNotEqual(first_plan_version.id, second_plan_version.id)
-        self.assertNotEqual(first_plan_version.content_hash, second_plan_version.content_hash)
+        self.assertNotEqual(
+            first_plan_version.content_hash, second_plan_version.content_hash
+        )
         self.assertEqual(
             list(
                 first_plan_version.curriculum_references.values_list(

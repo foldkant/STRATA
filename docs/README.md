@@ -35,6 +35,7 @@
 - [P0 数据迁移执行台账](p0_data_migration_ledger.md)：按备份、源数量、目标数量、对象主键、批次、哈希、异常和待执行步骤记录实际迁移。
 - [P0 数据库、媒体与代码回滚手册](p0_rollback_runbook.md)：规定停写、备份副本验证、SQLite/媒体/代码恢复、恢复后验收和实际副本演练结果。
 - [P0 基线机器可读清单](p0_baseline_manifest.json)：保存治理文档、批次登记代码、数据库备份、课程标准媒体和测试结果的 SHA-256 基线。
+- [P1 课程标准检索与机器可读导出边界](p1_curriculum_retrieval.md)：记录结构化 JSON/JSONL、稳定检索片段、原文页码与哈希追溯、权限过滤及未来检索后端替换边界。
 - [测试与共同题集合](assessment_module_design.md)：记录普通题、共同题、分层题、题目版本、组卷快照、共同测量比较和小样本提示规则。
 - [学习数据检查](data_quality_pipeline.md)：定义七项检查指标、完整日窗口、重试状态、本校 API、夜间任务和学校管理员页面。
 - [统计验证与模型比较](model_validation_design.md)：定义 LONG-01 重复测量统计、M00-M03 透明基线、V-A 至 V-E 验证折、拒绝预测、负对照和模型卡。

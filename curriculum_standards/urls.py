@@ -130,6 +130,11 @@ urlpatterns = [
         name="api_curriculum_standard_markdown",
     ),
     path(
+        "curriculum-standard-versions/<int:pk>/structured.json",
+        views.curriculum_standard_json,
+        name="api_curriculum_standard_json",
+    ),
+    path(
         "curriculum-standard-versions/<int:pk>/structured.jsonl",
         views.curriculum_standard_jsonl,
         name="api_curriculum_standard_jsonl",

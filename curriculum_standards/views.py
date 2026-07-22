@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 import re
@@ -10,10 +9,8 @@ from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Prefetch, Q
-from django.http import FileResponse, HttpResponse
-from django.shortcuts import get_object_or_404
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.urls import reverse
-from django.utils import timezone
 from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import BasePermission
@@ -23,7 +20,6 @@ from api.responses import fail, ok
 
 from .models import (
     CurriculumDocumentType,
-    CurriculumExtractionStatus,
     CurriculumNodeType,
     CurriculumPageQualityStatus,
     CurriculumPageReviewStatus,
@@ -31,7 +27,6 @@ from .models import (
     CurriculumProcessingJobStatus,
     CurriculumProcessingMode,
     CurriculumProcessingPriority,
-    CurriculumProcessingStage,
     CurriculumRetrievalChunk,
     CurriculumRetrievalIndex,
     CurriculumRetrievalSourceKind,
@@ -58,7 +53,6 @@ from .retrieval import (
     search_retrieval_chunks,
 )
 from .processing import (
-    ACTIVE_JOB_STATUSES,
     create_processing_job,
     dispatch_processing_job,
     processing_job_summary,
@@ -132,7 +126,9 @@ def _pdf_url(request, version: CurriculumStandardVersion) -> str:
     return request.build_absolute_uri(path)
 
 
-def _node_row(node: CurriculumStandardNode, *, trace: bool = False, request=None) -> dict:
+def _node_row(
+    node: CurriculumStandardNode, *, trace: bool = False, request=None
+) -> dict:
     row = {
         "id": node.id,
         "node_type": node.node_type,
@@ -233,7 +229,9 @@ def _retrieval_index_row(index: CurriculumRetrievalIndex) -> dict:
     }
 
 
-def _retrieval_chunk_row(request, chunk: CurriculumRetrievalChunk, *, score=None) -> dict:
+def _retrieval_chunk_row(
+    request, chunk: CurriculumRetrievalChunk, *, score=None
+) -> dict:
     version = chunk.version
     row = {
         "chunk_id": chunk.chunk_id,
@@ -359,6 +357,9 @@ def _version_row(
         "structured_markdown_url": request.build_absolute_uri(
             reverse("api_curriculum_standard_markdown", kwargs={"pk": version.pk})
         ),
+        "structured_json_url": request.build_absolute_uri(
+            reverse("api_curriculum_standard_json", kwargs={"pk": version.pk})
+        ),
         "structured_jsonl_url": request.build_absolute_uri(
             reverse("api_curriculum_standard_jsonl", kwargs={"pk": version.pk})
         ),
@@ -391,7 +392,9 @@ def _version_row(
     return row
 
 
-def _standard_row(request, standard: CurriculumStandard, *, detail: bool = False) -> dict:
+def _standard_row(
+    request, standard: CurriculumStandard, *, detail: bool = False
+) -> dict:
     current = standard.current_version
     row = {
         "id": standard.id,
@@ -412,8 +415,7 @@ def _standard_row(request, standard: CurriculumStandard, *, detail: bool = False
     }
     if detail:
         row["versions"] = [
-            _version_row(request, version)
-            for version in standard.versions.all()
+            _version_row(request, version) for version in standard.versions.all()
         ]
         row["audit_logs"] = [
             {
@@ -451,7 +453,9 @@ def _standards_queryset():
         "quality_status",
         "review_status",
     )
-    return CurriculumStandard.objects.select_related("current_version").prefetch_related(
+    return CurriculumStandard.objects.select_related(
+        "current_version"
+    ).prefetch_related(
         "current_version__nodes",
         Prefetch(
             "current_version__pages",
@@ -467,7 +471,9 @@ def _standards_queryset():
                 "reviewed_by",
                 "published_by",
                 "archived_by",
-            ).defer("structured_text").prefetch_related(
+            )
+            .defer("structured_text")
+            .prefetch_related(
                 "nodes",
                 Prefetch(
                     "pages",
@@ -568,12 +574,18 @@ def super_admin_standards(request):
                 },
             )
     except (DjangoValidationError, IntegrityError) as exc:
-        errors = _errors(exc) if isinstance(exc, DjangoValidationError) else {
-            "non_field_errors": ["相同学段、文档类型和学科代码的档案已经存在。"]
-        }
+        errors = (
+            _errors(exc)
+            if isinstance(exc, DjangoValidationError)
+            else {"non_field_errors": ["相同学段、文档类型和学科代码的档案已经存在。"]}
+        )
         return fail("课程标准档案未创建。", errors=errors, status=409)
     standard = _standards_queryset().get(pk=standard.pk)
-    return ok(_standard_row(request, standard, detail=True), "课程标准档案已创建。", status=201)
+    return ok(
+        _standard_row(request, standard, detail=True),
+        "课程标准档案已创建。",
+        status=201,
+    )
 
 
 @api_view(["GET", "PATCH"])
@@ -615,9 +627,11 @@ def super_admin_standard_detail(request, pk: int):
                 },
             )
     except (DjangoValidationError, IntegrityError) as exc:
-        errors = _errors(exc) if isinstance(exc, DjangoValidationError) else {
-            "non_field_errors": ["课程标准档案与现有记录重复。"]
-        }
+        errors = (
+            _errors(exc)
+            if isinstance(exc, DjangoValidationError)
+            else {"non_field_errors": ["课程标准档案与现有记录重复。"]}
+        )
         return fail("课程标准档案未保存。", errors=errors, status=409)
     standard = _standards_queryset().get(pk=standard.pk)
     return ok(_standard_row(request, standard, detail=True), "课程标准档案已保存。")
@@ -754,9 +768,11 @@ def super_admin_version_detail(request, pk: int):
         version.save()
         refresh_version_hash(version)
     except (DjangoValidationError, IntegrityError) as exc:
-        errors = _errors(exc) if isinstance(exc, DjangoValidationError) else {
-            "non_field_errors": ["相同版本标识或相同内容已经存在。"]
-        }
+        errors = (
+            _errors(exc)
+            if isinstance(exc, DjangoValidationError)
+            else {"non_field_errors": ["相同版本标识或相同内容已经存在。"]}
+        )
         return fail("课程标准版本未保存。", errors=errors, status=409)
     CurriculumStandardAuditLog.objects.create(
         version=version,
@@ -797,9 +813,11 @@ def super_admin_version_nodes(request, pk: int):
         node = serializer.save()
         refresh_version_hash(version)
     except (DjangoValidationError, IntegrityError) as exc:
-        errors = _errors(exc) if isinstance(exc, DjangoValidationError) else {
-            "code": ["同一版本内的条目代码不能重复。"]
-        }
+        errors = (
+            _errors(exc)
+            if isinstance(exc, DjangoValidationError)
+            else {"code": ["同一版本内的条目代码不能重复。"]}
+        )
         return fail("课程标准内容条目未创建。", errors=errors, status=409)
     CurriculumStandardAuditLog.objects.create(
         version=version,
@@ -819,7 +837,9 @@ def super_admin_version_nodes(request, pk: int):
 @permission_classes([IsSuperAdmin])
 @atomic_mutation
 def super_admin_node_detail(request, pk: int):
-    node = CurriculumStandardNode.objects.select_related("version").filter(pk=pk).first()
+    node = (
+        CurriculumStandardNode.objects.select_related("version").filter(pk=pk).first()
+    )
     if node is None:
         return fail("课程标准内容条目不存在。", status=404)
     if node.version.status != CurriculumVersionStatus.DRAFT:
@@ -856,9 +876,11 @@ def super_admin_node_detail(request, pk: int):
         node = serializer.save()
         refresh_version_hash(version)
     except (DjangoValidationError, IntegrityError) as exc:
-        errors = _errors(exc) if isinstance(exc, DjangoValidationError) else {
-            "code": ["同一版本内的条目代码不能重复。"]
-        }
+        errors = (
+            _errors(exc)
+            if isinstance(exc, DjangoValidationError)
+            else {"code": ["同一版本内的条目代码不能重复。"]}
+        )
         return fail("课程标准内容条目未保存。", errors=errors, status=409)
     CurriculumStandardAuditLog.objects.create(
         version=version,
@@ -909,7 +931,9 @@ def curriculum_version_pages(request, pk: int):
 @permission_classes([IsSuperAdmin])
 @atomic_mutation
 def super_admin_page_detail(request, pk: int):
-    page = CurriculumStandardPage.objects.select_related("version").filter(pk=pk).first()
+    page = (
+        CurriculumStandardPage.objects.select_related("version").filter(pk=pk).first()
+    )
     if page is None:
         return fail("课程标准逐页文本不存在。", status=404)
     if "text" not in request.data:
@@ -1039,7 +1063,9 @@ def super_admin_version_archive(request, pk: int):
         version = archive_version(version, actor=request.user)
     except DjangoValidationError as exc:
         return fail("课程标准版本未归档。", errors=_errors(exc), status=400)
-    return _workflow_response(request, version, "课程标准版本已归档，历史引用保持不变。")
+    return _workflow_response(
+        request, version, "课程标准版本已归档，历史引用保持不变。"
+    )
 
 
 @api_view(["POST"])
@@ -1068,7 +1094,9 @@ def reference_options(request):
     subject_code = str(request.query_params.get("subject_code") or "").strip()
     subject_name = str(request.query_params.get("subject_name") or "").strip()
     node_type = str(request.query_params.get("node_type") or "").strip()
-    include_history = str(request.query_params.get("include_history") or "").lower() in {
+    include_history = str(
+        request.query_params.get("include_history") or ""
+    ).lower() in {
         "1",
         "true",
         "yes",
@@ -1117,10 +1145,14 @@ def curriculum_node_trace(request, pk: int):
     )
     if node is None:
         return fail("课程标准内容条目不存在。", status=404)
-    if node.version.status not in {
-        CurriculumVersionStatus.PUBLISHED,
-        CurriculumVersionStatus.ARCHIVED,
-    } and not request.user.is_platform_admin:
+    if (
+        node.version.status
+        not in {
+            CurriculumVersionStatus.PUBLISHED,
+            CurriculumVersionStatus.ARCHIVED,
+        }
+        and not request.user.is_platform_admin
+    ):
         return fail("课程标准内容条目不存在。", status=404)
     return ok(_node_row(node, trace=True, request=request))
 
@@ -1128,13 +1160,19 @@ def curriculum_node_trace(request, pk: int):
 @api_view(["GET"])
 @permission_classes([IsCurriculumStandardReader])
 def curriculum_standard_pdf(request, pk: int):
-    version = CurriculumStandardVersion.objects.select_related("source").filter(pk=pk).first()
+    version = (
+        CurriculumStandardVersion.objects.select_related("source").filter(pk=pk).first()
+    )
     if version is None or not version.pdf_file:
         return fail("课程标准 PDF 不存在。", status=404)
-    if version.status not in {
-        CurriculumVersionStatus.PUBLISHED,
-        CurriculumVersionStatus.ARCHIVED,
-    } and not request.user.is_platform_admin:
+    if (
+        version.status
+        not in {
+            CurriculumVersionStatus.PUBLISHED,
+            CurriculumVersionStatus.ARCHIVED,
+        }
+        and not request.user.is_platform_admin
+    ):
         return fail("课程标准 PDF 不存在。", status=404)
     response = FileResponse(
         version.pdf_file.open("rb"),
@@ -1196,6 +1234,85 @@ def curriculum_standard_markdown(request, pk: int):
     )
     response["Content-Disposition"] = (
         f'attachment; filename="curriculum-standard-{version.id}.md"'
+    )
+    response["ETag"] = f'"{version.content_hash}"'
+    return response
+
+
+@api_view(["GET"])
+@permission_classes([IsCurriculumStandardReader])
+def curriculum_standard_json(request, pk: int):
+    """Download one self-contained, source-traceable JSON document.
+
+    JSONL remains available for streaming/indexing workflows.  This endpoint
+    gives administrators and downstream AI preparation jobs a regular JSON
+    object with explicit collections and the same immutable source anchors.
+    """
+
+    version = (
+        CurriculumStandardVersion.objects.select_related("source")
+        .prefetch_related("nodes__parent", "pages__reviewed_by")
+        .filter(pk=pk)
+        .first()
+    )
+    if version is None or not _reader_can_access_version(request, version):
+        return fail("课程标准版本不存在。", status=404)
+
+    pages = list(version.pages.order_by("page_number"))
+    content_items = list(version.nodes.all())
+    retrieval = None
+    if retrieval_index_is_current(version):
+        index = CurriculumRetrievalIndex.objects.select_related(
+            "version__source",
+            "built_by",
+        ).get(version=version)
+        chunks = index.chunks.select_related("version__source", "source_node").all()
+        retrieval = {
+            "index": _retrieval_index_row(index),
+            "chunks": [_retrieval_chunk_row(request, chunk) for chunk in chunks],
+        }
+
+    payload = {
+        "schema": "curriculum_standard_export_v1",
+        "standard": {
+            "id": version.source_id,
+            "title": version.title_snapshot,
+            "document_type": version.document_type_snapshot,
+            "school_stage": version.school_stage_snapshot,
+            "subject_code": version.subject_code_snapshot,
+            "subject_name": version.subject_name_snapshot,
+        },
+        "version": {
+            "id": version.id,
+            "official_title": version.official_title,
+            "version_label": version.version_label,
+            "publication_year": version.publication_year,
+            "effective_year": version.effective_year,
+            "issued_by": version.issued_by,
+            "status": version.status,
+            "source_url": version.source_url,
+            "source_note": version.source_note,
+            "pdf_sha256": version.pdf_sha256,
+            "pdf_size_bytes": version.pdf_size_bytes,
+            "pdf_page_count": version.pdf_page_count,
+            "structured_text_sha256": version.structured_text_sha256,
+            "content_hash": version.content_hash,
+            "extraction_engine": version.extraction_engine,
+            "extraction_engine_version": version.extraction_engine_version,
+            "extraction_config": version.extraction_config,
+            "extracted_at": version.extracted_at,
+        },
+        "structured_text": version.structured_text,
+        "pages": [_page_row(page, include_text=True) for page in pages],
+        "content_items": [_node_row(node) for node in content_items],
+        "retrieval": retrieval,
+    }
+    response = JsonResponse(
+        payload,
+        json_dumps_params={"ensure_ascii": False, "separators": (",", ":")},
+    )
+    response["Content-Disposition"] = (
+        f'attachment; filename="curriculum-standard-{version.id}.json"'
     )
     response["ETag"] = f'"{version.content_hash}"'
     return response
@@ -1437,16 +1554,18 @@ def super_admin_rebuild_retrieval_index(request, pk: int):
 @permission_classes([IsCurriculumStandardReader])
 def curriculum_retrieval_chunks(request, pk: int):
     version = (
-        CurriculumStandardVersion.objects.select_related("source")
-        .filter(pk=pk)
-        .first()
+        CurriculumStandardVersion.objects.select_related("source").filter(pk=pk).first()
     )
     if version is None or not _reader_can_access_version(request, version):
         return fail("课程标准版本不存在。", status=404)
-    index = CurriculumRetrievalIndex.objects.select_related(
-        "version",
-        "built_by",
-    ).filter(version=version).first()
+    index = (
+        CurriculumRetrievalIndex.objects.select_related(
+            "version",
+            "built_by",
+        )
+        .filter(version=version)
+        .first()
+    )
     if index is None or not retrieval_index_is_current(version, index=index):
         return fail(
             "课程标准检索索引尚未建立或已经过期。",
@@ -1522,7 +1641,11 @@ def curriculum_retrieval_search(request):
             "available_backends": list(SUPPORTED_RETRIEVAL_BACKENDS),
             "version_scope": (
                 values.get("version_id")
-                or ("published_history" if values.get("include_history") else "current_published")
+                or (
+                    "published_history"
+                    if values.get("include_history")
+                    else "current_published"
+                )
             ),
             "result_count": len(results),
             "results": [
@@ -1669,7 +1792,9 @@ def super_admin_processing_job_detail(request, pk: int):
 @api_view(["POST"])
 @permission_classes([IsSuperAdmin])
 def super_admin_create_processing_job(request, pk: int):
-    version = CurriculumStandardVersion.objects.select_related("source").filter(pk=pk).first()
+    version = (
+        CurriculumStandardVersion.objects.select_related("source").filter(pk=pk).first()
+    )
     if not version:
         return fail("课程标准版本不存在。", status=404)
     serializer = CurriculumProcessingJobCreateSerializer(data=request.data)
