@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from rest_framework import serializers
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 
 from courses.models import Course
 from learning_analytics.evaluation_models import (
@@ -13,6 +15,12 @@ from learning_analytics.evaluation_models import (
     EvaluationTrialRecord,
     EvaluationTrialStatus,
     EvaluationTrialType,
+)
+from curriculum_standards.models import CurriculumStandardNode
+from curriculum_standards.services import (
+    replace_plan_curriculum_references,
+    subject_names_equivalent,
+    validate_curriculum_nodes,
 )
 
 
@@ -55,6 +63,12 @@ def _clean_object_list(value, *, field_name: str, max_items: int = 30) -> list[d
 
 class EvaluationPlanWriteSerializer(StrictModelSerializer):
     course = serializers.PrimaryKeyRelatedField(queryset=Course.objects.none())
+    curriculum_node_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        write_only=True,
+        max_length=100,
+    )
 
     class Meta:
         model = EvaluationPlan
@@ -72,6 +86,7 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
             "support_options",
             "scoring_rules",
             "follow_up_suggestion",
+            "curriculum_node_ids",
         )
         extra_kwargs = {
             "title": {"required": True, "allow_blank": False},
@@ -100,6 +115,31 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
             raise serializers.ValidationError(
                 {"course": "评价方案发布过版本后不能更换课程，请新建方案。"}
             )
+        has_node_ids = "curriculum_node_ids" in attrs
+        node_ids = attrs.get("curriculum_node_ids")
+        node = None
+        if node_ids:
+            node = CurriculumStandardNode.objects.select_related("version").filter(
+                pk=node_ids[0]
+            ).first()
+        elif not has_node_ids and instance and instance.curriculum_references.exists():
+            node = (
+                CurriculumStandardNode.objects.select_related("version")
+                .filter(draft_evaluation_plan_references__plan=instance)
+                .first()
+            )
+        if node and not subject_names_equivalent(
+                course.subject.name,
+                node.version.subject_name_snapshot,
+        ):
+            raise serializers.ValidationError(
+                {
+                    "curriculum_node_ids": (
+                        f"课程学科“{course.subject.name}”与所选课程标准学科"
+                        f"“{node.version.subject_name_snapshot}”不一致。"
+                    )
+                }
+            )
         return attrs
 
     def validate_learning_goals(self, value):
@@ -125,21 +165,46 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
             raise serializers.ValidationError("评分规则必须是对象。")
         return value
 
+    def validate_curriculum_node_ids(self, value):
+        normalized = list(dict.fromkeys(value))
+        nodes = list(
+            CurriculumStandardNode.objects.select_related("version__source").filter(
+                pk__in=normalized
+            )
+        )
+        if len(nodes) != len(normalized):
+            raise serializers.ValidationError("部分课程标准内容条目不存在。")
+        try:
+            validate_curriculum_nodes(nodes, require_complete=False)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
+        return normalized
+
     def create(self, validated_data):
         request = self.context["request"]
+        curriculum_node_ids = validated_data.pop("curriculum_node_ids", [])
         course = validated_data["course"]
-        return EvaluationPlan.objects.create(
-            school=request.user.school,
-            subject=course.subject,
-            scope=EvaluationScope.COURSE,
-            review_status=EvaluationReviewStatus.DRAFT,
-            created_by=request.user,
-            updated_by=request.user,
-            **validated_data,
-        )
+        with transaction.atomic():
+            plan = EvaluationPlan.objects.create(
+                school=request.user.school,
+                subject=course.subject,
+                scope=EvaluationScope.COURSE,
+                review_status=EvaluationReviewStatus.DRAFT,
+                created_by=request.user,
+                updated_by=request.user,
+                **validated_data,
+            )
+            if curriculum_node_ids:
+                replace_plan_curriculum_references(
+                    plan=plan,
+                    node_ids=curriculum_node_ids,
+                    actor=request.user,
+                )
+        return plan
 
     def update(self, instance, validated_data):
         request = self.context["request"]
+        curriculum_node_ids = validated_data.pop("curriculum_node_ids", None)
         course = validated_data.get("course", instance.course)
         instance.subject = course.subject
         instance.updated_by = request.user
@@ -147,7 +212,14 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
         instance.review_status = EvaluationReviewStatus.DRAFT
         for field_name, value in validated_data.items():
             setattr(instance, field_name, value)
-        instance.save()
+        with transaction.atomic():
+            instance.save()
+            if curriculum_node_ids is not None:
+                replace_plan_curriculum_references(
+                    plan=instance,
+                    node_ids=curriculum_node_ids,
+                    actor=request.user,
+                )
         return instance
 
 

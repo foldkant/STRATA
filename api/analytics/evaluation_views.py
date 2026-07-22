@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.utils import timezone
+from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes
 
 from api.permissions import IsTeacher
@@ -59,6 +60,36 @@ def _version_summary(version) -> dict | None:
     }
 
 
+def _curriculum_reference_row(reference) -> dict:
+    node = reference.node
+    version = node.version
+    source = version.source
+    return {
+        "id": node.id,
+        "reference_id": reference.id,
+        "node_type": node.node_type,
+        "node_type_label": node.get_node_type_display(),
+        "code": node.code,
+        "title": node.title,
+        "content": node.content,
+        "source_page_start": node.source_page_start,
+        "source_page_end": node.source_page_end,
+        "source_paragraph": node.source_paragraph,
+        "version_id": version.id,
+        "version_label": version.version_label,
+        "standard_id": source.id,
+        "standard_title": version.official_title,
+        "subject_code": version.subject_code_snapshot,
+        "subject_name": version.subject_name_snapshot,
+        "school_stage": version.school_stage_snapshot,
+        "source_url": version.source_url,
+        "pdf_url": reverse("api_curriculum_standard_pdf", kwargs={"pk": version.id}),
+        "content_hash": node.content_hash,
+        "curriculum_version_hash": version.content_hash,
+        "alignment_explanation": reference.alignment_explanation,
+    }
+
+
 def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
     latest = next(iter(getattr(plan, "prefetched_versions", [])), None)
     if latest is None and detail:
@@ -78,6 +109,7 @@ def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
         "goal_count": len(plan.learning_goals),
         "basis_count": len(plan.evaluation_basis),
         "task_count": len(plan.learning_tasks),
+        "curriculum_reference_count": len(plan.curriculum_references.all()),
         "review_status": plan.review_status,
         "review_status_label": plan.get_review_status_display(),
         "latest_version": _version_summary(latest),
@@ -97,6 +129,10 @@ def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
                 "support_options": plan.support_options,
                 "scoring_rules": plan.scoring_rules,
                 "follow_up_suggestion": plan.follow_up_suggestion,
+                "curriculum_references": [
+                    _curriculum_reference_row(reference)
+                    for reference in plan.curriculum_references.all()
+                ],
                 "versions": [
                     _version_summary(version)
                     for version in plan.versions.select_related("published_by").order_by("-version_no")
@@ -188,7 +224,9 @@ def _teacher_plans(request):
     return EvaluationPlan.objects.filter(
         school=request.user.school,
         course__teacher=request.user,
-    ).select_related("subject", "course")
+    ).select_related("subject", "course").prefetch_related(
+        "curriculum_references__node__version__source"
+    )
 
 
 def _request_bool(value) -> bool:

@@ -15,6 +15,7 @@ frontend/.env.*
 storage/dev.sqlite3
 storage/*.sqlite3
 storage/cleanup_backups/
+storage/celery/
 storage/media/
 storage/static/
 storage/mlruns/

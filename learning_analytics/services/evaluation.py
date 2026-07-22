@@ -16,6 +16,10 @@ from learning_analytics.evaluation_models import (
     EvaluationDimension,
     canonical_content_hash,
 )
+from curriculum_standards.services import (
+    copy_plan_curriculum_references,
+    curriculum_reference_payload,
+)
 
 CODE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,31}$")
 THINKING_REQUIREMENT_VALUES = {
@@ -388,6 +392,9 @@ def publish_plan(
 ) -> PublishResult:
     plan = EvaluationPlan.objects.select_for_update().get(pk=plan.pk)
     payload = validate_plan_for_publish(plan)
+    curriculum_references = curriculum_reference_payload(plan)
+    if curriculum_references:
+        payload["curriculum_references"] = curriculum_references
     content_hash = canonical_content_hash(payload)
     existing = plan.versions.filter(content_hash=content_hash).first()
     if existing:
@@ -401,8 +408,14 @@ def publish_plan(
         version_no=(latest.version_no + 1) if latest else 1,
         content_hash=content_hash,
         published_by=published_by,
-        **{key: value for key, value in payload.items() if not key.endswith("_id")},
+        **{
+            key: value
+            for key, value in payload.items()
+            if not key.endswith("_id") and key != "curriculum_references"
+        },
     )
+    if curriculum_references:
+        copy_plan_curriculum_references(plan=plan, plan_version=version)
     return PublishResult(version, True)
 
 

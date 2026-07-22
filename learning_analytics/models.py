@@ -69,6 +69,10 @@ from .grouping_models import (  # noqa: F401
     GroupingPolicyVersion,
     GroupingTeacherDecision,
 )
+from .test_data_governance_models import (  # noqa: F401
+    TestDataBatch,
+    TestDataObjectMarker,
+)
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 SCHEMA_VERSION_PATTERN = re.compile(r"^\d+\.\d+$")

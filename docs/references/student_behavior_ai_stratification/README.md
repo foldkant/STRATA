@@ -14,6 +14,8 @@
 - `refs_recent_2021_2025.txt`：本轮新增近五年文献的 DOI 输入清单。
 - `refs_2026.txt`：2026 年新增且经 Crossref 核验的 DOI 输入清单。
 - `refs_rounds_16_30.txt`：第 16-30 轮科学审查新增 23 篇文献的 DOI 输入清单。
+- `refs_evaluation_stratification_grouping_rounds_11_30.txt`：评价、状态/模型训练与分组新增反证的 62 条唯一 DOI 补充清单；独立于原 105 条主库计数。
+- `evaluation_stratification_grouping_rounds_11_30_search.md`：本轮研究问题、概念块、检索回退、纳入排除、核心来源和正式系统检索缺口记录。
 - `download_open_access_papers.ps1`：只下载 OpenAlex 标记为开放获取的 PDF，并验证文件签名。
 - `search_protocol.md`：检索问题、概念块、纳入排除标准、当前计数和证据使用边界。
 

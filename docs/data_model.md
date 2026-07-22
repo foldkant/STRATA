@@ -391,8 +391,12 @@
 - `SyntheticStudentTruth`：保存模拟生成所需的连续隐藏潜变量；不进入正式特征、API 或学生档案。
 - `LearningEventV2.synthetic_run`：模拟事件到生成批次的不可变来源关联。
 - `AnalyticsPipelineRun.synthetic_run`、`DataQualityReport.synthetic_run`、`EventIngestionDailyCounter.synthetic_run`：隔离正式记录和指定测试批次。
+- `TestDataBatch`：保存历史或手工测试数据的批次编号、唯一用途、来源类型、说明、对象数量和清单 SHA-256；批次一经建立不可覆盖或删除。
+- `TestDataObjectMarker`：保存批次内一个白名单非个人对象的 `app_label + model_name + object_pk` 和对象名称快照；同一对象只能属于一个手工测试批次。原登记不可覆盖或删除，误标通过 `is_active=false`、撤销人、撤销时间和撤销原因留痕纠正。
 
 正式夜间检查排除 `is_synthetic=true` 的模拟学校；正式学校检查报告始终排除已关联 `synthetic_run` 的测试事件和计数。模拟事件仍通过正式写入、任务关联和评分服务生成，以验证程序，详细边界见[模拟数据开发说明](synthetic_data_research_track.md)。
+
+`TestDataBatch` 不替代 `SyntheticDatasetRun`，也不依据标题自动推断测试数据。P0 只建立历史/手工对象治理清单；在正式统计查询统一接入排除逻辑前，登记对象不得进入正式分析任务。迁移 `learning_analytics.0032` 建立两张表，登记命令为 `register_test_data_batch`，详细规则见 [P0 工程冻结清单](p0_governance_freeze.md) 和 [数据迁移执行台账](p0_data_migration_ledger.md)。
 
 ## 教师评价标准管理
 

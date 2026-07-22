@@ -213,6 +213,70 @@ Celery Beat 默认每天 01:30 检查前一完整自然日的学习数据，02:3
 
 Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channel Layer 使用 `/0`、Celery broker 使用 `/1`、结果使用 `/2`。
 
+### 课程标准文字处理专用队列
+
+课程标准 PDF 解析和文字识别不得由 Web 请求进程同步执行，也不得与夜间分析任务共用一个 worker。任务 `curriculum_standards.process_version_pdf` 固定路由到 `curriculum_ocr`；一个任务只处理一个课程标准版本，专用 worker 只监听该队列，并固定为 `concurrency=1`、`prefetch=1`。普通 worker 的启动脚本只监听 `celery`，不会领取课程标准任务。
+
+Windows 学校服务器使用 Redis 时启动：
+
+```powershell
+.\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Redis -CpuCount 2
+.\scripts\get_curriculum_ocr_worker_status.ps1
+```
+
+启动脚本将进程优先级设为 `BelowNormal`，把处理进程限制在前两个逻辑处理器，并把常见数值计算库的线程数限制为 1。任一 Windows 资源限制设置失败时，脚本默认立即停止尚未开始工作的 worker；只有已经由操作系统服务施加等效限制时，运维人员才可显式使用 `-AllowUnboundedResources`。这里的 CPU 亲和性是本机资源保护措施，不是性能结论；部署方可在实际硬件监测后把 `-CpuCount` 调整为 1—8，但不能提高任务并发数。日志写入 `logs/curriculum_ocr_worker/`。
+
+任务使用延迟确认，状态和进度只写入平台数据库，不依赖 Celery result backend。默认软/硬时限分别为 10,800/11,100 秒；Redis `visibility_timeout` 默认至少为 14,400 秒，必须长于硬时限，避免任务仍在执行时被重复投递。数据库唯一约束、PDF/内容哈希和任务状态共同保证重复投递不会产生两份正式结果。处理结果先逐页写入暂存区，整份成功后才在一个事务内替换草稿版本的正式逐页文本；失败、取消或 worker 丢失都不能留下部分正式文本。
+
+Windows `solo` 池不能可靠强制执行 Celery 的软/硬时限，且忙碌时不能及时响应远程控制。因此任务每页检查取消状态并更新心跳；默认超过 1,800 秒没有心跳的 `running/cancelling` 任务由平台标记为 `failed(worker_lost)`，可通过 `CURRICULUM_PROCESSING_STALE_SECONDS` 调整但不得低于 300 秒，再由管理员手动重试。停止前必须先在超级管理员任务中心取消正在处理的任务并等待终态：
+
+```powershell
+.\scripts\stop_curriculum_ocr_worker.ps1
+```
+
+停止脚本通过只读的 `curriculum_queue_status --exit-nonzero-if-active` 检查数据库；存在 `running/cancelling` 时默认拒绝停止。`-Force` 只用于 worker 已不可恢复的情况，中断的任务随后必须经过失联任务核对和人工重试。
+
+Linux 生产服务器仍使用 Redis，并应由服务管理器施加资源边界。服务命令至少包含：
+
+```text
+celery -A config worker --queues=curriculum_ocr --pool=prefork --concurrency=1 --prefetch-multiplier=1 --loglevel=INFO
+```
+
+可在 systemd 单元按服务器容量设置 `CPUQuota`、`MemoryMax` 和 `TimeoutStopSec`；硬时限之外仍要保留系统级终止上限。不要在网络共享目录上使用文件系统 broker，不要让课程标准 worker 监听默认队列，也不要让普通 worker 监听 `curriculum_ocr`。
+
+#### 无 Redis 的单机开发环境
+
+当前单机 Windows 开发环境可以使用 Kombu filesystem transport，但它只用于同一台机器的工程调试。Web/API 与 worker 必须指向同一根目录，并使用相反方向：
+
+```env
+CELERY_BROKER_URL=filesystem://
+CELERY_RESULT_BACKEND=disabled://
+CURRICULUM_CELERY_FILESYSTEM_ROLE=producer
+CURRICULUM_CELERY_FILESYSTEM_ROOT=storage/celery/curriculum_ocr
+```
+
+目录由 worker 启动脚本创建：
+
+```text
+storage/celery/curriculum_ocr/
+  producer-out/  Web 写入、worker 读取
+  worker-out/    worker 写入、Web 读取
+  processed/     已领取消息的本地诊断副本
+  control/       Kombu 交换机与队列绑定表
+```
+
+先执行配置检查，再启动 worker；Web 进程若此前载入过 Redis 配置，必须重启一次才会成为 filesystem producer：
+
+```powershell
+.\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Filesystem -ValidateOnly
+.\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Filesystem -CpuCount 2
+.\scripts\get_curriculum_ocr_worker_status.ps1
+```
+
+Windows 下 filesystem transport 需要 `pywin32`，已经纳入 `requirements/curriculum.txt` 和离线 wheelhouse 流程。它不提供 Redis 的可靠远程控制和崩溃后自动重新投递保证；消息文件只用于本机调试，任务真值始终以数据库为准，失联后由管理员核对并重试。学校正式环境必须切回 Redis，不能把此目录复制到共享盘充当生产消息队列。
+
+本地 SQLite 的 `SQLITE_TIMEOUT_SECONDS` 默认设为 30 秒，只用于容忍 Web 与 worker 短事务偶发重叠；它不允许任务持有长事务，也不能代替生产 PostgreSQL。文字识别在数据库事务外执行，逐页暂存和最终提交保持短事务。学校正式并发运行必须使用 PostgreSQL。
+
 部署验收：
 
 ```powershell
@@ -238,6 +302,8 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 `generate_synthetic_learning_data` 主要用于开发机或独立测试数据库。学校正式库确需做界面验收时可使用 `school_overlay`，但必须先备份、指定真实任课教师，并记录返回的 `run_id` 和完整 `dataset_key`。正式检查报告会排除测试批次，其他普通业务统计在清理前可能显示带 `SIM` 前缀的测试班级和学生。
 
 独立模拟账号使用不可登录密码；校内测试学生统一使用测试密码 `123456`，只能用于受控验收，不能作为正式账号分发。验收后执行 `purge_synthetic_learning_data --run-id ... --confirm-key ...` 整批清理。测试报告只能证明程序和自动检查可运行，不能覆盖本校正式检查报告，也不能作为模型上线依据。
+
+历史或手工建立的非个人测试对象不得只靠 `test`、`SIM` 或数字标题识别。迁移到 `learning_analytics.0032` 后，由超级管理员先执行 `register_test_data_batch --dry-run`，核对精确模型和主键，再使用 `--confirm REGISTER_TEST_DATA` 建立不可变批次清单。该登记不自动扩大正式查询的排除范围；接入统一排除逻辑前，登记对象不得进入正式统计、模型训练或研究数据版本。迁移和回滚步骤见 `p0_data_migration_ledger.md` 与 `p0_rollback_runbook.md`。
 
 ## 2026-07-20 验收记录
 

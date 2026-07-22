@@ -5,6 +5,7 @@ from pathlib import Path
 
 from celery.schedules import crontab
 from dotenv import load_dotenv
+from kombu import Queue
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -30,6 +31,13 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(env(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-only-change-me")
 AI_SECRET_KEY = env("AI_SECRET_KEY", SECRET_KEY)
 LEARNING_EVENT_QUARANTINE_KEY = env("LEARNING_EVENT_QUARANTINE_KEY", "")
@@ -39,6 +47,11 @@ LEARNING_EVENT_QUARANTINE_RETENTION_DAYS = min(
 )
 LEARNING_EVENT_WRITE_MODE = env("LEARNING_EVENT_WRITE_MODE", "dual_required").strip()
 DEBUG = env_bool("DJANGO_DEBUG", True)
+CURRICULUM_REQUIRE_SEPARATE_REVIEWERS = env_bool(
+    "CURRICULUM_REQUIRE_SEPARATE_REVIEWERS",
+    not DEBUG,
+)
+CURRICULUM_OCR_SCALE = min(max(env_float("CURRICULUM_OCR_SCALE", 1.5), 1.0), 3.0)
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost")
 SECURE_CROSS_ORIGIN_OPENER_POLICY = env("DJANGO_CROSS_ORIGIN_OPENER_POLICY", "same-origin") or None
 CSRF_TRUSTED_ORIGINS = [
@@ -62,6 +75,7 @@ INSTALLED_APPS = [
     "courses",
     "learning",
     "learning_analytics",
+    "curriculum_standards",
     "realtime",
     "aiops",
     "api",
@@ -115,10 +129,15 @@ if database_engine == "postgresql":
     }
 else:
     sqlite_name = env("DATABASE_NAME", "storage/dev.sqlite3")
+    sqlite_timeout_seconds = min(max(env_int("SQLITE_TIMEOUT_SECONDS", 30), 5), 120)
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / sqlite_name,
+            # OCR commits page staging in short transactions. A longer busy
+            # timeout prevents transient Web/worker overlap from failing
+            # immediately; production PostgreSQL is unaffected.
+            "OPTIONS": {"timeout": sqlite_timeout_seconds},
         }
     }
 
@@ -183,6 +202,97 @@ CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/2")
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 60 * 60
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TASK_DEFAULT_QUEUE = "celery"
+CELERY_TASK_DEFAULT_ROUTING_KEY = "celery"
+CURRICULUM_PROCESSING_QUEUE = env(
+    "CURRICULUM_PROCESSING_QUEUE",
+    "curriculum_ocr",
+).strip() or "curriculum_ocr"
+if CURRICULUM_PROCESSING_QUEUE != "curriculum_ocr":
+    raise ValueError("CURRICULUM_PROCESSING_QUEUE must remain 'curriculum_ocr'.")
+CURRICULUM_PROCESSING_STALE_SECONDS = max(
+    env_int("CURRICULUM_PROCESSING_STALE_SECONDS", 30 * 60),
+    5 * 60,
+)
+CELERY_TASK_QUEUES = (
+    Queue("celery", routing_key="celery"),
+    Queue(CURRICULUM_PROCESSING_QUEUE, routing_key=CURRICULUM_PROCESSING_QUEUE),
+)
+CELERY_TASK_ROUTES = {
+    "curriculum_standards.process_version_pdf": {
+        "queue": CURRICULUM_PROCESSING_QUEUE,
+        "routing_key": CURRICULUM_PROCESSING_QUEUE,
+    },
+}
+
+# One curriculum-standard job owns one PDF. The dedicated worker also fixes
+# concurrency and prefetch on its command line; these values are consumed by
+# the task so ordinary analytics jobs keep their existing one-hour limit.
+CURRICULUM_OCR_TASK_SOFT_TIME_LIMIT = max(
+    env_int("CURRICULUM_OCR_TASK_SOFT_TIME_LIMIT", 3 * 60 * 60),
+    5 * 60,
+)
+CURRICULUM_OCR_TASK_TIME_LIMIT = max(
+    env_int("CURRICULUM_OCR_TASK_TIME_LIMIT", CURRICULUM_OCR_TASK_SOFT_TIME_LIMIT + 5 * 60),
+    CURRICULUM_OCR_TASK_SOFT_TIME_LIMIT + 60,
+)
+
+# Redis remains mandatory in production. A single-host Windows development
+# machine may opt into Kombu's filesystem transport. Producer and worker use
+# opposite inbox/outbox directions; processed messages are retained for local
+# diagnosis. The worker launcher creates these directories before Celery
+# imports this configuration.
+if CELERY_BROKER_URL.lower().startswith("filesystem://"):
+    CURRICULUM_CELERY_FILESYSTEM_ROLE = env(
+        "CURRICULUM_CELERY_FILESYSTEM_ROLE",
+        "producer",
+    ).strip().lower()
+    if CURRICULUM_CELERY_FILESYSTEM_ROLE not in {"producer", "worker"}:
+        raise ValueError(
+            "CURRICULUM_CELERY_FILESYSTEM_ROLE must be 'producer' or 'worker'."
+        )
+
+    _filesystem_root = Path(
+        env(
+            "CURRICULUM_CELERY_FILESYSTEM_ROOT",
+            "storage/celery/curriculum_ocr",
+        )
+    ).expanduser()
+    if not _filesystem_root.is_absolute():
+        _filesystem_root = BASE_DIR / _filesystem_root
+    _filesystem_root = _filesystem_root.resolve()
+    _producer_out = _filesystem_root / "producer-out"
+    _worker_out = _filesystem_root / "worker-out"
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        "data_folder_in": str(
+            _worker_out
+            if CURRICULUM_CELERY_FILESYSTEM_ROLE == "producer"
+            else _producer_out
+        ),
+        "data_folder_out": str(
+            _producer_out
+            if CURRICULUM_CELERY_FILESYSTEM_ROLE == "producer"
+            else _worker_out
+        ),
+        "store_processed": True,
+        "processed_folder": str(_filesystem_root / "processed"),
+        "control_folder": str(_filesystem_root / "control"),
+    }
+    # Curriculum processing persists its state in Django models and its task
+    # explicitly ignores Celery results. Do not accidentally fall back to a
+    # Redis result backend when the local filesystem broker is selected.
+    CELERY_RESULT_BACKEND = "disabled://"
+elif CELERY_BROKER_URL.lower().startswith(("redis://", "rediss://")):
+    # acks_late OCR jobs must not become visible again while still inside their
+    # allowed execution window. Keep the Redis visibility window beyond the
+    # curriculum hard limit; duplicate delivery is still guarded by DB state.
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        "visibility_timeout": max(
+            env_int("CELERY_VISIBILITY_TIMEOUT", 4 * 60 * 60),
+            CURRICULUM_OCR_TASK_TIME_LIMIT + 5 * 60,
+        ),
+    }
 ANALYTICS_CODE_VERSION = env("ANALYTICS_CODE_VERSION", "")
 CELERY_BEAT_SCHEDULE = {
     "strata-nightly-data-quality": {

@@ -3,6 +3,7 @@ from django.urls import include, path
 from . import assessment_views, chat_views, protected_files, super_admin_views, views
 
 urlpatterns = [
+    path("", include("curriculum_standards.urls")),
     path("", include("api.analytics.urls")),
     path(
         "files/courses/<int:pk>/cover/",

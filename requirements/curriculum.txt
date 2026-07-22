@@ -1,0 +1,11 @@
+-r base.txt
+
+# Isolated document-processing stack for the curriculum-standard service.
+# Scanned compulsory-education PDFs need OCR; ordinary PDFs use embedded text first.
+pypdf==6.6.0
+PyMuPDF==1.26.7
+rapidocr-onnxruntime==1.4.4
+
+# Kombu's filesystem broker imports Win32 file-locking APIs on Windows.
+# This is only the local, single-host development fallback; production uses Redis.
+pywin32==312; sys_platform == "win32"
