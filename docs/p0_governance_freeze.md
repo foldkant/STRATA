@@ -138,5 +138,5 @@ python manage.py revoke_test_data_marker `
 
 - 本文件建立的是可执行工程规则，不声称已经取得外部专家、学校或伦理委员会签字。
 - P0/P1 最终代码已经形成专用分支提交和本地 Git 标签；具体提交与标签记录在 `p0_baseline_manifest.json`。跨机器部署前仍应推送至受控远端或制作不可变源代码包。
-- `learning_analytics.0032` 尚未应用到正在被 OCR worker 写入的开发库；应用结果必须在 `p0_data_migration_ledger.md` 追加，不得提前写成已完成。
+- `learning_analytics.0032` 已在安全停写、最终备份和隔离副本验证后应用到开发库；实际迁移、幂等登记与校验结果记录在 `p0_data_migration_ledger.md`，后续环境不得跳过相同的停写与备份条件。
 - 模糊历史对象仍需项目负责人逐项确认；未确认不等于正式数据，也不等于测试数据。

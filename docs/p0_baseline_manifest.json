@@ -1,6 +1,6 @@
 {
   "baseline_id": "P0-GOV-20260722-v1",
-  "captured_at": "2026-07-22T12:23:00+08:00",
+  "captured_at": "2026-07-22T12:27:36+08:00",
   "scope": "P0 terminology, permissions, version rules, data purposes, migration ledger, rollback and explicit historical/manual test-data governance",
   "repository": {
     "branch": "feature/p0-p1-curriculum-governance",
@@ -34,8 +34,8 @@
     },
     {
       "path": "docs/p0_governance_freeze.md",
-      "bytes": 11399,
-      "sha256": "16ea85ee15f9deab7f446b6c3a50c1c8613ea30327a9abcca989d5dd9abf8be1"
+      "bytes": 11470,
+      "sha256": "b097a2d190d7792331f1611193bc5af20c049ac9f98f0dea620875946cedcc46"
     },
     {
       "path": "docs/p0_data_migration_ledger.md",
