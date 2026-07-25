@@ -22,6 +22,8 @@ jobs:
       ONLYOFFICE_JWT_SECRET: ci-only-onlyoffice-secret
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare temporary runtime directory
+        run: mkdir -p storage
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -86,6 +88,8 @@ jobs:
       E2E_CLASSROOM_ID: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare temporary runtime directory
+        run: mkdir -p storage
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
