@@ -22,7 +22,7 @@
 ## 教学核心能力
 
 - [学生行为分析与 AI 隐性动态分层设计报告](student_behavior_ai_stratification_design.md)：汇总 30 轮科学审查，规定研究级事件、过程性评价标准、特征、计划结局、教师可见/学生隐性的内容带、班级校准模型、夜间自动流程和论文研究设计。
-- [学生学习分析与分层教学开发计划](student_behavior_ai_stratification_development_roadmap.md)：用通俗阶段说明当前进度、固定开发顺序、模拟数据用途和每阶段验收要求。
+- [学生学习分析与分层教学开发计划](student_behavior_ai_stratification_development_roadmap.md)：按开发阶段说明当前进度、实施顺序、模拟数据用途和各阶段验收要求。
 - [学习指标、未来结果与数据版本设计](feature_outcome_dataset_design.md)：说明固定分析时间点、多窗口特征、缺失原因、7 日未来结果、匿名数据版本和权限边界。
 - [当前开发进度](implementation_progress_audit.md)：按 Git、迁移、测试和真实组件运行结果说明已经完成、正在开发和尚未开始的工作。
 - [教师评价标准管理](evaluation_management.md)：记录教师课程评价方案、评价标准、评价指标、评分示例、试用记录、版本管理和权限边界。

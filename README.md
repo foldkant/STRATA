@@ -322,7 +322,7 @@ ONLYOFFICE 是可选能力。配置后可以在网页中预览或协作编辑 Wo
 
 正式试点前应完成学校和伦理审批、学生及监护人知情同意、教师培训、研究预注册、数据保存期限和退出流程。
 
-科研设计与多轮科学论证保存在 [`docs/`](docs/README.md)。这些材料用于支持后续论文和研究决策，不代表已经获得真实教学效度、信度、公平性或因果效果证据。
+教育研究方案与阶段性论证记录保存在 [`docs/`](docs/README.md)。这些材料用于支持后续研究决策和学术成果准备，不代表已经获得真实教学效度、信度、公平性或因果效果证据。
 
 ## 当前工程进度
 
@@ -582,4 +582,3 @@ git diff --check
 - [前端架构](docs/frontend_architecture.md)
 - [平台综合检查报告](docs/platform-audit-2026-07-24/README.md)
 - [ONLYOFFICE 集成](docs/onlyoffice_integration.md)
-
