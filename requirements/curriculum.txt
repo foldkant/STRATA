@@ -2,7 +2,6 @@
 
 # Isolated document-processing stack for the curriculum-standard service.
 # Scanned compulsory-education PDFs need OCR; ordinary PDFs use embedded text first.
-pypdf==6.6.0
 PyMuPDF==1.26.7
 rapidocr-onnxruntime==1.4.4
 
