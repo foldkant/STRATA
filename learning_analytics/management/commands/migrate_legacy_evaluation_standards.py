@@ -19,12 +19,6 @@ from learning_analytics.evaluation_models import (
     EvaluationScope,
     EvaluationStandard,
 )
-from learning_analytics.services.evaluation import (
-    validate_plan_for_publish,
-    validate_standard_for_publish,
-)
-
-
 DELETE_CONFIRMATION = "DELETE_LEGACY_EVALUATION_DATA"
 
 
@@ -225,7 +219,10 @@ def _standard_defaults(
 
 
 class Command(BaseCommand):
-    help = "将旧课程评价配置迁移为新版可发布草稿，并可在显式确认后清理旧记录。"
+    help = (
+        "将旧课程评价配置迁移为新版评价草稿，并可在显式确认后清理旧记录；"
+        "未关联课程标准内容的草稿须由教师补充依据后方可发布。"
+    )
 
     def add_arguments(self, parser):
         parser.add_argument("--teacher", help="仅迁移指定教师用户名。")
@@ -255,6 +252,7 @@ class Command(BaseCommand):
             "configs": 0,
             "plans_created": 0,
             "standards_created": 0,
+            "plans_needing_curriculum_alignment": 0,
             "legacy_submissions_deleted": 0,
             "legacy_versions_deleted": 0,
             "legacy_configs_deleted": 0,
@@ -277,8 +275,10 @@ class Command(BaseCommand):
                     )
                     result["standards_created"] += 1
 
-                validate_plan_for_publish(plan)
-                validate_standard_for_publish(standard)
+                plan.full_clean()
+                standard.full_clean()
+                if not plan.curriculum_references.exists():
+                    result["plans_needing_curriculum_alignment"] += 1
                 result["configs"] += 1
 
                 if options["delete_legacy"]:
@@ -318,3 +318,9 @@ class Command(BaseCommand):
 
         mode = "DRY-RUN" if options["dry_run"] else "DONE"
         self.stdout.write(self.style.SUCCESS(f"[{mode}] {result}"))
+        if result["plans_needing_curriculum_alignment"]:
+            self.stdout.write(
+                self.style.WARNING(
+                    "迁移草稿尚未关联已发布课程标准内容，教师补充并复核课标依据后方可发布。"
+                )
+            )

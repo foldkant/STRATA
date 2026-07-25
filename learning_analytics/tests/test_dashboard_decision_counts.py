@@ -194,4 +194,4 @@ class DashboardDecisionCountTests(TestCase):
 
         self.assertEqual(response.status_code, 200, response.data)
         rows = {item["label"]: item["count"] for item in response.data["data"]["status_rows"]}
-        self.assertEqual(rows["教师待确认层级"], 1)
+        self.assertEqual(rows["教师待确认学习安排"], 1)

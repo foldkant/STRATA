@@ -48,6 +48,8 @@ class LegacyEvaluationMigrationCommandTests(TestCase):
             stdout=output,
         )
         self.assertIn("[DRY-RUN]", output.getvalue())
+        self.assertIn("'plans_needing_curriculum_alignment': 1", output.getvalue())
+        self.assertIn("教师补充并复核课标依据后方可发布", output.getvalue())
         self.assertTrue(ClassroomEvaluationConfig.objects.filter(pk=self.config.pk).exists())
         self.assertFalse(EvaluationPlan.objects.filter(course=self.course).exists())
 
@@ -74,4 +76,5 @@ class LegacyEvaluationMigrationCommandTests(TestCase):
         self.assertEqual(standard.review_status, "draft")
         self.assertEqual(plan.content_version, f"legacy-evaluation-config-{self.config.pk}-v1")
         self.assertEqual(len(standard.criteria), 3)
+        self.assertFalse(plan.curriculum_references.exists())
         self.assertFalse(ClassroomEvaluationConfig.objects.filter(pk=self.config.pk).exists())

@@ -115,7 +115,7 @@ class SyntheticDataGenerationTests(TestCase):
         self.assertEqual(metrics["教师"], 0)
         self.assertEqual(metrics["学生档案"], 0)
         self.assertEqual(metrics["班级"], 0)
-        self.assertEqual(metrics["行为事件"], 0)
+        self.assertEqual(metrics["学习活动记录"], 0)
 
     def test_school_overlay_is_visible_but_does_not_dilute_formal_quality(self):
         school = School.objects.create(name="正式试测学校", code="REAL-OVERLAY")
