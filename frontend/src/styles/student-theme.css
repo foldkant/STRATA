@@ -1677,6 +1677,19 @@ body.student-theme-active :where(a, button, input, select, textarea):focus-visib
   box-shadow: inset 0 -2px 0 var(--student-accent);
 }
 
+.student-theme-active .student-current-resource-heading {
+  border-color: var(--student-line);
+  background: #f8faf7;
+}
+
+.student-theme-active .student-current-resource-heading span {
+  color: var(--student-accent);
+}
+
+.student-theme-active .student-current-resource-heading strong {
+  color: var(--student-ink-deep);
+}
+
 .student-theme-active .student-preview-stage {
   background:
     linear-gradient(45deg, rgba(24, 63, 56, .018) 25%, transparent 25%) 0 0 / 24px 24px,

@@ -1183,6 +1183,10 @@ onMounted(async () => {
 @media (max-width: 820px) {
   .stratification-page-heading, .stratification-scope-bar, .roster-panel-head, .evidence-toolbar { align-items: stretch; flex-direction: column; }
   .stratification-page-heading > a, .stratification-scope-bar label, .roster-search { width: 100%; }
+  .suggestion-bulk-toolbar { align-items: stretch; flex-direction: column; }
+  .suggestion-bulk-toolbar :deep(.multi-select-actions) { justify-content: space-between; flex-wrap: wrap; width: 100%; }
+  .suggestion-bulk-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .suggestion-bulk-actions button { width: 100%; min-width: 0; min-height: 44px; white-space: normal; }
   .scope-result { margin-left: 0; text-align: left; }
   .stratification-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; overflow: visible; border: 1px solid var(--line); background: #fff; }
   .stratification-tabs button { min-width: 0; border-bottom: 3px solid transparent; padding: 0 8px; }
@@ -1197,10 +1201,7 @@ onMounted(async () => {
 }
 
 @media (max-width: 620px) {
-  .suggestion-bulk-toolbar { align-items: stretch; flex-direction: column; }
   .suggestion-bulk-actions { display: grid; grid-template-columns: 1fr; }
-  .suggestion-bulk-actions button { width: 100%; min-height: 44px; }
-  .suggestion-bulk-toolbar :deep(.multi-select-actions) { justify-content: space-between; flex-wrap: wrap; }
   .layer-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .layer-stat-grid button, .layer-stat-grid button:first-child { grid-column: auto; min-height: 76px; padding: 9px; }
   .layer-stat-grid button:nth-child(even) { border-right: 1px solid var(--line); }

@@ -13,7 +13,8 @@ from courses.models import (
     Resource,
     Subject,
 )
-from school.models import ClassGroup, School, StudentProfile
+from learning.models import StratificationDecision
+from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 
 class Command(BaseCommand):
@@ -78,6 +79,25 @@ class Command(BaseCommand):
             onboarding_status=StudentProfile.OnboardingStatus.ACTIVE,
         )
         class_group.teachers.add(teacher)
+        TeachingAssignment.objects.create(
+            school=school,
+            class_group=class_group,
+            teacher=teacher,
+        )
+        class_groups = [class_group]
+        for index in range(2, 9):
+            additional_class = ClassGroup.objects.create(
+                school=school,
+                name=f"七年级{index}班",
+                grade="七年级",
+            )
+            additional_class.teachers.add(teacher)
+            TeachingAssignment.objects.create(
+                school=school,
+                class_group=additional_class,
+                teacher=teacher,
+            )
+            class_groups.append(additional_class)
 
         subject = Subject.objects.create(
             school=school,
@@ -94,6 +114,27 @@ class Command(BaseCommand):
             course=course,
             class_group=class_group,
             created_by=teacher,
+        )
+        for additional_class in class_groups[1:]:
+            CourseClass.objects.create(
+                course=course,
+                class_group=additional_class,
+                created_by=teacher,
+            )
+        StratificationDecision.objects.create(
+            student=student,
+            class_group=class_group,
+            subject=subject,
+            course=course,
+            previous_layer="",
+            suggested_layer="",
+            confidence=0.72,
+            reasons=["近期学习材料需要教师结合课堂情况进一步确认。"],
+            decision_kind=StratificationDecision.DecisionKind.SUPPORT,
+            support_priority=StratificationDecision.SupportPriority.WATCH,
+            support_suggestion="关注学生完成图像编码任务时所采用的方法，并提供适当提示。",
+            rule_version="e2e-support-v1",
+            status=StratificationDecision.Status.PENDING,
         )
         lesson = Lesson.objects.create(
             course=course,
@@ -163,6 +204,6 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                "端到端质量门禁数据已建立：课程 1、课时 1、资源 1、课堂 1。"
+                "端到端质量门禁数据已建立：8 个班级、课程 1、课时 1、资源 1、课堂 1、待确认建议 1。"
             )
         )

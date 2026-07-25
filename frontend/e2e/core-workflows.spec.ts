@@ -131,7 +131,7 @@ test('teacher can review all pending stratification suggestions in the current s
 
   const courseSelect = page.locator('.stratification-scope-bar .app-select').nth(1)
   await courseSelect.getByRole('combobox').click()
-  await page.getByRole('option', { name: '数据与计算（SIM-AEE9EE85）', exact: true }).click()
+  await page.getByRole('option', { name: '数据与计算', exact: true }).click()
   const reviewAll = page.locator('[data-test="stratification-review-all"]')
   await expect(reviewAll).toBeVisible()
   await expect(reviewAll).toBeEnabled()
@@ -216,7 +216,11 @@ test('student can open a classroom-deployed resource without an authorization fa
   await expect(page.locator('.student-classroom-resource-pane')).toBeVisible()
   await expect(page.getByText(/演示文稿1/).first()).toBeVisible()
   await expect(
-    page.locator('.student-classroom-resource-pane iframe:visible, .onlyoffice-loading-recovery:visible').first()
+    page.locator(
+      '.student-classroom-resource-pane iframe:visible, '
+      + '.student-classroom-resource-pane .onlyoffice-loading-recovery:visible, '
+      + '.student-classroom-resource-pane .onlyoffice-fallback:visible'
+    ).first()
   ).toBeVisible()
   expect(authorizationFailures).toEqual([])
 })

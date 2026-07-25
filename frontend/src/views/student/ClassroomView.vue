@@ -900,6 +900,10 @@ onUnmounted(() => {
 
       <section v-else class="student-workspace-grid student-classroom-step-grid">
         <article class="student-resource-pane student-classroom-resource-pane" :class="{ 'has-resource-tabs': currentResources.length > 1 }">
+          <header v-if="selectedResource" class="student-current-resource-heading">
+            <span>当前学习资源</span>
+            <strong>{{ resourceTitle(selectedResource) }}</strong>
+          </header>
 
           <div v-if="currentResources.length > 1" class="student-resource-tabs">
             <button
@@ -1443,3 +1447,39 @@ onUnmounted(() => {
     />
   </main>
 </template>
+
+<style scoped>
+.student-classroom-resource-pane {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.student-classroom-resource-pane.has-resource-tabs {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.student-current-resource-heading {
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 8px 14px;
+}
+
+.student-current-resource-heading span {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.student-current-resource-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>

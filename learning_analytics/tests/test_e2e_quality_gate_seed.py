@@ -5,7 +5,9 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 
 from accounts.models import User
-from courses.models import ClassroomSession, LessonStep, Resource
+from courses.models import ClassroomSession, Course, LessonStep, Resource
+from learning.models import StratificationDecision
+from school.models import ClassGroup, TeachingAssignment
 
 
 class E2EQualityGateSeedTests(TestCase):
@@ -17,6 +19,7 @@ class E2EQualityGateSeedTests(TestCase):
 
         session = ClassroomSession.objects.select_related("current_step").get(pk=1)
         resource = Resource.objects.get(pk=1)
+        teacher = User.objects.get(username="e2e_teacher")
         self.assertEqual(session.status, ClassroomSession.Status.RUNNING)
         self.assertEqual(
             session.current_step_status,
@@ -28,10 +31,27 @@ class E2EQualityGateSeedTests(TestCase):
             resource.id,
         )
         self.assertTrue(resource.attachment.name.endswith("e2e-demo.pptx"))
-        self.assertTrue(
-            User.objects.get(username="e2e_teacher").check_password(
-                "E2eSmoke123!"
-            )
+        self.assertTrue(teacher.check_password("E2eSmoke123!"))
+        self.assertEqual(
+            ClassGroup.objects.filter(teachers=teacher).distinct().count(),
+            8,
+        )
+        self.assertEqual(
+            TeachingAssignment.objects.filter(teacher=teacher).count(),
+            8,
+        )
+        self.assertEqual(Course.objects.get(pk=1).course_classes.count(), 8)
+        pending = StratificationDecision.objects.get(
+            course_id=1,
+            status=StratificationDecision.Status.PENDING,
+        )
+        self.assertEqual(
+            pending.decision_kind,
+            StratificationDecision.DecisionKind.SUPPORT,
+        )
+        self.assertEqual(
+            pending.support_priority,
+            StratificationDecision.SupportPriority.WATCH,
         )
 
     def test_seed_refuses_to_write_into_a_nonempty_database(self):
