@@ -1,20 +1,74 @@
 from __future__ import annotations
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 
 from accounts.models import User
 from courses.models import Course
+from curriculum_standards.models import (
+    CurriculumDocumentType,
+    CurriculumNodeType,
+    CurriculumStandardVersion,
+    CurriculumVersionStatus,
+)
+from curriculum_standards.services import (
+    replace_plan_curriculum_references,
+    subject_names_equivalent,
+)
 from learning_analytics.evaluation_models import (
     EvaluationPlan,
     EvaluationScope,
     EvaluationReviewStatus,
     EvaluationStandard,
 )
-from learning_analytics.services.evaluation import publish_plan, publish_standard
+from learning_analytics.services.evaluation import (
+    confirm_plan_review,
+    confirm_standard_review,
+    publish_plan,
+    publish_standard,
+)
 
 
 PLAN_TITLE = "数据表达与解释试点评价方案"
 STANDARD_TITLE = "数据表达与解释评价标准"
+
+REQUIRED_CURRICULUM_NODE_TYPES = {
+    CurriculumNodeType.CORE_COMPETENCY,
+    CurriculumNodeType.COURSE_OBJECTIVE,
+    CurriculumNodeType.COURSE_CONTENT,
+    CurriculumNodeType.ACADEMIC_QUALITY,
+}
+
+
+def curriculum_context(*, course: Course, version_id: int | None = None):
+    versions = CurriculumStandardVersion.objects.filter(
+        status=CurriculumVersionStatus.PUBLISHED,
+        source__document_type=CurriculumDocumentType.SUBJECT_STANDARD,
+        source__is_active=True,
+    ).select_related("source")
+    if version_id is not None:
+        versions = versions.filter(pk=version_id)
+    versions = list(versions.order_by("-publication_year", "-id"))
+    versions.sort(
+        key=lambda item: item.source.current_version_id == item.id,
+        reverse=True,
+    )
+    for version in versions:
+        if not subject_names_equivalent(
+            course.subject.name,
+            version.subject_name_snapshot,
+        ):
+            continue
+        nodes = list(
+            version.nodes.filter(node_type__in=REQUIRED_CURRICULUM_NODE_TYPES)
+            .order_by("sort_order", "id")
+        )
+        if {node.node_type for node in nodes} == REQUIRED_CURRICULUM_NODE_TYPES:
+            return version, nodes
+    requested = f" ID={version_id}" if version_id is not None else ""
+    raise CommandError(
+        f"未找到与课程学科匹配且包含四类完整依据的已发布课程标准版本{requested}。"
+    )
 
 
 def criterion(
@@ -24,6 +78,10 @@ def criterion(
     title: str,
     evaluation_target: str,
     evaluation_sources: list[str],
+    learning_goal_codes: list[str],
+    evaluation_task_codes: list[str],
+    evidence_ownership: str,
+    material_types: list[str],
     expected_performance: str,
     skip_condition: str,
     support_options: list[str],
@@ -38,6 +96,10 @@ def criterion(
         "title": title,
         "evaluation_target": evaluation_target,
         "evaluation_sources": evaluation_sources,
+        "learning_goal_codes": learning_goal_codes,
+        "evaluation_task_codes": evaluation_task_codes,
+        "evidence_ownership": evidence_ownership,
+        "material_types": material_types,
         "expected_performance": expected_performance,
         "skip_condition": skip_condition,
         "support_options": support_options,
@@ -56,6 +118,10 @@ def pilot_criteria() -> list[dict]:
             title="成果准确性与可读性",
             evaluation_target="学生提交的数据可视化作品及配套说明",
             evaluation_sources=["最终可视化作品", "作品说明文本"],
+            learning_goal_codes=["C1", "C2"],
+            evaluation_task_codes=["T1"],
+            evidence_ownership="individual",
+            material_types=["artifact"],
             expected_performance="作品中的数据、比例、标签和视觉编码保持一致，并能让目标读者准确读取主要信息。",
             skip_condition="未提供可打开的最终作品，或作品不包含可检查的数据表达时记录 暂不评价。",
             support_options=["教师提供的数据字典", "图表类型参考表"],
@@ -89,6 +155,10 @@ def pilot_criteria() -> list[dict]:
             title="表示策略选择与论证",
             evaluation_target="图表类型、视觉编码选择及其书面解释",
             evaluation_sources=["设计说明", "方案比较记录", "最终作品"],
+            learning_goal_codes=["C2"],
+            evaluation_task_codes=["T1"],
+            evidence_ownership="individual",
+            material_types=["artifact"],
             expected_performance="学生能够把数据类型、表达目的和目标读者联系起来，解释所选方案并比较合理替代方案。",
             skip_condition="只有最终作品而没有任何策略说明或可追问解释时记录 暂不评价。",
             support_options=["图表类型参考表", "教师提出的澄清问题"],
@@ -122,6 +192,10 @@ def pilot_criteria() -> list[dict]:
             title="检查、反馈与修订",
             evaluation_target="初稿、检查记录、反馈回应和修订版本之间的变化",
             evaluation_sources=["版本记录", "检查清单", "反馈回应说明"],
+            learning_goal_codes=["C3"],
+            evaluation_task_codes=["T2"],
+            evidence_ownership="individual",
+            material_types=["artifact", "observation"],
             expected_performance="学生能够发现与目标相关的问题，依据证据选择修订重点，并说明修订后产生的实际变化。",
             skip_condition="任务没有提供修订机会，或仅保留最终版本而无法观察修订过程时记录 暂不评价。",
             support_options=["教师提供的检查清单", "同伴针对作品提出的具体反馈"],
@@ -155,6 +229,10 @@ def pilot_criteria() -> list[dict]:
             title="数据处理与表达实践",
             evaluation_target="从原始数据到可视化成果的数据整理、转换和表达过程",
             evaluation_sources=["处理后的数据表", "转换说明", "最终可视化作品"],
+            learning_goal_codes=["C1", "C2"],
+            evaluation_task_codes=["T1"],
+            evidence_ownership="individual",
+            material_types=["operation"],
             expected_performance="学生能够保持数据含义与单位一致，合理处理缺失值或异常值，并让处理过程可以被复核。",
             skip_condition="未提供数据处理过程，且无法从作品或说明判断数据如何转换时记录 暂不评价。",
             support_options=["电子表格函数提示", "教师提供的数据字段说明"],
@@ -188,6 +266,10 @@ def pilot_criteria() -> list[dict]:
             title="数据来源与表达责任",
             evaluation_target="数据来源说明、隐私处理和可视化表达中的责任性决策",
             evaluation_sources=["数据来源说明", "隐私处理记录", "作品中的注释与边界说明"],
+            learning_goal_codes=["C4"],
+            evaluation_task_codes=["T3"],
+            evidence_ownership="individual",
+            material_types=["artifact"],
             expected_performance="学生能够说明数据来源，识别隐私和误导风险，并采取与任务情境相匹配的保护或说明措施。",
             skip_condition="任务未涉及真实或可识别数据，且没有设置来源与表达责任观察机会时记录 暂不评价。",
             support_options=["数据使用规范", "教师提供的隐私检查问题"],
@@ -224,8 +306,10 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--teacher", default="foldkant")
         parser.add_argument("--course-id", type=int)
+        parser.add_argument("--curriculum-version-id", type=int)
         parser.add_argument("--no-publish", action="store_true")
 
+    @transaction.atomic
     def handle(self, *args, **options):
         teacher = User.objects.filter(
             username=options["teacher"],
@@ -245,6 +329,12 @@ class Command(BaseCommand):
         if course is None:
             raise CommandError("未找到教师的模拟课程；请使用 --course-id 指定课程。")
 
+        curriculum_version, curriculum_nodes = curriculum_context(
+            course=course,
+            version_id=options.get("curriculum_version_id"),
+        )
+        curriculum_node_ids = [node.id for node in curriculum_nodes]
+
         plan_defaults = {
             "school": teacher.school,
             "subject": course.subject,
@@ -253,21 +343,28 @@ class Command(BaseCommand):
             "target_students": "高一年级信息科技课程中完成数据表达任务的学生；仅用于合成工程验证。",
             "learning_goal": "学生能够整理真实情境数据，选择适当的表达方式，解释设计依据，并根据证据修订作品。",
             "learning_goals": [
-                {"code": "C1", "title": "准确表达数据", "description": "学生能够保持数据含义、单位和视觉编码一致，生成可被目标读者正确理解的成果。"},
-                {"code": "C2", "title": "论证表示策略", "description": "学生能够联系数据特点、表达目的和读者需求，解释选择并比较合理替代方案。"},
-                {"code": "C3", "title": "依据证据修订", "description": "学生能够使用检查结果和反馈识别问题，选择修订重点并说明修订效果。"},
-                {"code": "C4", "title": "负责任地使用数据", "description": "学生能够说明数据来源，识别隐私与误导风险，并采取与情境相匹配的措施。"},
+                {"code": "C1", "title": "准确表达数据", "description": "学生能够保持数据含义、单位和视觉编码一致，生成可被目标读者正确理解的成果。", "curriculum_node_ids": curriculum_node_ids},
+                {"code": "C2", "title": "论证表示策略", "description": "学生能够联系数据特点、表达目的和读者需求，解释选择并比较合理替代方案。", "curriculum_node_ids": curriculum_node_ids},
+                {"code": "C3", "title": "依据证据修订", "description": "学生能够使用检查结果和反馈识别问题，选择修订重点并说明修订效果。", "curriculum_node_ids": curriculum_node_ids},
+                {"code": "C4", "title": "负责任地使用数据", "description": "学生能够说明数据来源，识别隐私与误导风险，并采取与情境相匹配的措施。", "curriculum_node_ids": curriculum_node_ids},
             ],
             "evaluation_basis": [
                 {"code": "EV1", "goal_codes": ["C1", "C2"], "description": "最终作品和设计说明共同显示表达准确性及表示策略的可辩护程度。", "source_types": ["最终可视化作品", "设计说明文本"]},
                 {"code": "EV2", "goal_codes": ["C2", "C3"], "description": "版本记录、检查清单和反馈回应显示策略调整与修订是否由证据驱动。", "source_types": ["版本记录", "检查清单", "反馈回应"]},
                 {"code": "EV3", "goal_codes": ["C4"], "description": "来源登记、隐私处理和表达边界说明显示学生的数据责任实践。", "source_types": ["来源说明", "隐私处理记录", "边界说明"]},
             ],
-            "learning_tasks": [
-                {"code": "T1", "title": "校园数据可视化作品", "basis_codes": ["EV1"], "description": "学生根据给定校园情境数据制作可视化作品，并面向指定读者解释主要设计选择。"},
-                {"code": "T2", "title": "检查与修订记录", "basis_codes": ["EV2"], "description": "学生保存初稿、检查结果和修订说明，明确至少一项由证据支持的关键变化。"},
-                {"code": "T3", "title": "数据来源与责任说明", "basis_codes": ["EV3"], "description": "学生登记数据来源、说明隐私处理，并陈述作品适用范围与可能误读风险。"},
+            "learning_activities": [
+                {"code": "A1", "title": "数据整理与表达设计", "goal_codes": ["C1", "C2"], "description": "学生整理校园情境数据，比较可行的表示策略并形成可视化初稿。"},
+                {"code": "A2", "title": "检查反馈与证据修订", "goal_codes": ["C2", "C3"], "description": "学生依据检查结果与具体反馈修订作品，并解释关键变化的证据。"},
+                {"code": "A3", "title": "来源登记与风险检查", "goal_codes": ["C4"], "description": "学生登记数据来源，检查隐私与误导风险并说明成果适用边界。"},
             ],
+            "learning_tasks": [],
+            "evaluation_tasks": [
+                {"code": "T1", "title": "校园数据可视化作品", "goal_codes": ["C1", "C2"], "activity_codes": ["A1"], "mode": "project", "evidence_ownership": "individual", "material_types": ["artifact", "operation"], "weight": 50, "description": "学生独立提交可视化作品、数据处理过程与设计说明，呈现准确表达和策略选择。"},
+                {"code": "T2", "title": "检查与修订记录", "goal_codes": ["C2", "C3"], "activity_codes": ["A2"], "mode": "artifact", "evidence_ownership": "individual", "material_types": ["artifact", "observation"], "weight": 30, "description": "学生提交初稿、检查记录、反馈回应和修订说明，呈现证据驱动的调整过程。"},
+                {"code": "T3", "title": "数据来源与责任说明", "goal_codes": ["C4"], "activity_codes": ["A3"], "mode": "artifact", "evidence_ownership": "individual", "material_types": ["artifact"], "weight": 20, "description": "学生提交数据来源、隐私处理与表达边界说明，呈现负责任的数据实践。"},
+            ],
+            "assessment_modes": ["project", "artifact"],
             "content_scope": ["数据整理与转换", "数据可视化", "方案比较与论证", "反馈与修订", "数据来源与责任"],
             "thinking_requirements": ["apply", "analyze", "evaluate", "create"],
             "support_options": ["教师提供的数据字典", "图表类型参考表", "电子表格函数提示", "针对作品的澄清问题"],
@@ -277,6 +374,9 @@ class Command(BaseCommand):
             },
             "follow_up_suggestion": "依据证据最薄弱且可干预的条目安排下一次反馈、对比案例或修订任务，不使用总星数直接决定学生层级。",
             "review_status": EvaluationReviewStatus.DRAFT,
+            "reviewed_by": None,
+            "reviewed_at": None,
+            "reviewed_content_hash": "",
             "updated_by": teacher,
         }
         plan, created = EvaluationPlan.objects.update_or_create(
@@ -285,6 +385,22 @@ class Command(BaseCommand):
             title=PLAN_TITLE,
             defaults=plan_defaults,
         )
+        replace_plan_curriculum_references(
+            plan=plan,
+            node_ids=curriculum_node_ids,
+            actor=teacher,
+        )
+
+        plan_version = None
+        if not options["no_publish"]:
+            confirm_plan_review(plan=plan, reviewed_by=teacher)
+            plan_version = publish_plan(plan, published_by=teacher).version
+        else:
+            plan_version = plan.versions.filter(
+                review_status=EvaluationReviewStatus.REVIEWED,
+                reviewed_by__isnull=False,
+                reviewed_at__isnull=False,
+            ).order_by("-version_no", "-id").first()
 
         standard, standard_created = EvaluationStandard.objects.update_or_create(
             plan=plan,
@@ -295,17 +411,20 @@ class Command(BaseCommand):
                 "subject": course.subject,
                 "course": course,
                 "scope": EvaluationScope.COURSE,
+                "plan_version": plan_version,
                 "evaluation_target": "校园数据可视化作品、策略说明、修订过程和数据责任说明",
                 "criteria": pilot_criteria(),
                 "review_status": EvaluationReviewStatus.DRAFT,
+                "reviewed_by": None,
+                "reviewed_at": None,
+                "reviewed_content_hash": "",
                 "updated_by": teacher,
             },
         )
 
-        plan_version = None
         standard_version = None
         if not options["no_publish"]:
-            plan_version = publish_plan(plan, published_by=teacher).version
+            confirm_standard_review(standard=standard, reviewed_by=teacher)
             standard_version = publish_standard(standard, published_by=teacher).version
 
         self.stdout.write(
@@ -313,6 +432,7 @@ class Command(BaseCommand):
                 "\n".join(
                     [
                         f"课程：{course.id} {course.title}",
+                        f"课程标准：{curriculum_version.id} {curriculum_version.version_label}",
                         f"评价方案：{plan.id} ({'created' if created else 'updated'})"
                         + (f" v{plan_version.version_no}" if plan_version else " draft"),
                         f"评价标准：{standard.id} ({'created' if standard_created else 'updated'})"

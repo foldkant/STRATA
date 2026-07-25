@@ -1,0 +1,684 @@
+/* School administrator workspace.
+   It extends the locally bundled education-research visual system and keeps all
+   icons, charts and interface assets inside the project. */
+
+.app-shell-school-admin {
+  --school-ink: #183d37;
+  --school-ink-deep: #102f2a;
+  --school-ink-soft: #315b53;
+  --school-paper: #f7f8f4;
+  --school-fog: #edf1ed;
+  --school-line: #d7ded8;
+  --school-line-strong: #bcc8c0;
+  --school-muted: #687872;
+  --school-cinnabar: #b54a3a;
+  --school-cinnabar-soft: #fbefec;
+  --school-success: #386b52;
+  --school-warning: #9a6328;
+}
+
+.app-shell-school-admin .brand small {
+  color: #b5c8c1;
+}
+
+.app-shell-school-admin .content {
+  width: 100%;
+  max-width: 1780px;
+}
+
+.app-shell-school-admin .school-admin-page-heading h2 {
+  max-width: 940px;
+}
+
+.app-shell-school-admin .super-admin-section-heading {
+  align-items: end;
+}
+
+.app-shell-school-admin .super-admin-section-heading > small {
+  display: none;
+  flex: 0 0 auto;
+  color: #7a8983;
+  font-size: 12px;
+}
+
+.school-home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(440px, .75fr);
+  gap: 16px;
+}
+
+.school-priority {
+  position: relative;
+  min-height: 282px;
+  padding: 28px 30px;
+  overflow: hidden;
+  border-radius: 4px;
+  color: #f2f6f3;
+  background:
+    radial-gradient(circle at 88% 14%, rgba(217, 161, 149, .16), transparent 34%),
+    linear-gradient(112deg, rgba(255, 255, 255, .055), transparent 52%),
+    var(--school-ink);
+}
+
+.school-priority::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--school-cinnabar);
+  content: "";
+}
+
+.school-priority > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 24px;
+  align-items: end;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, .15);
+}
+
+.school-priority > header > div {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+.school-priority > header span {
+  padding-bottom: 6px;
+  color: #b8cac4;
+  font-size: 13px;
+}
+
+.school-priority > header strong {
+  color: #fff;
+  font-family: Georgia, "STSong", "Songti SC", serif;
+  font-size: 46px;
+  line-height: .9;
+}
+
+.school-priority > header p {
+  max-width: 360px;
+  justify-self: end;
+  margin: 0;
+  color: #b7c9c3;
+  font-size: 14px;
+  line-height: 1.7;
+  text-align: right;
+}
+
+.school-priority-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  padding-top: 18px;
+}
+
+.school-priority-list a {
+  min-width: 0;
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 18px;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 13px;
+  border: 1px solid rgba(255, 255, 255, .13);
+  border-radius: 3px;
+  color: #e4ece8;
+  background: rgba(255, 255, 255, .055);
+  text-decoration: none;
+}
+
+.school-priority-list a:hover,
+.school-priority-list a:focus-visible {
+  border-color: rgba(255, 255, 255, .3);
+  background: rgba(255, 255, 255, .09);
+}
+
+.school-priority-list a > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 0;
+  color: inherit;
+}
+
+.school-priority-list a > span strong {
+  overflow: hidden;
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.school-priority-list a > span small {
+  overflow: hidden;
+  color: #aebfb9;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.school-priority-list a > b {
+  color: #fff;
+  font-family: Georgia, serif;
+  font-size: 19px;
+}
+
+.school-priority-list a > svg {
+  width: 16px;
+  height: 16px;
+  color: #c1d1cb;
+  stroke-width: 1.6;
+}
+
+.school-priority-list a.failed {
+  border-left: 3px solid #e0a094;
+}
+
+.school-priority-list a.warn {
+  border-left: 3px solid #d7bd82;
+}
+
+.school-shortcuts {
+  display: grid;
+  align-content: start;
+  border: 1px solid var(--school-line);
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 14px 38px rgba(31, 55, 48, .045);
+}
+
+.school-shortcuts > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 19px 20px 12px;
+  border-bottom: 1px solid #e4e9e5;
+}
+
+.school-shortcuts h3 {
+  margin: 0;
+  color: #243832;
+  font-family: var(--governance-font-text);
+  font-size: 18px;
+}
+
+.school-shortcuts header span {
+  color: #87948f;
+  font-size: 12px;
+}
+
+.school-shortcuts > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.school-shortcuts a {
+  min-width: 0;
+  min-height: 104px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 16px;
+  gap: 9px;
+  align-items: center;
+  padding: 14px 15px;
+  border-right: 1px solid #e4e9e5;
+  border-bottom: 1px solid #e4e9e5;
+  color: #263832;
+  text-decoration: none;
+}
+
+.school-shortcuts a:nth-child(2n) {
+  border-right: 0;
+}
+
+.school-shortcuts a:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.school-shortcuts a:hover,
+.school-shortcuts a:focus-visible {
+  color: var(--school-ink);
+  background: #f5f8f5;
+}
+
+.school-shortcuts a > svg:first-child {
+  width: 21px;
+  height: 21px;
+  color: var(--school-ink-soft);
+  stroke-width: 1.55;
+}
+
+.school-shortcuts a > svg:last-child {
+  width: 15px;
+  height: 15px;
+  color: #8a9892;
+  stroke-width: 1.55;
+}
+
+.school-shortcuts a span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.school-shortcuts a strong {
+  color: #263832;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.school-shortcuts a small {
+  color: #7a8983;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.app-shell-school-admin .school-dashboard-hero-grid {
+  grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(270px, .8fr));
+}
+
+.app-shell-school-admin .school-dashboard-work-grid,
+.app-shell-school-admin .school-dashboard-four-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.app-shell-school-admin .school-dashboard-work-grid .chart-card-wide,
+.app-shell-school-admin .school-dashboard-four-grid .chart-card-wide {
+  grid-column: auto;
+}
+
+.app-shell-school-admin .chart-card {
+  min-height: 330px;
+}
+
+.app-shell-school-admin .chart-card-tall {
+  min-height: 380px;
+}
+
+.school-class-overview {
+  margin-top: 28px;
+}
+
+.school-class-overview .text-link {
+  gap: 6px;
+  text-decoration: none;
+}
+
+.school-class-overview .text-link svg {
+  width: 16px;
+  height: 16px;
+}
+
+.app-shell-school-admin .management-panel {
+  border-radius: 4px;
+}
+
+.app-shell-school-admin .management-panel > .panel-heading h2,
+.app-shell-school-admin .analysis-page-heading h2,
+.app-shell-school-admin .diagnostic-administration-panel > .panel-heading h2 {
+  color: var(--school-ink-deep);
+  font-family: var(--governance-font-text);
+}
+
+.app-shell-school-admin .management-panel > .panel-heading p {
+  max-width: 760px;
+  line-height: 1.75;
+}
+
+.app-shell-school-admin .extra-filter {
+  margin-bottom: 14px;
+  padding: 13px 16px;
+  border: 1px solid var(--school-line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .75);
+}
+
+.app-shell-school-admin .extra-filter label > span {
+  color: #5f7069;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.app-shell-school-admin .bulk-action-bar {
+  border-bottom-color: var(--school-line);
+  background: #f3f6f3;
+}
+
+.app-shell-school-admin .row-actions {
+  gap: 2px 8px;
+}
+
+.app-shell-school-admin .row-actions button {
+  border-radius: 2px;
+}
+
+.app-shell-school-admin .pretest-section-tabs,
+.app-shell-school-admin .analysis-section-tabs {
+  border-color: var(--school-line);
+  border-radius: 4px;
+  background: #fff;
+}
+
+.app-shell-school-admin .pretest-section-tabs button.active,
+.app-shell-school-admin .analysis-section-tabs button.active {
+  color: var(--school-ink) !important;
+  background: #edf3ef !important;
+  box-shadow: inset 0 -2px 0 var(--school-ink) !important;
+}
+
+.app-shell-school-admin .pretest-review-callout {
+  border-color: #c8d5ce !important;
+  background:
+    linear-gradient(110deg, rgba(24, 61, 55, .045), transparent 52%),
+    #fff;
+}
+
+.app-shell-school-admin .resource-review-head,
+.app-shell-school-admin .question-review-head,
+.app-shell-school-admin .quality-page-heading,
+.app-shell-school-admin .analysis-page-heading {
+  padding-bottom: 18px;
+  border-bottom-color: var(--school-line-strong);
+}
+
+.app-shell-school-admin .resource-review-head h2,
+.app-shell-school-admin .question-review-head h2,
+.app-shell-school-admin .quality-page-heading h2,
+.app-shell-school-admin .analysis-page-heading h2 {
+  color: var(--school-ink-deep);
+  font-family: var(--governance-font-text);
+}
+
+.app-shell-school-admin .resource-review-tabs,
+.app-shell-school-admin .question-review-tabs {
+  border-color: var(--school-line);
+}
+
+.app-shell-school-admin .resource-review-tabs button.active {
+  color: #fff !important;
+  background: var(--school-ink) !important;
+  box-shadow: none !important;
+}
+
+.app-shell-school-admin .question-review-tabs button.active {
+  color: var(--school-ink) !important;
+  box-shadow: inset 0 -2px 0 var(--school-ink) !important;
+}
+
+.app-shell-school-admin .resource-review-list > .empty {
+  min-height: 150px;
+  display: grid;
+  place-content: center;
+  margin-top: 12px;
+  border: 1px solid var(--school-line);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .78);
+  color: var(--school-muted);
+}
+
+.app-shell-school-admin .pretest-review-callout {
+  background:
+    linear-gradient(110deg, rgba(24, 61, 55, .045), transparent 52%),
+    #fff !important;
+}
+
+.app-shell-school-admin .pretest-review-callout span {
+  color: var(--school-ink-soft) !important;
+}
+
+.app-shell-school-admin .pretest-material-review-body > aside button.active {
+  border-color: #52786f !important;
+  box-shadow: 0 0 0 1px #52786f !important;
+}
+
+.app-shell-school-admin .material-attachment-list a {
+  border-color: #c8d5ce !important;
+  color: var(--school-ink-soft) !important;
+}
+
+.app-shell-school-admin .assignment-grid article.selected {
+  border-color: #9eb3a8 !important;
+  background: #edf3ef !important;
+}
+
+.app-shell-school-admin .quality-detail-button {
+  color: var(--school-ink-soft);
+  background: #edf3ef;
+}
+
+.app-shell-school-admin .quality-detail-button:hover {
+  background: #e1ebe5;
+}
+
+.app-shell-school-admin .subject-row.active {
+  border-color: #9eb3a8;
+  background: #edf3ef;
+}
+
+.app-shell-school-admin .analysis-section-toolbar,
+.app-shell-school-admin .analysis-definition-strip,
+.app-shell-school-admin .model-run-band,
+.app-shell-school-admin .model-current-strip,
+.app-shell-school-admin .model-release-band {
+  border-color: var(--school-line);
+  border-radius: 4px;
+}
+
+.app-shell-school-admin .analysis-section-toolbar {
+  background: rgba(255, 255, 255, .8);
+}
+
+.app-shell-school-admin .analysis-ready-band {
+  border-color: #bdd1c5;
+  background: #edf6f0;
+}
+
+.app-shell-school-admin .analysis-blocker-band {
+  border-color: #dbc79b;
+  background: #faf4e8;
+}
+
+.app-shell-school-admin .status-active,
+.app-shell-school-admin .analysis-tone-success {
+  color: #315f49;
+  background: #e9f4ed;
+}
+
+.app-shell-school-admin .status-warning,
+.app-shell-school-admin .analysis-tone-warning {
+  color: #80561f;
+  background: #faf1df;
+}
+
+.app-shell-school-admin .status-disabled {
+  color: #687872;
+  background: #edf1ee;
+}
+
+.school-admin-theme-active .entity-modal {
+  max-height: min(88dvh, 900px);
+}
+
+.school-admin-theme-active .entity-modal .primary-button {
+  border-color: #183d37;
+  color: #fff;
+  background: #183d37;
+}
+
+.school-admin-theme-active .entity-modal .primary-button:hover:not(:disabled) {
+  border-color: #102f2a;
+  background: #102f2a;
+}
+
+.school-admin-theme-active .entity-modal .secondary-button {
+  border-color: #c6d0ca;
+  color: #30443d;
+  background: #fff;
+}
+
+.school-admin-theme-active .entity-modal .secondary-button:hover:not(:disabled) {
+  border-color: #8fa39a;
+  color: #102f2a;
+  background: #f8faf7;
+}
+
+.school-admin-theme-active .entity-modal :is(input, textarea, select, .app-select-trigger) {
+  border-color: #cbd4ce;
+  border-radius: 3px;
+  color: #263832;
+  background: #fff;
+}
+
+.school-admin-theme-active .entity-modal :is(input, textarea, select, .app-select-trigger):focus,
+.school-admin-theme-active .entity-modal .app-select:focus-within .app-select-trigger {
+  border-color: #315b53;
+  box-shadow: 0 0 0 3px rgba(49, 91, 83, .12);
+}
+
+.school-admin-theme-active .entity-modal input[type="checkbox"],
+.school-admin-theme-active .entity-modal input[type="radio"] {
+  accent-color: #183d37;
+}
+
+.school-admin-theme-active .entity-modal :is(button, a, input, textarea, select):focus-visible {
+  outline: 3px solid rgba(181, 74, 58, .28);
+  outline-offset: 2px;
+}
+
+.school-admin-theme-active .entity-modal .modal-actions {
+  border-top-color: #d7ded8;
+  background: #fafbf9;
+}
+
+@media (max-width: 1200px) {
+  .school-home-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell-school-admin .school-dashboard-hero-grid,
+  .app-shell-school-admin .school-dashboard-work-grid,
+  .app-shell-school-admin .school-dashboard-four-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell-school-admin .content {
+    max-width: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .app-shell-school-admin .school-admin-page-heading {
+    padding-bottom: 17px;
+  }
+
+  .app-shell-school-admin .super-admin-section-heading {
+    align-items: end;
+    gap: 12px;
+  }
+
+  .app-shell-school-admin .super-admin-section-heading > small {
+    display: block;
+    padding-bottom: 2px;
+    white-space: nowrap;
+  }
+
+  .school-priority {
+    min-height: 250px;
+    padding: 23px 19px;
+  }
+
+  .school-priority > header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    align-items: start;
+  }
+
+  .school-priority > header p {
+    justify-self: start;
+    text-align: left;
+  }
+
+  .school-priority-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .school-shortcuts > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .school-shortcuts a {
+    min-height: 72px;
+    border-right: 0;
+  }
+
+  .school-shortcuts a:nth-last-child(2) {
+    border-bottom: 1px solid #e4e9e5;
+  }
+
+  .app-shell-school-admin .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app-shell-school-admin .metric-card {
+    min-height: 105px;
+    padding: 16px;
+  }
+
+  .app-shell-school-admin .metric-card strong {
+    font-size: 27px;
+  }
+
+  .app-shell-school-admin .school-chart-row {
+    width: calc(100vw - 32px);
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(292px, calc(100vw - 48px));
+    grid-template-columns: none;
+    gap: 12px;
+    padding: 0 0 10px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: inline mandatory;
+    scrollbar-color: #9eb3a8 transparent;
+  }
+
+  .app-shell-school-admin .school-chart-row > .chart-card {
+    min-height: 330px;
+    grid-column: auto;
+    scroll-snap-align: start;
+  }
+
+  .app-shell-school-admin .school-chart-row .echarts-canvas,
+  .app-shell-school-admin .school-chart-row .chart-card-tall .echarts-canvas {
+    height: 220px;
+  }
+
+  .school-class-overview .panel {
+    padding: 16px;
+  }
+
+  .school-class-overview .panel-heading.split {
+    gap: 8px;
+  }
+
+  .app-shell-school-admin .extra-filter {
+    padding: 12px;
+  }
+
+  .app-shell-school-admin .row-actions {
+    display: flex;
+    gap: 8px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-school-admin .school-chart-row {
+    scroll-behavior: auto;
+  }
+}

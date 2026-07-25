@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { EChartsCoreOption } from 'echarts/core'
-import { RouterLink, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ApiError } from '@/api/client'
 import {
   getTeacherLearningPageResponses,
   type LearningPageResponseSummary
 } from '@/api/learningPages'
 import {
+  activateClassroomGroupingPlan,
   closeClassroomActivity,
   closeClassroomGroupCollaboration,
   closeClassroomStep,
@@ -18,14 +19,17 @@ import {
   getClassroomEvaluation,
   getClassroomGroupCollaboration,
   getClassroomGroupingCandidates,
+  getClassroomGroupingDecision,
   getClassroomQuickAnswer,
   getClassroomRandomPick,
   getClassroomRandomPickPreview,
   getClassroomSession,
   getClassroomStepProgress,
   getTeacherLessonSteps,
+  getTeacherStudents,
   lockClassroomStep,
   markClassroomAttendance,
+  notifyClassroomGroupingPlan,
   openClassroomStep,
   restartClassroomSession,
   runClassroomCommand,
@@ -33,6 +37,7 @@ import {
   scoreClassroomQuickAnswer,
   scoreClassroomRandomPick,
   setClassroomEvaluationRuntime,
+  saveClassroomGroupingDecision,
   setupClassroomGroupCollaboration,
   startClassroomSession,
   submitClassroomTeacherEvaluation,
@@ -51,6 +56,9 @@ import {
   type ClassroomGroupRow,
   type GroupingCandidateAssignment,
   type GroupingCandidateRun,
+  type GroupingDecisionPayload,
+  type GroupingDecisionPoint,
+  type GroupingPlanVersion,
   type ClassroomSessionRow,
   type ClassroomStepProgressAnswer,
   type ClassroomStepProgressPayload,
@@ -65,15 +73,18 @@ import {
   type ResourceBinding,
   type StudentWorkAttachmentRow
 } from '@/api/teacher'
+import type { StudentRow } from '@/api/management'
 import NoticeLine from '@/components/NoticeLine.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
 import ClassroomChatDock from '@/components/ClassroomChatDock.vue'
 import ClassroomEvaluationModal from '@/components/teacher/ClassroomEvaluationModal.vue'
 import ClassroomGroupCollaborationModal from '@/components/teacher/ClassroomGroupCollaborationModal.vue'
 import ClassroomInteractionModals from '@/components/teacher/ClassroomInteractionModals.vue'
+import ClassroomCommandHeader from '@/components/teacher/ClassroomCommandHeader.vue'
+import ClassroomStepFlow from '@/components/teacher/ClassroomStepFlow.vue'
 import { classroomControlState } from '@/domain/classroomState'
 import type { EvaluationNotAssessedEntry } from '@/domain/evaluation'
-
+import '@/styles/teacher-classroom-console.css'
 const EChartPanel = defineAsyncComponent(() => import('@/components/EChartPanel.vue'))
 const LearningPageStatsModal = defineAsyncComponent(() => import('@/components/teacher/LearningPageStatsModal.vue'))
 
@@ -87,6 +98,9 @@ const steps = ref<LessonStepRow[]>([])
 const classroomActivities = ref<ClassroomActivityRow[]>([])
 const selectedStepId = ref<number | null>(null)
 const selectedResourceIndex = ref(0)
+const classroomResourcePreview = ref<HTMLElement | null>(null)
+const resourcePreviewExpanded = ref(false)
+const classroomContextTab = ref<'task' | 'status' | 'activity'>('task')
 
 const attendanceOpen = ref(false)
 const attendanceLoading = ref(false)
@@ -136,9 +150,13 @@ let learningPageProgressPollHandle: number | null = null
 
 const groupCollabOpen = ref(false)
 const groupCollabLoading = ref(false)
+const groupingDraftSaved = ref(false)
 const groupCollaboration = ref<ClassroomGroupCollaborationRow | null>(null)
 const activeGroupDocument = ref<ClassroomGroupRow | null>(null)
+const groupingStudents = ref<StudentRow[]>([])
+const groupingDecision = ref<GroupingDecisionPoint | null>(null)
 const groupingRun = ref<GroupingCandidateRun | null>(null)
+const groupingPlan = ref<GroupingPlanVersion | null>(null)
 const groupingCandidateKey = ref('')
 const groupingDraft = ref<GroupingCandidateAssignment[]>([])
 const groupingLocks = ref<Record<number, boolean>>({})
@@ -153,7 +171,7 @@ const groupingStrategyOptions = [
   {
     value: 'same_layer',
     label: '同进度练习',
-    description: '把当前学科学习准备情况接近的学生分在一起，适合分层练习和集中辅导。'
+    description: '把当前学科学习准备情况接近的学生分在一起，适合差异化练习和集中辅导。'
   },
   {
     value: 'balanced_layer',
@@ -180,9 +198,11 @@ const groupCollabForm = ref<ClassroomGroupCollaborationPayload>({
   allow_onlyoffice_edit: true,
   regenerate: false
 })
+const groupingDecisionForm = ref<GroupingDecisionPayload>(createDefaultGroupingDecisionForm())
 
 const evaluationOpen = ref(false)
 const evaluationLoading = ref(false)
+const evaluationNotice = ref('')
 const evaluationData = ref<ClassroomEvaluationPayload | null>(null)
 const evaluationForm = ref<ClassroomEvaluationConfigPayload>({
   enable_self: false,
@@ -214,6 +234,16 @@ const selectedResource = computed<ResourceBinding | null>(() => {
   if (!activeResources.value.length) return null
   return activeResources.value[Math.min(selectedResourceIndex.value, activeResources.value.length - 1)] || null
 })
+const selectedResourcePreviewKey = computed(() => {
+  const resource = selectedResource.value
+  if (!resource) return 'empty-resource'
+  return [
+    selectedResourceIndex.value,
+    resource.id || '',
+    resource.attachment_url || '',
+    resource.title || ''
+  ].join(':')
+})
 const randomPickStudents = computed(() => randomPickData.value?.students || [])
 const randomPickCurrentStudent = computed(() => randomPickStudents.value.find((row) => row.student_id === randomPickCurrentStudentId.value) || null)
 const randomPickPickedStudent = computed(() => {
@@ -244,16 +274,24 @@ const classroomStats = computed(() => [
   { label: '进行活动', value: openActivities.value.length }
 ])
 const groupRows = computed(() => groupCollaboration.value?.groups || [])
+const groupingStudentOptions = computed(() => groupingStudents.value.map((student) => ({
+  student_id: student.user_id,
+  username: student.username,
+  display_name: student.display_name,
+  student_no: student.student_no
+})))
 const selectedGroupingCandidate = computed(() => (
   groupingRun.value?.candidates.find((item) => item.key === groupingCandidateKey.value) || null
 ))
 const groupingFallbackMessage = computed(() => {
   const run = groupingRun.value
-  if (!run || run.candidates.length !== 1 || run.candidates[0]?.key !== 'random') return ''
-  const reason = run.conflicts[0]?.code || String(run.candidates[0]?.metadata?.fallback_reason || '')
-  if (reason === 'constraints_unsatisfied') return '当前人数或锁定条件无法生成其他方案，本次仅提供随机分组。'
-  if (reason === 'ortools_unavailable') return '本地分组计算组件暂不可用，本次仅提供随机分组。'
-  return '当前学习材料不足，本次仅提供随机分组。'
+  if (!run) return ''
+  if (run.status === 'blocked') return '候选方案均未通过完整性或教育约束检查，请重新准备分组任务。'
+  if (run.candidate_count < 2) return '当前没有形成至少两套可比较的候选方案，请重新准备分组任务。'
+  const reason = run.conflicts[0]?.code || ''
+  if (reason === 'constraints_unsatisfied') return '部分候选未满足约束，请比较候选状态后再作决定。'
+  if (reason === 'ortools_unavailable') return '当前采用可用的本地生成方式形成候选，请由教师复核。'
+  return ''
 })
 const groupCollaborationOpenText = computed(() => {
   if (!groupCollaboration.value) return '未开启'
@@ -276,6 +314,9 @@ const selectedTeacherEvalStudent = computed(() => {
 const teacherEvaluationCriteria = computed(() => evaluationForm.value.teacher_criteria)
 const evaluationEnabledCount = computed(() => evaluationTypeOptions.filter((item) => Boolean(evaluationForm.value[item.enabledKey])).length)
 const runtimeEvaluationEnabled = computed(() => Boolean(evaluationData.value?.runtime_enabled ?? session.value?.evaluation_enabled))
+const lessonEvaluationDesignPath = computed(() => (
+  session.value?.lesson?.id ? `/teacher/lessons/${session.value.lesson.id}/design` : ''
+))
 const stepProgressRows = computed(() => stepProgressData.value?.rows || [])
 const submittedProgressPercent = computed(() => {
   const summary = stepProgressData.value?.summary
@@ -399,7 +440,7 @@ const objectiveProgressOption = computed<EChartsCoreOption>(() => {
   const rows = objectiveProgressRows.value
   const hasValue = rows.some((row) => row.count > 0)
   return {
-    color: ['#1f6feb'],
+    color: ['#17483f'],
     graphic: hasValue
       ? undefined
       : {
@@ -431,15 +472,15 @@ const objectiveProgressOption = computed<EChartsCoreOption>(() => {
     xAxis: {
       type: 'value',
       minInterval: 1,
-      axisLabel: { color: '#64748b', fontSize: 12 },
-      splitLine: { lineStyle: { color: '#e2e8f0' } }
+      axisLabel: { color: '#687a73', fontSize: 12 },
+      splitLine: { lineStyle: { color: '#dfe5e0' } }
     },
     yAxis: {
       type: 'category',
       data: rows.map((row) => row.label),
-      axisLabel: { color: '#64748b', fontSize: 12, width: 120, overflow: 'truncate' },
+      axisLabel: { color: '#687a73', fontSize: 12, width: 120, overflow: 'truncate' },
       axisTick: { show: false },
-      axisLine: { lineStyle: { color: '#d8e1ec' } }
+      axisLine: { lineStyle: { color: '#d6ded8' } }
     },
     series: [
       {
@@ -447,13 +488,13 @@ const objectiveProgressOption = computed<EChartsCoreOption>(() => {
         data: rows.map((row) => ({
           value: row.count,
           itemStyle: {
-            color: row.unanswered ? '#94a3b8' : row.correct ? '#16a34a' : '#1f6feb',
+            color: row.unanswered ? '#a5b1ac' : row.correct ? '#32674f' : '#b94f3d',
             borderRadius: [0, 7, 7, 0]
           },
           label: {
             show: true,
             position: 'right',
-            color: '#334155',
+            color: '#334a43',
             fontSize: 12,
             formatter: `${row.count}人 ${row.percent}%`
           }
@@ -494,23 +535,6 @@ function classLabel() {
 function resourceTitle(resource: ResourceBinding | null) {
   if (!resource) return ''
   return resource.title || resource.attachment_name || '未命名资源'
-}
-
-function statusClass(status: string) {
-  if (status === 'running' || status === 'open') return 'status-running'
-  if (status === 'locked') return 'status-locked'
-  if (status === 'finished' || status === 'closed') return 'status-closed'
-  return 'status-draft'
-}
-
-function stepBadgeClass(step: LessonStepRow) {
-  if (currentStep.value?.id !== step.id) return 'status-draft'
-  return statusClass(session.value?.current_step_status || 'idle')
-}
-
-function stepRunLabel(step: LessonStepRow) {
-  if (currentStep.value?.id !== step.id) return '待投放'
-  return stepStatusText.value
 }
 
 function questionAnswerSummary(question: LessonStepQuestion) {
@@ -648,7 +672,7 @@ function answerStatusClass(answer: ClassroomStepProgressRow['answers'][number]) 
 }
 
 function studentLayerText(row: ClassroomStepProgressRow) {
-  return row.current_layer_label || row.current_layer || '未分层'
+  return row.current_layer_label || row.current_layer || '尚未安排'
 }
 
 function formatFileSize(size: number) {
@@ -656,6 +680,29 @@ function formatFileSize(size: number) {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function toDatetimeLocal(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
+
+function createDefaultGroupingDecisionForm(): GroupingDecisionPayload {
+  return {
+    task_purpose: 'peer_explanation',
+    task_stage: '',
+    role_requirements: ['coordinator', 'recorder', 'presenter', 'verifier'],
+    resource_requirements: [],
+    safety_constraints: { prohibited_pairs: [] },
+    opportunity_requirements: {
+      required_group_roles: ['coordinator', 'recorder'],
+      required_for_every_student: ['collaboration']
+    },
+    stability_until: toDatetimeLocal(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)),
+    task_context: { source: 'teacher_classroom_console' }
+  }
 }
 
 function syncGroupCollaborationForm(row: ClassroomGroupCollaborationRow | null) {
@@ -668,6 +715,25 @@ function syncGroupCollaborationForm(row: ClassroomGroupCollaborationRow | null) 
     allow_student_upload: row.allow_student_upload,
     allow_onlyoffice_edit: row.allow_onlyoffice_edit,
     regenerate: false
+  }
+}
+
+function syncGroupingDecisionForm(point: GroupingDecisionPoint | null) {
+  if (!point) return
+  groupingDecisionForm.value = {
+    task_purpose: point.task_purpose,
+    task_stage: point.task_stage,
+    role_requirements: [...point.role_requirements],
+    resource_requirements: [...point.resource_requirements],
+    safety_constraints: {
+      prohibited_pairs: (point.safety_constraints.prohibited_pairs || []).map((pair) => [...pair])
+    },
+    opportunity_requirements: {
+      required_group_roles: [...(point.opportunity_requirements.required_group_roles || [])],
+      required_for_every_student: [...(point.opportunity_requirements.required_for_every_student || ['collaboration'])]
+    },
+    stability_until: point.stability_until ? toDatetimeLocal(point.stability_until) : null,
+    task_context: { source: 'teacher_classroom_console' }
   }
 }
 
@@ -692,12 +758,43 @@ async function loadGroupingCandidates() {
   if (!session.value) return
   try {
     const run = await getClassroomGroupingCandidates(session.value.id)
+    if (run && groupingDecision.value && run.decision_point.id !== groupingDecision.value.id) {
+      groupingRun.value = null
+      groupingCandidateKey.value = ''
+      groupingDraft.value = []
+      return
+    }
     groupingRun.value = run
-    if (run?.candidates.length) {
-      selectGroupingCandidate(run.selected_candidate_key || run.candidates[0].key)
+    if (run?.selected_candidate_key) {
+      selectGroupingCandidate(run.selected_candidate_key)
+    } else {
+      groupingCandidateKey.value = ''
+      groupingDraft.value = []
+      groupingLocks.value = {}
     }
   } catch {
     groupingRun.value = null
+  }
+}
+
+async function loadGroupingDecision() {
+  if (!session.value) return
+  try {
+    groupingDecision.value = await getClassroomGroupingDecision(session.value.id)
+    syncGroupingDecisionForm(groupingDecision.value)
+  } catch {
+    groupingDecision.value = null
+  }
+}
+
+async function loadGroupingStudents() {
+  const classId = session.value?.class_group?.id
+  if (!classId) return
+  try {
+    const page = await getTeacherStudents({ class: classId, status: 'active', page_size: 200 })
+    groupingStudents.value = page.results
+  } catch {
+    groupingStudents.value = []
   }
 }
 
@@ -718,46 +815,96 @@ async function loadGroupCollaboration(silent = false) {
 }
 
 async function openGroupCollaborationPanel() {
+  notice.value = ''
   groupCollabOpen.value = true
-  await Promise.all([loadGroupCollaboration(), loadGroupingCandidates()])
+  groupingPlan.value = null
+  await Promise.all([loadGroupCollaboration(), loadGroupingDecision(), loadGroupingStudents()])
+  groupingDraftSaved.value = Boolean(groupCollaboration.value)
+  await loadGroupingCandidates()
 }
 
-async function saveGroupCollaboration(regenerate = false) {
-  if (!session.value) return
+async function saveGroupCollaborationDraft() {
+  if (!session.value || groupCollabLoading.value) return
   groupCollabLoading.value = true
   notice.value = ''
   try {
-    if (regenerate) {
-      if (!groupCollaboration.value) {
-        notice.value = '请先开启小组合作，再生成分组候选。'
-        return
-      }
-      const lockedAssignments = Object.fromEntries(
-        groupingDraft.value.flatMap((group) => group.members
-          .filter((member) => groupingLocks.value[member.student_id])
-          .map((member) => [String(member.student_id), group.group_no]))
-      )
-      const run = await generateClassroomGroupingCandidates(session.value.id, {
-        ...groupCollabForm.value,
-        regenerate: false,
-        locked_assignments: lockedAssignments
-      })
-      groupingRun.value = run
-      if (run.candidates.length) selectGroupingCandidate(run.candidates[0].key)
-      notice.value = run.candidates.length > 1
-        ? '已生成多套分组候选，请检查后确认。'
-        : '当前材料只能生成随机候选，请检查后确认。'
-      return
-    }
+    const submittedDraft = { ...groupCollabForm.value, regenerate: false }
     const row = await setupClassroomGroupCollaboration(session.value.id, {
-      ...groupCollabForm.value,
-      regenerate: false
+      ...submittedDraft
     })
     groupCollaboration.value = row
-    syncGroupCollaborationForm(row)
-    notice.value = '小组合作设置已保存。'
+    groupingDraftSaved.value = true
+    if (row.is_enabled) {
+      groupCollabForm.value = submittedDraft
+    } else {
+      syncGroupCollaborationForm(row)
+    }
+    notice.value = '小组合作设置草稿已保存；尚未生成或启用分组。'
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '小组合作设置保存失败。'
+    notice.value = error instanceof ApiError ? error.message : '小组合作设置草稿保存失败。'
+  } finally {
+    groupCollabLoading.value = false
+  }
+}
+
+async function saveGroupingDecision() {
+  if (!session.value || !groupCollaboration.value || groupCollabLoading.value) return
+  groupCollabLoading.value = true
+  notice.value = ''
+  try {
+    const point = await saveClassroomGroupingDecision(session.value.id, {
+      ...groupingDecisionForm.value,
+      task_stage: groupingDecisionForm.value.task_stage.trim(),
+      resource_requirements: groupingDecisionForm.value.resource_requirements.map((item) => item.trim()).filter(Boolean),
+      safety_constraints: {
+        prohibited_pairs: groupingDecisionForm.value.safety_constraints.prohibited_pairs.map((pair) => [...pair])
+      },
+      opportunity_requirements: {
+        required_group_roles: [...groupingDecisionForm.value.opportunity_requirements.required_group_roles],
+        required_for_every_student: [...groupingDecisionForm.value.opportunity_requirements.required_for_every_student]
+      },
+      task_context: { source: 'teacher_classroom_console' }
+    })
+    groupingDecision.value = point
+    syncGroupingDecisionForm(point)
+    groupingRun.value = null
+    groupingPlan.value = null
+    groupingCandidateKey.value = ''
+    groupingDraft.value = []
+    groupingLocks.value = {}
+    notice.value = '本次分组任务已保存；现在可以生成候选方案。'
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '本次分组任务保存失败。'
+  } finally {
+    groupCollabLoading.value = false
+  }
+}
+
+async function generateGroupingCandidates() {
+  if (!session.value || !groupCollaboration.value || !groupingDecision.value || groupCollabLoading.value) return
+  groupCollabLoading.value = true
+  notice.value = ''
+  try {
+    const lockedAssignments = Object.fromEntries(
+      groupingDraft.value.flatMap((group) => group.members
+        .filter((member) => groupingLocks.value[member.student_id])
+        .map((member) => [String(member.student_id), group.group_no]))
+    )
+    const run = await generateClassroomGroupingCandidates(session.value.id, {
+      decision_point_id: groupingDecision.value.id,
+      locked_assignments: lockedAssignments
+    })
+    groupingRun.value = run
+    groupingDecision.value = run.decision_point
+    groupingPlan.value = null
+    groupingCandidateKey.value = ''
+    groupingDraft.value = []
+    groupingLocks.value = {}
+    notice.value = run.candidate_count >= 2
+      ? `已生成 ${run.candidate_count} 套候选方案，请由教师逐一比较后选择。`
+      : '未形成至少两套可比较方案，请重新准备分组任务。'
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '分组候选生成失败。'
   } finally {
     groupCollabLoading.value = false
   }
@@ -790,8 +937,7 @@ function setGroupingStudentGroup(studentId: number, event: Event) {
 }
 
 async function confirmGroupingPlan() {
-  if (!session.value || !groupingRun.value || !groupingCandidateKey.value) return
-  if (!window.confirm('确认启用当前分组？学生将立即切换到新小组，旧小组材料继续保留。')) return
+  if (!session.value || !groupingRun.value || !groupingCandidateKey.value || groupCollabLoading.value) return
   groupCollabLoading.value = true
   notice.value = ''
   try {
@@ -801,20 +947,79 @@ async function confirmGroupingPlan() {
     const roles = Object.fromEntries(
       groupingDraft.value.flatMap((group) => group.members.map((member) => [String(member.student_id), member.role]))
     )
-    const row = await confirmClassroomGroupingCandidate(session.value.id, groupingRun.value.id, {
+    const plan = await confirmClassroomGroupingCandidate(session.value.id, groupingRun.value.id, {
       candidate_key: groupingCandidateKey.value,
       adjustments: { student_groups: studentGroups, roles },
       note: groupingNote.value.trim()
     })
-    groupCollaboration.value = row
-    syncGroupCollaborationForm(row)
+    groupingPlan.value = plan
+    groupingDecision.value = plan.decision_point
     groupingRun.value.selected_candidate_key = groupingCandidateKey.value
-    notice.value = '新分组已生效，学生端会立即刷新。'
+    notice.value = plan.status === 'reviewed'
+      ? '教师复核结果已保存；方案尚未启用，也未通知学生。'
+      : `已载入当前方案状态：${plan.status_label}。`
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '分组确认失败。'
+    notice.value = error instanceof ApiError ? error.message : '教师复核结果保存失败。'
   } finally {
     groupCollabLoading.value = false
   }
+}
+
+async function activateGroupingPlan() {
+  if (!session.value || !groupingPlan.value || groupCollabLoading.value) return
+  const confirmed = window.confirm('确认启用已复核的分组方案？启用后课堂将切换到该方案，但不会自动发送学生通知。')
+  if (!confirmed) return
+  groupCollabLoading.value = true
+  notice.value = ''
+  try {
+    const result = await activateClassroomGroupingPlan(session.value.id, groupingPlan.value.id)
+    groupingPlan.value = result.plan
+    groupingDecision.value = result.plan.decision_point
+    groupCollaboration.value = result.collaboration
+    syncGroupCollaborationForm(result.collaboration)
+    notice.value = '分组方案已启用；尚未通知学生。'
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '分组方案启用失败。'
+  } finally {
+    groupCollabLoading.value = false
+  }
+}
+
+async function notifyStudentsOfGroupingPlan() {
+  if (!session.value || !groupingPlan.value || groupCollabLoading.value) return
+  const confirmed = window.confirm('确认向全班发送分组更新通知？通知只包含学生需要查看的小组、角色和学习任务提示。')
+  if (!confirmed) return
+  groupCollabLoading.value = true
+  notice.value = ''
+  try {
+    const plan = await notifyClassroomGroupingPlan(session.value.id, groupingPlan.value.id)
+    groupingPlan.value = plan
+    groupingDecision.value = plan.decision_point
+    notice.value = '分组通知已发送给学生。'
+  } catch (error) {
+    notice.value = error instanceof ApiError ? error.message : '学生分组通知发送失败。'
+  } finally {
+    groupCollabLoading.value = false
+  }
+}
+
+function restartGroupingWorkflow() {
+  groupingDraftSaved.value = false
+  groupingDecision.value = null
+  groupingRun.value = null
+  groupingPlan.value = null
+  groupingCandidateKey.value = ''
+  groupingDraft.value = []
+  groupingLocks.value = {}
+  groupingNote.value = ''
+  groupingDecisionForm.value = createDefaultGroupingDecisionForm()
+  notice.value = '已进入新的分组任务准备；当前已启用小组保持不变。'
+}
+
+async function refreshGroupingWorkflow() {
+  groupingPlan.value = null
+  await Promise.all([loadGroupCollaboration(), loadGroupingDecision(), loadGroupingStudents()])
+  await loadGroupingCandidates()
 }
 
 async function closeGroupCollaboration() {
@@ -868,9 +1073,10 @@ async function loadEvaluation(silent = false) {
     const row = await getClassroomEvaluation(session.value.id)
     evaluationData.value = row
     syncEvaluationForm(row)
+    if (!silent) evaluationNotice.value = ''
   } catch (error) {
     if (!silent) {
-      notice.value = error instanceof ApiError ? error.message : '课程评价加载失败。'
+      evaluationNotice.value = error instanceof ApiError ? error.message : '课堂评价加载失败。'
     }
   } finally {
     if (!silent) evaluationLoading.value = false
@@ -878,6 +1084,7 @@ async function loadEvaluation(silent = false) {
 }
 
 async function openEvaluationPanel() {
+  evaluationNotice.value = ''
   evaluationOpen.value = true
   await loadEvaluation()
 }
@@ -885,7 +1092,7 @@ async function openEvaluationPanel() {
 async function setRuntimeEvaluationEnabled(enabled: boolean) {
   if (!session.value) return
   evaluationLoading.value = true
-  notice.value = ''
+  evaluationNotice.value = ''
   try {
     const row = await setClassroomEvaluationRuntime(session.value.id, enabled)
     evaluationData.value = row
@@ -897,10 +1104,18 @@ async function setRuntimeEvaluationEnabled(enabled: boolean) {
     }
     notice.value = enabled ? '课堂评价已开启。' : '课堂评价已关闭。'
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '课堂评价开关保存失败。'
+    evaluationNotice.value = error instanceof ApiError ? error.message : '课堂评价开关保存失败。'
   } finally {
     evaluationLoading.value = false
   }
+}
+
+function prepareEvaluationStep(stepId: number) {
+  const step = steps.value.find((item) => item.id === stepId)
+  if (!step) return
+  selectStep(step)
+  evaluationOpen.value = false
+  notice.value = `已定位到“${step.title}”环节。确认内容后点击“投放此环节”，再开启课堂评价。`
 }
 
 function syncTeacherEvaluationDraft(row: ClassroomEvaluationStudentRow | null = selectedTeacherEvalStudent.value) {
@@ -1712,11 +1927,87 @@ function selectStep(step: LessonStepRow) {
   selectedResourceIndex.value = 0
 }
 
+async function resetResourcePreviewPosition() {
+  await nextTick()
+  const preview = classroomResourcePreview.value
+  if (!preview) return
+  preview.scrollTo({ top: 0, left: 0 })
+  preview.querySelector<HTMLElement>('.resource-preview-body')?.scrollTo({ top: 0, left: 0 })
+}
+
+function selectResource(index: number) {
+  selectedResourceIndex.value = index
+  resetResourcePreviewPosition()
+}
+
+async function toggleResourcePreview() {
+  resourcePreviewExpanded.value = !resourcePreviewExpanded.value
+  document.body.classList.toggle('resource-preview-page-open', resourcePreviewExpanded.value)
+  await resetResourcePreviewPosition()
+  classroomResourcePreview.value
+    ?.querySelector<HTMLButtonElement>('[data-test="resource-preview-expand"]')
+    ?.focus()
+}
+
+async function closeExpandedResourcePreview() {
+  if (!resourcePreviewExpanded.value) return
+  resourcePreviewExpanded.value = false
+  document.body.classList.remove('resource-preview-page-open')
+  await resetResourcePreviewPosition()
+  classroomResourcePreview.value
+    ?.querySelector<HTMLButtonElement>('[data-test="resource-preview-expand"]')
+    ?.focus()
+}
+
+function handleResourcePreviewKeydown(event: KeyboardEvent) {
+  if (!resourcePreviewExpanded.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeExpandedResourcePreview()
+    return
+  }
+  if (event.key !== 'Tab') return
+
+  const preview = classroomResourcePreview.value
+  const focusable = preview
+    ? Array.from(preview.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])'
+    )).filter((element) => (
+      !element.hidden
+      && getComputedStyle(element).display !== 'none'
+      && getComputedStyle(element).visibility !== 'hidden'
+    ))
+    : []
+  if (!preview || !focusable.length) {
+    event.preventDefault()
+    preview?.focus({ preventScroll: true })
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  const active = document.activeElement
+  if (event.shiftKey && (active === first || !preview.contains(active))) {
+    event.preventDefault()
+    last.focus({ preventScroll: true })
+  } else if (!event.shiftKey && (active === last || !preview.contains(active))) {
+    event.preventDefault()
+    first.focus({ preventScroll: true })
+  }
+}
+
+watch(selectedResourcePreviewKey, () => {
+  resourcePreviewExpanded.value = false
+  document.body.classList.remove('resource-preview-page-open')
+  resetResourcePreviewPosition()
+})
+
 onMounted(() => {
   timerTickHandle = window.setInterval(() => {
     nowTick.value = Date.now()
   }, 1000)
   startStepProgressPolling()
+  window.addEventListener('keydown', handleResourcePreviewKeydown)
   loadPage()
 })
 
@@ -1725,6 +2016,8 @@ onUnmounted(() => {
   stopStepProgressPolling()
   stopRandomPickAnimation()
   stopLearningPageProgressPolling()
+  window.removeEventListener('keydown', handleResourcePreviewKeydown)
+  document.body.classList.remove('resource-preview-page-open')
   if (timerTickHandle !== null) {
     window.clearInterval(timerTickHandle)
   }
@@ -1738,55 +2031,27 @@ onUnmounted(() => {
       <p class="empty">正在加载课堂控制台</p>
     </section>
 
-    <section v-else class="classroom-console-shell">
-      <header class="classroom-console-top classroom-control-header">
-        <div>
-          <p>{{ session.course?.title || '未绑定课程' }} · {{ session.lesson?.title || '未绑定课时' }} · {{ classLabel() }}</p>
-          <h2>{{ session.title }}</h2>
-          <span>
-            当前环节：{{ currentStep?.title || '未投放' }} · {{ stepStatusText }}
-            <template v-if="session.submission_locked"> · 提交已锁定</template>
-          </span>
-        </div>
-        <div class="lesson-designer-actions">
-          <RouterLink class="secondary-button" to="/teacher/classroom">课堂列表</RouterLink>
-          <RouterLink v-if="session.lesson" class="secondary-button" :to="`/teacher/lessons/${session.lesson.id}/design`">课时设计</RouterLink>
-          <button class="secondary-button" type="button" :disabled="loading" @click="refreshConsole">刷新状态</button>
-          <button v-if="classroomControls.canStart" class="primary-button" type="button" :disabled="saving" @click="startSession">开始课堂</button>
-          <button v-if="classroomControls.canFinish" class="primary-button danger" type="button" :disabled="saving" @click="finishSession">结束课堂</button>
-          <button v-if="classroomControls.canRestart" class="primary-button" type="button" :disabled="saving" @click="restartSession">重新开始</button>
-        </div>
-      </header>
-
-      <section class="classroom-control-strip classroom-command-strip classroom-command-strip-top">
-        <button
-          v-for="item in classroomCommands"
-          :key="item.command"
-          type="button"
-          :disabled="saving || session.status !== 'running'"
-          @click="runCommand(item.command)"
-        >
-          {{ item.label }}
-        </button>
-        <button
-          type="button"
-          :class="{ active: Boolean(groupCollaboration?.is_enabled) }"
-          :disabled="saving || session.status === 'finished'"
-          @click="openGroupCollaborationPanel"
-        >
-          小组合作
-          <small v-if="groupCollaboration">{{ groupCollaborationOpenText }}</small>
-        </button>
-        <button
-          type="button"
-          :class="{ active: runtimeEvaluationEnabled }"
-          :disabled="saving || session.status === 'finished'"
-          @click="openEvaluationPanel"
-        >
-          评价情况
-          <small v-if="runtimeEvaluationEnabled">已开放</small>
-        </button>
-      </section>
+    <section v-else class="classroom-console-shell" :class="{ 'has-active-timer': activeTimerActivity }">
+      <ClassroomCommandHeader
+        :session="session"
+        :current-step-title="currentStep?.title || ''"
+        :step-status-text="stepStatusText"
+        :class-label="classLabel()"
+        :saving="saving"
+        :loading="loading"
+        :controls="classroomControls"
+        :commands="classroomCommands"
+        :group-enabled="Boolean(groupCollaboration?.is_enabled)"
+        :group-status-text="groupCollaboration ? groupCollaborationOpenText : ''"
+        :evaluation-enabled="runtimeEvaluationEnabled"
+        @refresh="refreshConsole"
+        @start="startSession"
+        @finish="finishSession"
+        @restart="restartSession"
+        @command="runCommand"
+        @open-group="openGroupCollaborationPanel"
+        @open-evaluation="openEvaluationPanel"
+      />
 
       <section v-if="activeTimerActivity" class="teacher-timer-banner" :class="{ finished: timerIsFinished(activeTimerActivity) }">
         <div>
@@ -1801,32 +2066,14 @@ onUnmounted(() => {
       </section>
 
       <div class="classroom-console-grid classroom-control-grid">
-        <aside class="console-pane classroom-step-flow">
-          <div class="console-pane-header">
-            <div>
-              <strong>学习过程</strong>
-              <span>{{ steps.length }} 个环节</span>
-            </div>
-          </div>
-          <div class="classroom-step-list">
-            <button
-              v-for="(step, index) in steps"
-              :key="step.id"
-              class="classroom-step-run"
-              :class="{ active: step.id === selectedStepId, live: currentStep?.id === step.id }"
-              type="button"
-              @click="selectStep(step)"
-            >
-              <em>{{ index + 1 }}</em>
-              <span>
-                <strong>{{ step.title }}</strong>
-                <small>{{ step.step_type_label }} · {{ step.estimated_minutes }} 分钟 · {{ step.target_layer_label }}</small>
-              </span>
-              <i :class="stepBadgeClass(step)">{{ stepRunLabel(step) }}</i>
-            </button>
-            <p v-if="!steps.length" class="empty">该课堂未指定课时，或课时还没有保存环节。</p>
-          </div>
-        </aside>
+        <ClassroomStepFlow
+          :steps="steps"
+          :selected-step-id="selectedStepId"
+          :current-step-id="currentStep?.id || null"
+          :current-step-status="session.current_step_status"
+          :step-status-text="stepStatusText"
+          @select="selectStep"
+        />
 
         <main class="console-pane current-step-console classroom-stage-pane">
           <div class="console-pane-header">
@@ -1854,118 +2101,132 @@ onUnmounted(() => {
           </div>
 
           <section class="classroom-stage-grid">
-            <article class="live-preview-area classroom-resource-stage">
+            <article class="live-preview-area classroom-resource-stage" :class="{ 'has-resource-tabs': activeResources.length > 1 }">
               <header>
                 <span>资源预览</span>
                 <strong>{{ resourceTitle(selectedResource) || '暂无资源' }}</strong>
               </header>
-              <div v-if="activeResources.length > 1" class="student-resource-tabs">
+              <div v-if="activeResources.length > 1" class="student-resource-tabs classroom-resource-tabs" role="tablist" aria-label="切换课堂资源">
                 <button
                   v-for="(resource, index) in activeResources"
                   :key="`${resource.id || resource.title}-${index}`"
                   type="button"
                   :class="{ active: selectedResourceIndex === index }"
-                  @click="selectedResourceIndex = index"
+                  role="tab"
+                  :aria-selected="selectedResourceIndex === index"
+                  :title="resourceTitle(resource)"
+                  @click="selectResource(index)"
                 >
                   {{ resourceTitle(resource) }}
                 </button>
               </div>
-              <div class="classroom-resource-preview">
-                <ResourcePreview :resource="selectedResource" office-mode="view" />
+              <div
+                ref="classroomResourcePreview"
+                class="classroom-resource-preview"
+                :class="{ 'is-page-expanded': resourcePreviewExpanded }"
+                :role="resourcePreviewExpanded ? 'dialog' : undefined"
+                :aria-modal="resourcePreviewExpanded ? 'true' : undefined"
+                :aria-label="resourcePreviewExpanded ? `正在放大查看：${resourceTitle(selectedResource)}` : undefined"
+                :tabindex="resourcePreviewExpanded ? -1 : undefined"
+              >
+                <ResourcePreview
+                  :key="selectedResourcePreviewKey"
+                  :resource="selectedResource"
+                  office-mode="view"
+                  :expandable="Boolean(selectedResource)"
+                  :expanded="resourcePreviewExpanded"
+                  @toggle-expand="toggleResourcePreview"
+                />
               </div>
             </article>
+          </section>
+        </main>
+        <aside class="console-pane classroom-context-pane">
+          <div class="console-pane-header">
+            <div>
+              <strong>课堂信息</strong>
+              <span>任务、课堂情况与正在进行的活动集中在这里。</span>
+            </div>
+          </div>
+          <nav class="classroom-context-tabs" role="tablist" aria-label="课堂信息分类">
+            <button id="classroom-tab-task" type="button" role="tab" aria-controls="classroom-panel-task" :aria-selected="classroomContextTab === 'task'" :class="{ active: classroomContextTab === 'task' }" @click="classroomContextTab = 'task'">
+              环节任务<small>{{ activeQuestions.length + activeLearningPages.length }} 项</small>
+            </button>
+            <button id="classroom-tab-status" type="button" role="tab" aria-controls="classroom-panel-status" :aria-selected="classroomContextTab === 'status'" :class="{ active: classroomContextTab === 'status' }" @click="classroomContextTab = 'status'">
+              课堂情况<small>{{ session.status_label }}</small>
+            </button>
+            <button id="classroom-tab-activity" type="button" role="tab" aria-controls="classroom-panel-activity" :aria-selected="classroomContextTab === 'activity'" :class="{ active: classroomContextTab === 'activity' }" @click="classroomContextTab = 'activity'">
+              课堂活动<small>{{ openActivities.length }} 项进行中</small>
+            </button>
+          </nav>
+          <section id="classroom-panel-task" v-show="classroomContextTab === 'task'" class="classroom-context-panel task-panel" role="tabpanel" aria-labelledby="classroom-tab-task">
+            <header>
+              <span>本环节任务</span>
+              <strong>{{ activeQuestions.length }} 道题 · {{ activeLearningPages.length }} 份 AI 任务单 · {{ activeActivities.length }} 个活动</strong>
+            </header>
+            <p class="student-instruction">{{ selectedStep?.student_instruction || '教师暂未填写学生可见说明。' }}</p>
 
-            <aside class="classroom-step-task-panel">
-              <header>
-                <span>本环节任务</span>
-                <strong>{{ activeQuestions.length }} 道题 · {{ activeLearningPages.length }} 份 AI 任务单 · {{ activeActivities.length }} 个活动</strong>
-              </header>
-              <p class="student-instruction">{{ selectedStep?.student_instruction || '教师暂未填写学生可见说明。' }}</p>
-
-              <div v-if="activeQuestions.length" class="classroom-question-list">
-                <article v-for="(question, index) in activeQuestions" :key="question.id">
-                  <span>
-                    {{ question.question_type_label }} · 面向 {{ question.target_layer_label || '全体' }} ·
-                    {{ questionScoreSummary(question) }} · {{ question.is_required ? '必答' : '选答' }}
-                  </span>
+            <div v-if="activeQuestions.length" class="classroom-question-list">
+              <details v-for="(question, index) in activeQuestions" :key="question.id" class="classroom-question-item">
+                <summary>
+                  <span>{{ question.question_type_label }} · 面向 {{ question.target_layer_label || '全体' }} · {{ questionScoreSummary(question) }} · {{ question.is_required ? '必答' : '选答' }}</span>
                   <strong>{{ index + 1 }}. {{ question.stem }}</strong>
+                </summary>
+                <div class="classroom-question-detail">
                   <small v-if="question.options.length">选项：{{ question.options.join(' / ') }}</small>
                   <small v-if="question.question_type !== 'file'">参考答案：{{ questionAnswerSummary(question) }}</small>
                   <small v-else>{{ questionProgressMeta(question) }}</small>
-                  <button
-                    class="question-progress-button"
-                    type="button"
-                    :disabled="!isCurrentSelected || !currentStep"
-                    @click="openQuestionProgress(question)"
-                  >
+                  <button class="question-progress-button" type="button" :disabled="!isCurrentSelected || !currentStep" @click="openQuestionProgress(question)">
                     {{ isCurrentSelected && currentStep ? '查看完成情况' : '投放后查看' }}
                   </button>
-                </article>
-              </div>
-              <p v-else-if="!activeLearningPages.length" class="empty">当前环节没有课堂题或 AI 学习任务单。</p>
+                </div>
+              </details>
+            </div>
+            <p v-else-if="!activeLearningPages.length" class="empty">当前环节没有课堂题或 AI 学习任务单。</p>
 
-              <section v-if="activeLearningPages.length" class="classroom-learning-page-list">
-                <header><strong>AI 学习任务单</strong><span>{{ activeLearningPages.length }} 份</span></header>
-                <article v-for="resource in activeLearningPages" :key="resource.learning_page_id || resource.id">
-                  <div>
-                    <span>网页任务单 · v{{ resource.revision_no || 1 }}</span>
-                    <strong>{{ resource.title }}</strong>
-                  </div>
-                  <button class="question-progress-button" type="button" @click="openLearningPageProgress(resource)">查看完成情况</button>
-                </article>
-              </section>
+            <section v-if="activeLearningPages.length" class="classroom-learning-page-list">
+              <header><strong>AI 学习任务单</strong><span>{{ activeLearningPages.length }} 份</span></header>
+              <article v-for="resource in activeLearningPages" :key="resource.learning_page_id || resource.id">
+                <div><span>网页任务单 · v{{ resource.revision_no || 1 }}</span><strong>{{ resource.title }}</strong></div>
+                <button class="question-progress-button" type="button" @click="openLearningPageProgress(resource)">查看完成情况</button>
+              </article>
+            </section>
 
-              <div v-if="activeActivities.length" class="classroom-activity-tags">
-                <span v-for="activity in activeActivities" :key="activity">{{ activity }}</span>
-              </div>
-            </aside>
+            <div v-if="activeActivities.length" class="classroom-activity-tags">
+              <span v-for="activity in activeActivities" :key="activity">{{ activity }}</span>
+            </div>
           </section>
-        </main>
 
-        <aside class="console-pane student-live-pane classroom-live-pane">
-          <div class="console-pane-header">
-            <div>
-              <strong>课堂状态</strong>
-              <span>当前为本地轮询同步，后续接入 WebSocket。</span>
+          <section id="classroom-panel-status" v-show="classroomContextTab === 'status'" class="classroom-context-panel status-panel" role="tabpanel" aria-labelledby="classroom-tab-status">
+            <div class="student-state-summary">
+              <div v-for="item in classroomStats" :key="item.label"><strong>{{ item.value }}</strong><span>{{ item.label }}</span></div>
             </div>
-          </div>
-          <div class="student-state-summary">
-            <div v-for="item in classroomStats" :key="item.label">
-              <strong>{{ item.value }}</strong>
-              <span>{{ item.label }}</span>
+            <div class="live-message-list classroom-run-log">
+              <strong>运行信息</strong>
+              <p><span>课堂</span>{{ session.status_label }}，开始时间：{{ formatDateTime(session.started_at) }}</p>
+              <p><span>环节</span>{{ currentStep?.title || '未投放' }}，状态：{{ session.current_step_status_label }}</p>
+              <p><span>提交</span>{{ session.submission_locked ? '已锁定' : '允许提交' }}</p>
+              <p><span>学习内容匹配</span>{{ session.is_layered ? '当前投放环节含差异化题目，学生端按教师确认的学习内容安排匹配。' : '当前投放环节没有差异化题目。' }}</p>
             </div>
-          </div>
-          <div class="live-message-list classroom-run-log">
-            <strong>运行信息</strong>
-            <p><span>课堂</span>{{ session.status_label }}，开始时间：{{ formatDateTime(session.started_at) }}</p>
-            <p><span>环节</span>{{ currentStep?.title || '未投放' }}，状态：{{ session.current_step_status_label }}</p>
-            <p><span>提交</span>{{ session.submission_locked ? '已锁定' : '允许提交' }}</p>
-            <p><span>分层</span>{{ session.is_layered ? '当前投放环节含分层题，学生端按层级匹配。' : '当前投放环节没有分层题。' }}</p>
-          </div>
-          <div class="live-message-list classroom-run-log classroom-activity-log">
-            <strong>课堂控制</strong>
-            <p v-if="!openActivities.length"><span>状态</span>暂无进行中的课堂活动。</p>
-            <article v-for="activity in openActivities" :key="activity.id" class="classroom-activity-row">
-              <p>
-                <span>{{ activity.activity_type_label }}</span>
-                {{ activity.title }}{{ metadataText(activity) ? `，${metadataText(activity)}` : '' }}
-                <template v-if="responseCount(activity)">
-                  ，已响应 {{ responseCount(activity) }} 人
-                  <template v-if="responseNames(activity)">：{{ responseNames(activity) }}</template>
-                </template>
-              </p>
-              <button class="secondary-button mini" type="button" :disabled="saving" @click="closeActivity(activity)">关闭</button>
-              <button v-if="isSignInActivity(activity)" class="primary-button mini" type="button" :disabled="saving" @click="openAttendancePanel(activity)">
-                查看签到
-              </button>
-              <button v-if="isQuickAnswerActivity(activity)" class="primary-button mini" type="button" :disabled="saving" @click="openQuickAnswerPanel(activity)">
-                查看抢答
-              </button>
-              <button v-if="isRandomPickActivity(activity)" class="primary-button mini" type="button" :disabled="saving" @click="openRandomPickPanel(activity)">
-                查看点名
-              </button>
-            </article>
-          </div>
+          </section>
+
+          <section id="classroom-panel-activity" v-show="classroomContextTab === 'activity'" class="classroom-context-panel activity-panel" role="tabpanel" aria-labelledby="classroom-tab-activity">
+            <div class="live-message-list classroom-run-log classroom-activity-log">
+              <strong>正在进行的课堂活动</strong>
+              <p v-if="!openActivities.length"><span>状态</span>暂无进行中的课堂活动。</p>
+              <article v-for="activity in openActivities" :key="activity.id" class="classroom-activity-row">
+                <p>
+                  <span>{{ activity.activity_type_label }}</span>
+                  {{ activity.title }}{{ metadataText(activity) ? `，${metadataText(activity)}` : '' }}
+                  <template v-if="responseCount(activity)">，已响应 {{ responseCount(activity) }} 人<template v-if="responseNames(activity)">：{{ responseNames(activity) }}</template></template>
+                </p>
+                <button class="secondary-button mini" type="button" :disabled="saving" @click="closeActivity(activity)">关闭</button>
+                <button v-if="isSignInActivity(activity)" class="primary-button mini" type="button" :disabled="saving" @click="openAttendancePanel(activity)">查看签到</button>
+                <button v-if="isQuickAnswerActivity(activity)" class="primary-button mini" type="button" :disabled="saving" @click="openQuickAnswerPanel(activity)">查看抢答</button>
+                <button v-if="isRandomPickActivity(activity)" class="primary-button mini" type="button" :disabled="saving" @click="openRandomPickPanel(activity)">查看点名</button>
+              </article>
+            </div>
+          </section>
         </aside>
       </div>
 
@@ -2130,6 +2391,8 @@ onUnmounted(() => {
         :session-title="session.title"
         :class-label="classLabel()"
         :loading="evaluationLoading"
+        :notice="evaluationNotice"
+        :lesson-design-path="lessonEvaluationDesignPath"
         :runtime-enabled="runtimeEvaluationEnabled"
         :enabled-count="evaluationEnabledCount"
         :summary-items="evaluationSummaryItems"
@@ -2149,10 +2412,12 @@ onUnmounted(() => {
         @not-assessed="setTeacherEvaluationNotAssessed"
         @update:comment="teacherEvaluationComment = $event"
         @submit="submitTeacherEvaluation"
+        @prepare-step="prepareEvaluationStep"
       />
 
       <ClassroomGroupCollaborationModal
         v-model:form="groupCollabForm"
+        v-model:decision-form="groupingDecisionForm"
         v-model:candidate-key="groupingCandidateKey"
         v-model:grouping-draft="groupingDraft"
         v-model:grouping-locks="groupingLocks"
@@ -2162,23 +2427,33 @@ onUnmounted(() => {
         :loading="groupCollabLoading"
         :session-title="session.title"
         :class-label="classLabel()"
+        :status-message="notice"
+        :draft-saved="groupingDraftSaved"
         :collaboration="groupCollaboration"
         :strategy-options="groupingStrategyOptions"
+        :students="groupingStudentOptions"
+        :decision="groupingDecision"
         :grouping-run="groupingRun"
         :selected-candidate="selectedGroupingCandidate"
+        :plan="groupingPlan"
         :fallback-message="groupingFallbackMessage"
         :collaboration-status-text="groupCollaborationOpenText"
         :groups="groupRows"
         @close="groupCollabOpen = false"
-        @save="saveGroupCollaboration"
+        @save-draft="saveGroupCollaborationDraft"
+        @save-decision="saveGroupingDecision"
+        @generate-candidates="generateGroupingCandidates"
         @close-collaboration="closeGroupCollaboration"
         @select-candidate="selectGroupingCandidate"
         @drag-start="onGroupingDragStart"
         @drag-end="draggedGroupingStudentId = null"
         @drop="onGroupingDrop"
         @set-student-group="setGroupingStudentGroup"
-        @confirm="confirmGroupingPlan"
-        @refresh="loadGroupCollaboration()"
+        @confirm-review="confirmGroupingPlan"
+        @activate="activateGroupingPlan"
+        @notify-students="notifyStudentsOfGroupingPlan"
+        @restart-workflow="restartGroupingWorkflow"
+        @refresh="refreshGroupingWorkflow"
       />
 
       <div v-if="broadcastDialogOpen" class="modal-backdrop" role="presentation" @click.self="closeBroadcastDialog">

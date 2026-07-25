@@ -336,3 +336,22 @@ def run_nightly_model_validation(include_test_data: bool = False):
                 }
             )
     return rows
+
+
+@shared_task(bind=True, name="learning_analytics.run_ai_evaluation_drafting")
+def run_ai_evaluation_drafting_task(self, session_id: int, task_kind: str):
+    """Run one governed AI drafting stage outside the web request.
+
+    Only database identifiers and a non-secret stage name enter the task
+    message. Provider credentials are resolved inside the worker and are never
+    serialized into Celery arguments or result metadata.
+    """
+    from learning_analytics.services.ai_evaluation_drafting import (
+        execute_generation_stage,
+    )
+
+    return execute_generation_stage(
+        session_id=session_id,
+        task_kind=task_kind,
+        task_id=str(self.request.id or ""),
+    )

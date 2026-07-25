@@ -1,0 +1,11 @@
+{
+  "role": "student",
+  "viewport": "tablet-768",
+  "findings": [
+    {
+      "route": "/app/student/classroom/3",
+      "kind": "external-preview-error",
+      "detail": "TypeError: Cannot read properties of undefined (reading 'extend')\n    at http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/apps/common/main/lib/component/ColorPaletteExt.js:47:52\n    at Object.execCb (http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/vendor/requirejs/require.js:1696:33)\n    at Module.check (http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/vendor/requirejs/require.js:883:51)\n    at Module.enable (http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/vendor/requirejs/require.js:1176:22)\n    at Module.init (http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/vendor/requirejs/require.js:788:26)\n    at callGetModule (http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/vendor/requirejs/require.js:1203:63)\n    at Object.completeLoad (http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/vendor/requirejs/require.js:1590:21)\n    at HTMLScriptElement.onScriptLoad (http://192.168.11.165/9.4.0-a898e8f38c38a46feab0013202f14e0f/web-apps/vendor/requirejs/require.js:1717:29)"
+    }
+  ]
+}

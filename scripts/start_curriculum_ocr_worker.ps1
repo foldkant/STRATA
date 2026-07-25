@@ -1,6 +1,6 @@
 param(
-  [ValidateSet("Filesystem", "Redis")][string]$BrokerMode = "Filesystem",
-  [ValidateRange(1, 8)][int]$CpuCount = 2,
+  [ValidateSet("Auto", "Filesystem", "Redis")][string]$BrokerMode = "Auto",
+  [ValidateRange(1, 8)][int]$CpuCount = 1,
   [switch]$ValidateOnly,
   [switch]$AllowUnboundedResources
 )
@@ -12,6 +12,23 @@ $Root = Split-Path -Parent $PSScriptRoot
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 if (!(Test-Path -LiteralPath $Python -PathType Leaf)) {
   throw "Python environment not found: $Python"
+}
+
+if ($BrokerMode -eq "Auto") {
+  Push-Location $Root
+  try {
+    $DetectedOutput = @(& $Python -c "import os; os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); from django.conf import settings; url=settings.CELERY_BROKER_URL.lower(); print('Filesystem' if url.startswith('filesystem://') else 'Redis' if url.startswith(('redis://', 'rediss://')) else 'Unsupported')")
+    if ($LASTEXITCODE -ne 0 -or $DetectedOutput.Count -eq 0) {
+      throw "Could not detect the configured Celery broker mode."
+    }
+    $BrokerMode = [string]$DetectedOutput[-1]
+    if ($BrokerMode -notin @("Filesystem", "Redis")) {
+      throw "Unsupported Celery broker configured; expected filesystem:// or redis://."
+    }
+  }
+  finally {
+    Pop-Location
+  }
 }
 
 $Layout = Get-CurriculumWorkerLayout -ProjectRoot $Root
@@ -53,6 +70,27 @@ if ($ValidateOnly) {
   Write-Host "Curriculum OCR worker configuration is valid; no worker was started."
   Write-Host "Broker mode: $BrokerMode; queue: curriculum_ocr; concurrency: 1; prefetch: 1"
   exit 0
+}
+
+# A worker restart must also recover durable database jobs whose broker message
+# was lost or deliberately parked during maintenance. Reusing the same task id
+# makes duplicate delivery safe. Filesystem transport must publish with the
+# producer-facing directory layout before switching back to the worker role.
+if ($BrokerMode -eq "Filesystem") {
+  Set-CurriculumFilesystemEnvironment -Layout $Layout -Role "producer"
+}
+Push-Location $Root
+try {
+  & $Python manage.py reconcile_curriculum_jobs --redispatch-stale-queued --queued-stale-seconds 300
+  if ($LASTEXITCODE -ne 0) {
+    throw "Queued curriculum-standard tasks could not be recovered."
+  }
+}
+finally {
+  Pop-Location
+}
+if ($BrokerMode -eq "Filesystem") {
+  Set-CurriculumFilesystemEnvironment -Layout $Layout -Role "worker"
 }
 
 $NodeName = "curriculum-ocr@$env:COMPUTERNAME"

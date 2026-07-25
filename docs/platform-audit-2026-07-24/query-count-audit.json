@@ -1,0 +1,158 @@
+{
+  "rows": [
+    {
+      "username": "superadmin",
+      "url": "/api/v1/super-admin/dashboard/",
+      "status": 200,
+      "duration_ms": 1652.6,
+      "query_count": 23,
+      "database_time_ms": 31.0,
+      "response_bytes": 2972,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    },
+    {
+      "username": "superadmin",
+      "url": "/api/v1/super-admin/curriculum-standards/",
+      "status": 200,
+      "duration_ms": 249.0,
+      "query_count": 20,
+      "database_time_ms": 31.0,
+      "response_bytes": 254909,
+      "duplicate_query_groups": 1,
+      "max_duplicate_count": 13
+    },
+    {
+      "username": "superadmin",
+      "url": "/api/v1/super-admin/curriculum-processing-jobs/?scope=all",
+      "status": 200,
+      "duration_ms": 40.0,
+      "query_count": 5,
+      "database_time_ms": 15.0,
+      "response_bytes": 51130,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    },
+    {
+      "username": "xlzx_admin",
+      "url": "/api/v1/school-admin/dashboard/",
+      "status": 200,
+      "duration_ms": 76.5,
+      "query_count": 36,
+      "database_time_ms": 63.0,
+      "response_bytes": 7360,
+      "duplicate_query_groups": 2,
+      "max_duplicate_count": 2
+    },
+    {
+      "username": "xlzx_admin",
+      "url": "/api/v1/school-admin/students/",
+      "status": 200,
+      "duration_ms": 5.2,
+      "query_count": 5,
+      "database_time_ms": 16.0,
+      "response_bytes": 9637,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    },
+    {
+      "username": "xlzx_admin",
+      "url": "/api/v1/school-admin/pretests/",
+      "status": 200,
+      "duration_ms": 4.3,
+      "query_count": 6,
+      "database_time_ms": 0.0,
+      "response_bytes": 582,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    },
+    {
+      "username": "foldkant",
+      "url": "/api/v1/teacher/dashboard/",
+      "status": 200,
+      "duration_ms": 72.3,
+      "query_count": 20,
+      "database_time_ms": 63.0,
+      "response_bytes": 6846,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    },
+    {
+      "username": "foldkant",
+      "url": "/api/v1/teacher/courses/",
+      "status": 200,
+      "duration_ms": 9.6,
+      "query_count": 6,
+      "database_time_ms": 0.0,
+      "response_bytes": 15994,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    },
+    {
+      "username": "foldkant",
+      "url": "/api/v1/teacher/classroom/sessions/",
+      "status": 200,
+      "duration_ms": 32.7,
+      "query_count": 45,
+      "database_time_ms": 0.0,
+      "response_bytes": 70519,
+      "duplicate_query_groups": 2,
+      "max_duplicate_count": 19
+    },
+    {
+      "username": "foldkant",
+      "url": "/api/v1/teacher/evaluations/plans/",
+      "status": 200,
+      "duration_ms": 12.1,
+      "query_count": 11,
+      "database_time_ms": 0.0,
+      "response_bytes": 12716,
+      "duplicate_query_groups": 1,
+      "max_duplicate_count": 2
+    },
+    {
+      "username": "foldkant",
+      "url": "/api/v1/teacher/analytics/stratification/overview/?course_id=16",
+      "status": 200,
+      "duration_ms": 131.2,
+      "query_count": 109,
+      "database_time_ms": 0.0,
+      "response_bytes": 28885,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    },
+    {
+      "username": "a10101",
+      "url": "/api/v1/student/dashboard/",
+      "status": 200,
+      "duration_ms": 47.2,
+      "query_count": 26,
+      "database_time_ms": 16.0,
+      "response_bytes": 8097,
+      "duplicate_query_groups": 3,
+      "max_duplicate_count": 4
+    },
+    {
+      "username": "a10101",
+      "url": "/api/v1/student/courses/",
+      "status": 200,
+      "duration_ms": 10.3,
+      "query_count": 11,
+      "database_time_ms": 0.0,
+      "response_bytes": 2950,
+      "duplicate_query_groups": 2,
+      "max_duplicate_count": 2
+    },
+    {
+      "username": "a10101",
+      "url": "/api/v1/student/classroom/3/",
+      "status": 200,
+      "duration_ms": 109.1,
+      "query_count": 24,
+      "database_time_ms": 63.0,
+      "response_bytes": 6731,
+      "duplicate_query_groups": 0,
+      "max_duplicate_count": 1
+    }
+  ]
+}

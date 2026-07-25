@@ -44,9 +44,9 @@ function metadataLabel(value: string) {
     effective_year: '实施年份',
     issued_by: '发布机构',
     source_url: '权威来源网址',
-    pdf_sha256: 'PDF 校验值',
-    structured_text_sha256: '结构化文本校验值',
-    content_hash: '版本内容校验值'
+    pdf_sha256: 'PDF 文件校验信息',
+    structured_text_sha256: 'AI 辅助读取文本校验信息',
+    content_hash: '版本内容校验信息'
   }[value] || value
 }
 
@@ -84,7 +84,7 @@ onMounted(() => {
       <header class="modal-header">
         <div>
           <h2 id="curriculum-compare-title">课程标准版本比较</h2>
-          <p>{{ standard.title }} · 比较元数据、文件校验值、内容条目和原文位置</p>
+          <p>{{ standard.title }} · 比较基本信息、原文文件、内容条目和原文位置</p>
         </div>
         <button class="icon-button" type="button" aria-label="关闭" data-modal-initial-focus @click="emit('close')">×</button>
       </header>
@@ -119,8 +119,8 @@ onMounted(() => {
             </section>
 
             <section class="curriculum-metadata-changes">
-              <header><strong>基本信息与文件校验变化</strong><small>校验值变化说明文件或结构化内容发生变化，需要结合内容条目逐项复核。</small></header>
-              <p v-if="!result.metadata_changes.length" class="curriculum-compare-empty compact">基本信息和文件校验值没有变化。</p>
+              <header><strong>基本信息与文件变化</strong><small>文件校验信息发生变化时，说明原文文件或 AI 辅助读取文本有变化，需要结合内容条目逐项复核。</small></header>
+              <p v-if="!result.metadata_changes.length" class="curriculum-compare-empty compact">基本信息和文件内容没有变化。</p>
               <table v-else>
                 <thead><tr><th>项目</th><th>原版本</th><th>目标版本</th></tr></thead>
                 <tbody>
@@ -135,7 +135,7 @@ onMounted(() => {
 
             <section class="curriculum-item-changes">
               <header>
-                <div><strong>课程标准内容条目变化</strong><small>按稳定条目代码比较标题、内容校验值和原文位置。</small></div>
+                <div><strong>课程标准内容条目变化</strong><small>按内容条目代码比较标题、文字内容和原文位置。</small></div>
                 <AppSelect v-model="changeType" aria-label="筛选变化类型">
                   <option value="changed">仅显示发生变化</option>
                   <option value="added">新增</option>
@@ -304,7 +304,7 @@ onMounted(() => {
   gap: 12px;
   border-bottom: 1px solid var(--line);
   padding: 12px 14px;
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--primary) 3%, #fff);
 }
 
 .curriculum-metadata-changes > header,
@@ -341,7 +341,7 @@ onMounted(() => {
 }
 
 .curriculum-item-changes > article {
-  border-left: 4px solid #94a3b8;
+  border-left: 4px solid color-mix(in srgb, var(--primary) 38%, var(--line));
   border-bottom: 1px solid var(--line);
 }
 
@@ -371,8 +371,8 @@ onMounted(() => {
 .curriculum-item-changes > article > header span {
   border-radius: 999px;
   padding: 2px 7px;
-  background: #f1f5f9;
-  color: #475569;
+  background: color-mix(in srgb, var(--primary) 5%, #fff);
+  color: var(--muted);
   font-size: 11px;
 }
 

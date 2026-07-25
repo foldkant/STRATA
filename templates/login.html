@@ -4,49 +4,133 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="STRATA数智教学系统登录。">
+  <meta name="description" content="登录STRATA数智教学系统，进入与身份相应的教学、学习或管理空间。">
   <title>登录 - STRATA数智教学系统</title>
-  <link rel="icon" href="{% static 'brand/favicon.ico' %}?v=202607011241" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'brand/favicon-32.png' %}?v=202607011241">
-  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'brand/favicon-180.png' %}?v=202607011241">
-  <link rel="stylesheet" href="{% static 'css/login.css' %}">
+  <link rel="icon" href="{% static 'brand/favicon.ico' %}?v=202607242349" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'brand/favicon-32.png' %}?v=202607242349">
+  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'brand/favicon-180.png' %}?v=202607242349">
+  <link rel="preload" href="{% static 'fonts/lxgw-wenkai-lite-v1.522/LXGWWenKaiLite-Regular.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{% static 'fonts/lxgw-wenkai-lite-v1.522/LXGWWenKaiLite-Medium.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{% static 'css/public-fonts.css' %}?v=202607242112">
+  <link rel="stylesheet" href="{% static 'css/login.css' %}?v=202607250750">
+  <link rel="stylesheet" href="{% static 'css/brand-emblem.css' %}?v=202607251140">
+  <script src="{% static 'js/login.js' %}?v=202607250830" defer></script>
 </head>
 <body>
-  <main class="login-page">
-    <section class="login-panel" aria-labelledby="login-title">
-      <a class="brand" href="/" aria-label="返回首页">
-        <img class="brand-logo" src="{% static 'brand/brand-logo.png' %}?v=202607011241" alt="">
-        <span>STRATA数智教学系统</span>
-      </a>
+  <a class="skip-link" href="#login-form">跳到登录表单</a>
+  <div class="page-reveal" aria-hidden="true"></div>
 
-      <div class="login-heading">
-        <h1 id="login-title">账号登录</h1>
-      </div>
+  <main class="login-page" id="main">
+    <section class="login-shell" aria-labelledby="login-title">
+      <aside class="login-context" aria-labelledby="context-title">
+        <a class="brand" href="/" aria-label="返回STRATA数智教学系统首页">
+          <img class="brand-logo" src="{% static 'brand/brand-logo.png' %}?v=202607251130" alt="" aria-hidden="true">
+          <span>
+            <strong>STRATA</strong>
+            <small>数智教学系统</small>
+          </span>
+        </a>
 
-      {% if form.errors %}
-        <p class="form-error" role="alert">用户名或密码不正确，请重新输入。</p>
-      {% endif %}
-
-      <form method="post" action="{% url 'login' %}" novalidate>
-        {% csrf_token %}
-        {% if next %}
-          <input type="hidden" name="next" value="{{ next }}">
-        {% endif %}
-
-        <div class="field">
-          <label for="id_username">账号</label>
-          <input id="id_username" name="username" type="text" autocomplete="username" required autofocus>
+        <div class="login-stage" aria-hidden="true">
+          {% include "includes/brand_emblem.html" %}
         </div>
 
-        <div class="field">
-          <label for="id_password">密码</label>
-          <input id="id_password" name="password" type="password" autocomplete="current-password" required>
+        <div class="context-message">
+          <span>关注学习过程与学生发展</span>
+          <h2 id="context-title">
+            依据<span class="context-term">课程标准</span>，<span class="context-term">统整</span><br class="context-break"><span class="context-term">教学目标</span>、<wbr><span class="context-term">学习活动</span>与<wbr><span class="context-term">学习评价</span>
+          </h2>
+          <p>支持教师开展教学设计和学习评价，根据学生学习情况改进教学。</p>
         </div>
 
-        <button class="submit-button" type="submit">登录</button>
-      </form>
+        <div class="context-assurances">
+          <article>
+            <strong>促进教学评一致性</strong>
+            <small>教学目标、学习活动和评价任务相互对应</small>
+          </article>
+          <article>
+            <strong>关注学生个体差异</strong>
+            <small>根据学习过程与具体表现提供适切的教学支持</small>
+          </article>
+        </div>
+      </aside>
 
-      <a class="back-link" href="/">返回首页</a>
+      <section class="login-form-panel" aria-labelledby="login-title">
+        <a class="back-link" href="/">返回首页</a>
+
+        <div class="form-frame">
+          <a class="mobile-brand" href="/" aria-label="返回STRATA数智教学系统首页">
+            <img src="{% static 'brand/brand-logo.png' %}?v=202607251130" alt="" aria-hidden="true">
+            <span><strong>STRATA</strong><small>数智教学系统</small></span>
+          </a>
+
+          <header class="login-heading">
+            <span>欢迎回来</span>
+            <h1 id="login-title" aria-label="登录教学平台">
+              <span class="login-title-latin" aria-hidden="true">STRATA</span>
+              <span class="login-title-chinese" aria-hidden="true">登录教学平台</span>
+            </h1>
+            <p>请输入学校为您分配的账号和密码。</p>
+          </header>
+
+          {% if login_error %}
+            <p class="form-error" id="login-error" role="alert">{{ login_error }}</p>
+          {% endif %}
+
+          <form id="login-form" method="post" action="{% url 'login' %}">
+            {% csrf_token %}
+            {% if next %}
+              <input type="hidden" name="next" value="{{ next }}">
+            {% endif %}
+
+            <div class="field">
+              <label for="id_username">登录账号</label>
+              <input
+                id="id_username"
+                name="username"
+                type="text"
+                value="{{ form.username.value|default_if_none:'' }}"
+                autocomplete="username"
+                inputmode="text"
+                required
+                autofocus
+                placeholder="请输入账号"
+                {% if login_error %}aria-invalid="true" aria-describedby="login-error"{% endif %}
+              >
+            </div>
+
+            <div class="field">
+              <label for="id_password">登录密码</label>
+              <div class="password-field">
+                <input
+                  id="id_password"
+                  name="password"
+                  type="password"
+                  autocomplete="current-password"
+                  required
+                  placeholder="请输入密码"
+                  {% if login_error %}aria-invalid="true" aria-describedby="login-error"{% endif %}
+                >
+                <button
+                  class="password-toggle"
+                  type="button"
+                  aria-controls="id_password"
+                  aria-label="显示密码"
+                  data-show-label="显示密码"
+                  data-hide-label="隐藏密码"
+                >显示</button>
+              </div>
+            </div>
+
+            <button class="submit-button" type="submit">
+              <span class="submit-label">登录并进入平台</span>
+              <span class="submit-pending" aria-hidden="true">正在登录</span>
+            </button>
+          </form>
+
+          <p class="login-help">如忘记账号或密码，请联系本校平台管理员。</p>
+        </div>
+      </section>
     </section>
   </main>
 </body>

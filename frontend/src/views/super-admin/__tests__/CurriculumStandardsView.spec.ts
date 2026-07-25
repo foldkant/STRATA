@@ -238,14 +238,14 @@ describe('curriculum standards management layout', () => {
     await flushPromises()
 
     await view.get('#curriculum-detail-tab-audit').trigger('click')
-    expect(view.text()).toContain('创建课程标准主档')
+    expect(view.text()).toContain('创建课程标准档案')
     expect(view.text()).toContain('操作人：superadmin')
-    expect(view.text()).toContain('课程标准主档')
+    expect(view.text()).toContain('课程标准档案')
 
-    const disableButton = view.findAll('button').find((button) => button.text() === '停用主档')
+    const disableButton = view.findAll('button').find((button) => button.text() === '停用档案')
     expect(disableButton).toBeDefined()
     await disableButton!.trigger('click')
-    expect(view.get('[data-test="confirm-dialog"]').text()).toContain('停用课程标准主档')
+    expect(view.get('[data-test="confirm-dialog"]').text()).toContain('停用课程标准档案')
 
     await view.get('[data-test="confirm-dialog"] button').trigger('click')
     expect(view.get('[data-test="confirm-dialog"] button').attributes()).toHaveProperty('disabled')
@@ -254,6 +254,6 @@ describe('curriculum standards management layout', () => {
 
     expect(setStandardActive).toHaveBeenCalledWith(1, false)
     expect(view.text()).toContain('已停用')
-    expect(view.findAll('button').some((button) => button.text() === '启用主档')).toBe(true)
+    expect(view.findAll('button').some((button) => button.text() === '启用档案')).toBe(true)
   })
 })

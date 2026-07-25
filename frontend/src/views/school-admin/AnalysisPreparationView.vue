@@ -127,7 +127,7 @@ function pointStatus(point: AnalysisPreparation['decision_points'][number]) {
 }
 
 function datasetStatus(dataset: AnalysisDataset) {
-  if (dataset.comparison_ready) return { label: '可进入模型比较', tone: 'success' }
+  if (dataset.comparison_ready) return { label: '可进入下一步检查', tone: 'success' }
   return { label: '仅供流程验证', tone: 'warning' }
 }
 
@@ -421,8 +421,8 @@ async function saveDataset() {
     const result = await createAnalysisDataset({ ...datasetForm })
     datasetModalOpen.value = false
     notice.value = result.dataset.comparison_ready
-      ? '数据版本已冻结，可以进入后续模型比较。'
-      : '数据版本已冻结，目前只用于流程验证，页面已列出暂不能比较的原因。'
+      ? '数据版本已冻结，可以进入下一步技术复核。'
+      : '数据版本已冻结，目前只用于流程验证，页面已列出暂不能进入下一步的原因。'
     noticeTone.value = result.dataset.comparison_ready ? 'success' : 'warning'
     await loadData(false)
   } catch (error) {
@@ -437,11 +437,11 @@ onMounted(loadData)
 </script>
 
 <template>
-  <AppShell title="分层分析" eyebrow="学校管理员" :nav-items="navItems" natural-scroll>
+  <AppShell title="学习情况与支持建议" eyebrow="学校教学管理" :nav-items="navItems" shell-variant="school-admin" natural-scroll>
     <section class="analysis-page-heading">
       <div>
-        <h2>分层模型管理</h2>
-        <p>训练、查看和发布本校各学科的隐性分层模型；分层情况仅向学校管理员和对应任课教师开放。</p>
+        <h2>学习情况分析管理</h2>
+        <p>检查学习材料是否充分，更新分析结果并供任课教师确认后续教学安排；学生端不显示内部层级。</p>
       </div>
     </section>
 
@@ -453,11 +453,11 @@ onMounted(loadData)
     />
 
     <div v-if="!loading && data" class="analysis-section-toolbar">
-      <nav class="analysis-section-tabs" aria-label="分层分析页面">
-        <button type="button" :class="{ active: activeSection === 'overview' }" @click="activeSection = 'overview'">运行概览</button>
-        <button type="button" :class="{ active: activeSection === 'data' }" @click="activeSection = 'data'">数据准备</button>
-        <button type="button" :class="{ active: activeSection === 'standards' }" @click="activeSection = 'standards'">层级标准</button>
-        <button type="button" :class="{ active: activeSection === 'research' }" @click="activeSection = 'research'">详细检查</button>
+      <nav class="analysis-section-tabs" aria-label="学习情况分析页面">
+        <button type="button" :class="{ active: activeSection === 'overview' }" @click="activeSection = 'overview'">分析概览</button>
+        <button type="button" :class="{ active: activeSection === 'data' }" @click="activeSection = 'data'">材料准备</button>
+        <button type="button" :class="{ active: activeSection === 'standards' }" @click="activeSection = 'standards'">层级参考</button>
+        <button type="button" :class="{ active: activeSection === 'research' }" @click="activeSection = 'research'">技术复核</button>
       </nav>
       <div v-if="activeSection === 'data'" class="analysis-page-actions">
         <button class="secondary-button" type="button" :disabled="working" @click="refreshOutcomes">
@@ -498,7 +498,7 @@ onMounted(loadData)
         <article>
           <span>已登记学习指标</span>
           <strong>{{ data.summary.feature_definition_count }}</strong>
-          <small>{{ data.summary.model_input_feature_count }} 项可作为首期模型输入</small>
+          <small>{{ data.summary.model_input_feature_count }} 项满足首期分析条件</small>
         </article>
         <article>
           <span>分析时间点</span>
@@ -518,19 +518,19 @@ onMounted(loadData)
         <article>
           <span>冻结数据版本</span>
           <strong>{{ data.summary.dataset_count }}</strong>
-          <small>{{ data.summary.comparison_ready_dataset_count }} 个可进入模型比较</small>
+          <small>{{ data.summary.comparison_ready_dataset_count }} 个可进入下一步检查</small>
         </article>
       </section>
 
       <section v-if="data.blockers.length" class="analysis-blocker-band" aria-label="当前待处理事项">
-        <strong>当前还不能开始正式模型比较</strong>
+        <strong>当前还不能进入下一步分析</strong>
         <div>
           <span v-for="item in data.blockers" :key="item">{{ item }}</span>
         </div>
       </section>
       <section v-else class="analysis-ready-band">
         <strong>准备数据已经齐全</strong>
-        <span>可以进入下一阶段的模型比较，但仍需通过独立测试和人工审核。</span>
+        <span>可以进入下一阶段分析，但仍需通过独立测试和人工审核。</span>
       </section>
 
       <section class="analysis-definition-strip">

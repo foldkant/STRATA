@@ -50,7 +50,6 @@ export type CrossSchoolRow = {
   events_per_student_30d: number
   active_students_7d: number
   active_rate_7d: number
-  layer_coverage: number
   collection_count: number
 }
 
@@ -65,8 +64,6 @@ export type CrossSchoolAnalysis = {
     school_students: SeriesPoint[]
     school_activity: SeriesPoint[]
     school_active_rate: SeriesPoint[]
-    school_layer_coverage: SeriesPoint[]
-    layers: CountSlice[]
     event_types: CountSlice[]
     event_series_30d: SeriesPoint[]
     collection_status: CountSlice[]

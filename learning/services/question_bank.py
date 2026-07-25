@@ -26,6 +26,8 @@ QUESTION_CONTENT_FIELDS = (
     "item_role",
     "layer_scope",
     "comparison_code",
+    "learning_target_version_id",
+    "legacy_unmapped",
 )
 
 
@@ -43,6 +45,13 @@ def question_content_payload(question: QuestionBankItem) -> dict:
         "item_role": question.item_role,
         "layer_scope": question.layer_scope,
         "comparison_code": question.comparison_code,
+        "learning_target_version_id": question.learning_target_version_id,
+        "learning_target_content_hash": (
+            question.learning_target_version.content_hash
+            if question.learning_target_version_id
+            else ""
+        ),
+        "legacy_unmapped": question.legacy_unmapped,
     }
 
 
@@ -111,6 +120,8 @@ def ensure_question_version(
         item_role=question.item_role,
         layer_scope=question.layer_scope,
         comparison_code=question.comparison_code,
+        learning_target_version=question.learning_target_version,
+        legacy_unmapped=question.legacy_unmapped,
     )
     QuestionBankItem.objects.filter(pk=question.pk).update(
         version_no=version_no,
@@ -176,6 +187,8 @@ def create_question_items(
                 item_role=question.item_role,
                 layer_scope=question.layer_scope,
                 comparison_code=question.comparison_code,
+                learning_target_version=question.learning_target_version,
+                legacy_unmapped=question.legacy_unmapped,
             )
             for question in created
         ]

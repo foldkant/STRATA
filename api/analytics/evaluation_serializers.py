@@ -3,10 +3,12 @@ from __future__ import annotations
 from rest_framework import serializers
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import F
 
 from courses.models import Course
 from learning_analytics.evaluation_models import (
     EvaluationPlan,
+    EvaluationPlanVersion,
     EvaluationScope,
     EvaluationReviewStatus,
     EvaluationStandard,
@@ -80,7 +82,10 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
             "learning_goal",
             "learning_goals",
             "evaluation_basis",
+            "learning_activities",
             "learning_tasks",
+            "evaluation_tasks",
+            "assessment_modes",
             "content_scope",
             "thinking_requirements",
             "support_options",
@@ -92,7 +97,10 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
             "title": {"required": True, "allow_blank": False},
             "learning_goals": {"required": False},
             "evaluation_basis": {"required": False},
+            "learning_activities": {"required": False},
             "learning_tasks": {"required": False},
+            "evaluation_tasks": {"required": False},
+            "assessment_modes": {"required": False},
             "content_scope": {"required": False},
             "thinking_requirements": {"required": False},
             "support_options": {"required": False},
@@ -140,6 +148,18 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
                     )
                 }
             )
+        task_rows = attrs.get(
+            "evaluation_tasks",
+            instance.evaluation_tasks if instance else [],
+        )
+        # 方案层的评价方式只是一项派生快照，评价任务是唯一数据来源。
+        # 即使客户端提交了旧值或额外值，也不能在草案中形成第二份事实。
+        derived_modes = []
+        for row in task_rows or []:
+            mode = str(row.get("mode") or "").strip() if isinstance(row, dict) else ""
+            if mode and mode not in derived_modes:
+                derived_modes.append(mode)
+        attrs["assessment_modes"] = derived_modes
         return attrs
 
     def validate_learning_goals(self, value):
@@ -150,6 +170,15 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
 
     def validate_learning_tasks(self, value):
         return _clean_object_list(value, field_name="学习任务")
+
+    def validate_learning_activities(self, value):
+        return _clean_object_list(value, field_name="学习活动")
+
+    def validate_evaluation_tasks(self, value):
+        return _clean_object_list(value, field_name="评价任务")
+
+    def validate_assessment_modes(self, value):
+        return _clean_string_list(value, field_name="评价方式", max_items=6)
 
     def validate_content_scope(self, value):
         return _clean_string_list(value, field_name="评价内容")
@@ -210,6 +239,9 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
         instance.updated_by = request.user
         instance.scope = EvaluationScope.COURSE
         instance.review_status = EvaluationReviewStatus.DRAFT
+        instance.reviewed_by = None
+        instance.reviewed_at = None
+        instance.reviewed_content_hash = ""
         for field_name, value in validated_data.items():
             setattr(instance, field_name, value)
         with transaction.atomic():
@@ -224,14 +256,14 @@ class EvaluationPlanWriteSerializer(StrictModelSerializer):
 
 
 class EvaluationStandardWriteSerializer(StrictModelSerializer):
-    plan = serializers.PrimaryKeyRelatedField(
-        queryset=EvaluationPlan.objects.none()
+    plan_version = serializers.PrimaryKeyRelatedField(
+        queryset=EvaluationPlanVersion.objects.none()
     )
 
     class Meta:
         model = EvaluationStandard
         fields = (
-            "plan",
+            "plan_version",
             "title",
             "evaluation_target",
             "criteria",
@@ -245,18 +277,32 @@ class EvaluationStandardWriteSerializer(StrictModelSerializer):
         super().__init__(*args, **kwargs)
         request = self.context.get("request")
         if request and request.user.is_authenticated:
-            self.fields["plan"].queryset = EvaluationPlan.objects.filter(
+            self.fields["plan_version"].queryset = EvaluationPlanVersion.objects.filter(
                 school=request.user.school,
                 scope=EvaluationScope.COURSE,
                 course__teacher=request.user,
-            ).select_related("subject", "course")
+                review_status=EvaluationReviewStatus.REVIEWED,
+                reviewed_by__isnull=False,
+                reviewed_at__isnull=False,
+                reviewed_content_hash=F("content_hash"),
+            ).select_related("source", "subject", "course")
 
     def validate(self, attrs):
         instance = self.instance
-        plan = attrs.get("plan", instance.plan if instance else None)
-        if instance and instance.versions.exists() and plan.id != instance.plan_id:
+        plan_version = attrs.get(
+            "plan_version", instance.plan_version if instance else None
+        )
+        if plan_version is None:
             raise serializers.ValidationError(
-                {"plan": "评价标准发布过版本后不能更换评价方案，请新建标准。"}
+                {"plan_version": "请选择教师已完成复核的评价方案版本。"}
+            )
+        if (
+            instance
+            and instance.versions.exists()
+            and plan_version.id != instance.plan_version_id
+        ):
+            raise serializers.ValidationError(
+                {"plan_version": "评价标准发布过版本后不能更换评价方案版本，请新建标准。"}
             )
         return attrs
 
@@ -265,12 +311,14 @@ class EvaluationStandardWriteSerializer(StrictModelSerializer):
 
     def create(self, validated_data):
         request = self.context["request"]
-        plan = validated_data["plan"]
+        plan_version = validated_data["plan_version"]
+        plan = plan_version.source
         return EvaluationStandard.objects.create(
             school=request.user.school,
             subject=plan.subject,
             course=plan.course,
             scope=EvaluationScope.COURSE,
+            plan=plan,
             review_status=EvaluationReviewStatus.DRAFT,
             created_by=request.user,
             updated_by=request.user,
@@ -279,12 +327,17 @@ class EvaluationStandardWriteSerializer(StrictModelSerializer):
 
     def update(self, instance, validated_data):
         request = self.context["request"]
-        plan = validated_data.get("plan", instance.plan)
+        plan_version = validated_data.get("plan_version", instance.plan_version)
+        plan = plan_version.source
+        instance.plan = plan
         instance.subject = plan.subject
         instance.course = plan.course
         instance.updated_by = request.user
         instance.scope = EvaluationScope.COURSE
         instance.review_status = EvaluationReviewStatus.DRAFT
+        instance.reviewed_by = None
+        instance.reviewed_at = None
+        instance.reviewed_content_hash = ""
         for field_name, value in validated_data.items():
             setattr(instance, field_name, value)
         instance.save()

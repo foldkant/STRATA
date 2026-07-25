@@ -244,7 +244,7 @@ onMounted(loadWorkspace)
         </header>
 
         <div v-if="activeResources.length" class="student-resource-tabs">
-            <button
+          <button
             v-for="(resource, index) in activeResources"
             :key="`${resourceTitle(resource)}-${index}`"
             type="button"

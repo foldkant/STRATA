@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ApiError, type FieldErrors } from '@/api/client'
+import {
+  getLessonStepEvaluationBinding,
+  type LessonStepEvaluationBinding
+} from '@/api/evaluation'
 import {
   createTeacherLessonStep,
   deleteTeacherLessonStep,
@@ -27,8 +31,8 @@ import AppShell from '@/layouts/AppShell.vue'
 import FilePicker from '@/components/FilePicker.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import ResourcePreview from '@/components/ResourcePreview.vue'
+import '@/styles/lesson-evaluation.css'
 import { teacherNav } from './nav'
-
 const LessonStepEvaluationModal = defineAsyncComponent(() => import('@/components/teacher/LessonStepEvaluationModal.vue'))
 const LearningPageStudio = defineAsyncComponent(() => import('@/components/teacher/LearningPageStudio.vue'))
 
@@ -66,6 +70,10 @@ const selectedPreviewResource = ref<ResourceBinding | null>(null)
 const previewOpen = ref(false)
 const previewMode = ref<PreviewMode>('student')
 const evaluationModalOpen = ref(false)
+const evaluationBinding = ref<LessonStepEvaluationBinding | null>(null)
+const evaluationBindingLoading = ref(false)
+const evaluationBindingNotice = ref('')
+let evaluationBindingRequestId = 0
 const editingQuestionId = ref<string | null>(null)
 const stepModalOpen = ref(false)
 const resourceUploadOpen = ref(false)
@@ -114,8 +122,8 @@ const targetLayerOptions = [
 const targetLayerSpecificOptions = targetLayerOptions.filter((item) => !['all', 'A/B/C'].includes(item.value))
 const questionLayerModeOptions: Array<{ value: QuestionLayerMode; label: string; description: string }> = [
   { value: 'standard', label: '普通同分', description: '所有学生看到同一道题，使用基础分值。' },
-  { value: 'layered_score', label: '同题分层分值', description: '所有层级看到同一道题，A/B/C 可设置不同分值。' },
-  { value: 'layered_target', label: '分层专属题', description: '只给指定层级或相邻层级显示，可按需要设置分值。' }
+  { value: 'layered_score', label: '同题差异化分值', description: '学习内容安排不同的学生看到同一道题，A/B/C 可设置不同分值。' },
+  { value: 'layered_target', label: '差异化专属题', description: '只给指定学习内容安排或相邻安排的学生显示，可按需要设置分值。' }
 ]
 const layerScoreCodes: LayerCode[] = ['A', 'B', 'C']
 const defaultFileExtensions = ['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'pdf', 'zip', 'rar', '7z', 'png', 'jpg', 'jpeg']
@@ -207,6 +215,41 @@ const activeStepIndex = computed(() => lessonSteps.value.findIndex((item) => ite
 const lessonTitle = computed(() => lesson.value?.title || '课时设计')
 const courseTitle = computed(() => course.value?.title || lesson.value?.course_title || '课程')
 const subjectName = computed(() => course.value?.subject?.name || '未设置学科')
+const evaluationGradeOrStage = computed(() => {
+  const grades = [...new Set((course.value?.target_classes || []).map((item) => item.grade).filter(Boolean))]
+  return grades.join('、')
+})
+const evaluationMethodLabels = computed(() => {
+  const row = evaluationBinding.value
+  if (!row) return []
+  return [
+    row.enable_self ? '学生自评' : '',
+    row.enable_peer ? '小组互评' : '',
+    row.enable_teacher ? '教师评价' : ''
+  ].filter(Boolean)
+})
+const evaluationCourseContent = computed(() => {
+  const resourceTitles = (stepForm.resource_items || []).map((item) => (
+    typeof item === 'string' ? item : item.title || item.attachment_name
+  )).filter(Boolean)
+  const questionStems = (stepForm.question_items || []).map((item) => item.stem).filter(Boolean)
+  const sections = [
+    ['课时主题', lesson.value?.title],
+    ['课时内容', lesson.value?.content],
+    ['当前环节', stepForm.title || activeStep.value?.title],
+    ['学生学习提示', stepForm.student_instruction],
+    ['教师教学提示', stepForm.teacher_note],
+    ['学习活动', (stepForm.activity_items || []).join('；')],
+    ['学习资源', resourceTitles.join('；')],
+    ['课堂问题或任务', questionStems.join('；')],
+    ['AI 学习单要求', stepForm.ai_prompt]
+  ]
+  return sections
+    .filter(([, value]) => String(value || '').trim())
+    .map(([label, value]) => `${label}：${String(value).trim()}`)
+    .join('\n')
+    .slice(0, 4000)
+})
 const totalMinutes = computed(() => lessonSteps.value.reduce((total, item) => total + item.estimated_minutes, 0))
 const teachingModeTitle = computed(() => (course.value?.teaching_model === 'pbl' ? '项目式学习课时设计' : '任务驱动课时设计'))
 const currentStepLabel = computed(() => activeStep.value ? '编辑环节' : '新增环节')
@@ -350,8 +393,8 @@ function questionScoreSummary(item: LessonStepQuestion) {
 function questionLayerModeLabel(item: LessonStepQuestion) {
   const mode = getQuestionLayerMode(item)
   if (mode === 'standard') return '普通同分'
-  if (mode === 'layered_score') return '同题分层分值'
-  return '分层专属题'
+  if (mode === 'layered_score') return '同题差异化分值'
+  return '差异化专属题'
 }
 
 function makeQuestionId() {
@@ -435,6 +478,45 @@ function selectStep(row: LessonStepRow) {
   activeStepId.value = row.id
   fillStepForm(row)
 }
+
+async function loadActiveStepEvaluationBinding() {
+  const stepId = activeStepId.value
+  const requestId = ++evaluationBindingRequestId
+  evaluationBinding.value = null
+  evaluationBindingNotice.value = ''
+  if (!stepId) return
+
+  evaluationBindingLoading.value = true
+  try {
+    const context = await getLessonStepEvaluationBinding(stepId)
+    if (requestId !== evaluationBindingRequestId || activeStepId.value !== stepId) return
+    evaluationBinding.value = context.binding
+  } catch (error) {
+    if (requestId !== evaluationBindingRequestId || activeStepId.value !== stepId) return
+    evaluationBindingNotice.value = error instanceof ApiError
+      ? error.message
+      : '当前环节的评价安排加载失败，请重试。'
+  } finally {
+    if (requestId === evaluationBindingRequestId) evaluationBindingLoading.value = false
+  }
+}
+
+function handleEvaluationBindingSaved(row: LessonStepEvaluationBinding | null) {
+  evaluationBinding.value = row
+  evaluationBindingNotice.value = ''
+  evaluationModalOpen.value = false
+  notice.value = row
+    ? `“${activeStep.value?.title || '当前环节'}”已绑定评价方案“${row.standard_title}”（版本 ${row.version_no}）。`
+    : `“${activeStep.value?.title || '当前环节'}”已取消评价方案绑定。`
+}
+
+watch(
+  [activeTool, activeStepId],
+  ([tool]) => {
+    if (tool === 'evaluation') void loadActiveStepEvaluationBinding()
+  },
+  { flush: 'post' }
+)
 
 function openEditStepModal(row = activeStep.value) {
   if (!row) return
@@ -611,10 +693,10 @@ function validateQuestionDraft() {
   }
   if (!targetLayerOptions.some((item) => item.value === questionDraft.target_layer)) errors.push('题目适用层级不正确。')
   if (questionLayerMode.value === 'layered_target' && ['all', 'A/B/C'].includes(questionDraft.target_layer)) {
-    errors.push('分层专属题需选择 A、B、C、A/B 或 B/C。')
+    errors.push('差异化专属题需选择 A、B、C、A/B 或 B/C。')
   }
   if (questionLayerMode.value === 'layered_score' && questionDraft.target_layer !== 'A/B/C') {
-    errors.push('同题分层分值需面向 A/B/C。')
+    errors.push('同题差异化分值需面向 A/B/C。')
   }
   if (questionDraft.use_layer_scores) {
     layerCodesFromTarget(questionDraft.target_layer).forEach((layer) => {
@@ -867,7 +949,7 @@ function resourceTitle(item: ResourceBinding | string) {
 }
 
 function resourceSubTitle(item: ResourceBinding | string) {
-  if (typeof item === 'string') return '旧资源占位，重新从资源库加入后可预览。'
+  if (typeof item === 'string') return '旧版资源记录，重新从资源库加入后可预览。'
   if (item.kind === 'learning_page') return `AI 学习网页 · v${item.revision_no || 1}`
   const ext = item.file_ext ? item.file_ext.toUpperCase() : '资源'
   return item.attachment_name ? `${ext} · ${item.attachment_name}` : ext
@@ -1224,7 +1306,24 @@ onMounted(loadLesson)
         </div>
       </header>
 
-      <div class="lesson-designer-grid refined-lesson-designer-grid">
+      <section v-if="evaluationModalOpen" class="lesson-evaluation-inline-workspace">
+        <LessonStepEvaluationModal
+          embedded
+          :open="evaluationModalOpen"
+          :lesson-step-id="activeStepId"
+          :lesson-step-title="activeStep?.title || '当前环节'"
+          :lesson-title="lessonTitle"
+          :course-id="course?.id || null"
+          :course-title="courseTitle"
+          :grade-or-stage="evaluationGradeOrStage"
+          :course-content="evaluationCourseContent"
+          :return-path="route.fullPath"
+          @close="evaluationModalOpen = false"
+          @saved="handleEvaluationBindingSaved"
+        />
+      </section>
+
+      <div v-else class="lesson-designer-grid refined-lesson-designer-grid">
         <aside class="designer-pane lesson-step-rail">
           <div class="designer-pane-header">
             <div>
@@ -1340,8 +1439,8 @@ onMounted(loadLesson)
                 </header>
                 <div class="layer-status-note">
                   <span>普通题 {{ standardQuestionCount }} 道</span>
-                  <span>分层题 {{ layeredQuestionCount }} 道</span>
-                  <small>只要当前环节设置了 A/B/C、A/B、B/C 或分层分值，学生端会按学生层级自动匹配。</small>
+                  <span>差异化题目 {{ layeredQuestionCount }} 道</span>
+                  <small>当前环节设置 A/B/C、A/B、B/C 或差异化分值后，学生端会按教师确认的学习内容安排自动匹配。</small>
                 </div>
                 <div class="composition-list single-column-list">
                   <article v-for="(question, index) in activeQuestionItems" :key="question.id" class="question-composition-card">
@@ -1368,8 +1467,8 @@ onMounted(loadLesson)
               <section v-if="stepForm.activity_items.length" class="step-content-group step-activity-group">
                 <header>
                   <div>
-                    <strong>活动 / 任务</strong>
-                    <span>旧版本占位内容，后续会升级为正式任务组件。</span>
+                    <strong>旧版活动说明</strong>
+                    <span>这些内容只作为备课参考，不会自动形成学生任务；请按需要改用题目、资源或评价任务。</span>
                   </div>
                   <small>{{ stepForm.activity_items.length }} 项</small>
                 </header>
@@ -1377,7 +1476,7 @@ onMounted(loadLesson)
                   <article v-for="(activity, index) in stepForm.activity_items" :key="`activity-${activity}`">
                     <span>活动 {{ index + 1 }}</span>
                     <strong>{{ activity }}</strong>
-                    <small>后续可配置作答、提交、收题和完成统计。</small>
+                    <small>如需收集作答、作品或完成情况，请在本环节加入对应题目、资源或评价任务。</small>
                     <button type="button" @click="removeActivityItem(index)">移除</button>
                   </article>
                 </div>
@@ -1442,7 +1541,7 @@ onMounted(loadLesson)
               <p>新增课堂题后会加入当前环节。设置题目适用层级或 A/B/C 分值后，课堂投放时自动按学生层级生效。</p>
               <div class="tool-entry-actions">
                 <button class="primary-button" type="button" @click="openCreateQuestionModal">新增课堂题</button>
-                <button class="secondary-button" type="button" @click="openAiQuestionModal">AI 生成分层题</button>
+                <button class="secondary-button" type="button" @click="openAiQuestionModal">AI 生成差异化题目</button>
               </div>
             </section>
 
@@ -1479,17 +1578,54 @@ onMounted(loadLesson)
           </div>
 
           <div v-else-if="activeTool === 'evaluation'" class="evaluation-tool-panel">
-            <section class="tool-entry-panel">
-              <strong>当前环节评价</strong>
-              <p>从本课程已发布的评价标准中选择版本，并确定本环节使用自评、互评或教师评价。</p>
-              <button class="primary-button" type="button" :disabled="!activeStep" @click="evaluationModalOpen = true">选择评价标准</button>
+            <section class="tool-entry-panel evaluation-design-entry" aria-live="polite">
+              <span class="evaluation-entry-kicker">当前环节的评价安排</span>
+
+              <template v-if="evaluationBindingLoading">
+                <strong>正在核对“{{ activeStep?.title || '当前环节' }}”的评价安排</strong>
+                <p>请稍候，系统正在读取当前环节实际绑定的评价版本。</p>
+              </template>
+
+              <template v-else-if="evaluationBindingNotice">
+                <strong>暂时无法确认当前绑定状态</strong>
+                <p class="evaluation-binding-error">{{ evaluationBindingNotice }}</p>
+                <button class="secondary-button" type="button" @click="loadActiveStepEvaluationBinding">重新加载</button>
+              </template>
+
+              <template v-else-if="evaluationBinding">
+                <div class="evaluation-binding-heading">
+                  <div>
+                    <span class="evaluation-binding-status">已绑定到本环节</span>
+                    <strong>{{ evaluationBinding.standard_title }}</strong>
+                  </div>
+                  <span v-if="evaluationBinding.locked" class="evaluation-binding-lock">课堂已使用 · 版本已固定</span>
+                </div>
+                <dl class="evaluation-binding-summary">
+                  <div><dt>评价版本</dt><dd>版本 {{ evaluationBinding.version_no }}</dd></div>
+                  <div><dt>评价指标</dt><dd>{{ evaluationBinding.criteria.length }} 项</dd></div>
+                  <div><dt>评价方式</dt><dd>{{ evaluationMethodLabels.join('、') }}</dd></div>
+                </dl>
+                <p>该版本已用于组织本环节的课堂评价；只有经过材料审查的个人评价材料，才可作为学习情况更新的候选依据。</p>
+                <div class="tool-entry-actions">
+                  <button class="primary-button" type="button" @click="evaluationModalOpen = true">查看或调整评价安排</button>
+                  <RouterLink class="secondary-button" to="/teacher/evaluations">查看评价方案库</RouterLink>
+                </div>
+              </template>
+
+              <template v-else>
+                <strong>“{{ activeStep?.title || '当前环节' }}”尚未绑定评价方案</strong>
+                <p>结合本环节的学习目标、活动和学生将形成的材料，选择已有评价版本，或让 AI 根据课程标准与实际课程内容辅助起草。</p>
+                <div class="tool-entry-actions">
+                  <button class="primary-button" type="button" :disabled="!activeStep" @click="evaluationModalOpen = true">新建或选择评价</button>
+                  <RouterLink class="secondary-button" to="/teacher/evaluations">查看评价方案库</RouterLink>
+                </div>
+              </template>
             </section>
-            <section class="evaluation-tool-note">
-              <strong>课堂使用规则</strong>
-              <span>评价标准由教师在评价标准库统一维护，课时环节只选择已发布版本。</span>
-              <span>自评：学生在课堂中对自己进行 5 星评价。</span>
-              <span>互评：需要课堂开启小组合作后，学生评价同组成员。</span>
-              <span>教师评价：教师在课堂评价情况中填写。</span>
+            <section class="evaluation-tool-note evaluation-use-map" aria-labelledby="lesson-evaluation-use-title" data-test="lesson-evaluation-use-map">
+              <strong id="lesson-evaluation-use-title">评价材料的使用边界</strong>
+              <article><span>课堂反馈</span><p>用于自评、互评、教师评价和后续教学反馈；课堂端只负责开启和实施。</p></article>
+              <article><span>学习情况更新</span><p>只有目标对应、个人归属和评分质量符合要求的材料，才可成为目标级学习情况的候选依据。</p></article>
+              <article><span>后续教学安排</span><p>普通课时星级和小组结果不会直接决定学生后续的学习内容、支持方式或分组；教师需查看具体材料。</p></article>
             </section>
           </div>
 
@@ -1613,7 +1749,7 @@ onMounted(loadLesson)
         <section class="entity-modal compact-modal lesson-ai-question-modal" role="dialog" aria-modal="true" aria-labelledby="ai-question-title">
           <header class="modal-header">
             <div>
-              <h2 id="ai-question-title">AI 生成分层题</h2>
+              <h2 id="ai-question-title">AI 生成差异化题目</h2>
               <p>老师只填写一个出题方向，系统同时生成 A、B、C、A/B、B/C 五组题目草稿。题目不会自动发布。</p>
             </div>
             <button class="icon-button" type="button" aria-label="关闭" @click="aiQuestionModalOpen = false">×</button>
@@ -1753,7 +1889,7 @@ onMounted(loadLesson)
               </label>
               <section class="layer-mode-panel span-2">
                 <header>
-                  <strong>分层设置</strong>
+                  <strong>差异化安排</strong>
                   <span>{{ questionLayerModeHelp }}</span>
                 </header>
                 <div class="layer-mode-options">
@@ -1924,14 +2060,6 @@ onMounted(loadLesson)
         </section>
       </div>
     </Teleport>
-
-    <LessonStepEvaluationModal
-      :open="evaluationModalOpen"
-      :lesson-step-id="activeStepId"
-      :lesson-step-title="activeStep?.title || '当前环节'"
-      :course-title="courseTitle"
-      @close="evaluationModalOpen = false"
-    />
 
     <Teleport to="body">
       <div v-if="previewOpen" class="lesson-preview-backdrop" role="presentation" @click.self="previewOpen = false">

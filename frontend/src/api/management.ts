@@ -183,6 +183,7 @@ export type PretestPaperRow = {
   question_count: number
   submission_count: number
   published_at: string | null
+  published_version: { id: number; version_no: number; content_hash: string } | null
   created_at: string
   updated_at: string
   questions?: PretestQuestionRow[]
@@ -201,12 +202,22 @@ export type PretestQuestionRow = {
   id: number
   paper: number
   stem: string
-  question_type: 'single' | 'multiple' | 'scale' | 'text'
+  question_type: 'single' | 'multiple' | 'scale' | 'text' | 'performance' | 'operation' | 'short_project'
   question_type_label: string
   options: PretestOption[]
   answer: string[]
   score: number
   dimension: string
+  learning_target_code: string
+  learning_target_name: string
+  learning_target_version: {
+    id: number
+    version_no: number
+    content_hash: string
+    logical_key: string
+  } | null
+  legacy_unmapped: boolean
+  material_requirements: string[]
   sort_order: number
   is_required: boolean
   created_at: string
@@ -220,8 +231,112 @@ export type PretestQuestionPayload = {
   answer: string | string[]
   score: number | string
   dimension: string
+  learning_target_code: string
+  learning_target_name: string
+  learning_target_version_id?: number | string | null
+  material_requirements: string[]
   sort_order: number | string
   is_required: boolean
+}
+
+export type DiagnosticLearningTargetVersionOption = {
+  id: number
+  logical_key: string
+  version_no: number
+  code: string
+  title: string
+  description: string
+  content_hash: string
+  alignment_status: 'complete'
+  subject: { id: number; name: string; code: string }
+  course: { id: number; title: string }
+  plan_version_id: number
+  published_at: string
+}
+
+export type DiagnosticAdministrationAssignmentRow = {
+  id: number
+  class_group: { id: number; name: string; grade: string }
+  cohort_role: 'experiment' | 'control' | 'unassigned'
+  cohort_role_label: string
+  opportunity_status: 'offered' | 'not_offered'
+  opportunity_status_label: string
+  submission_count?: number
+  scoring_completed_count?: number
+  created_at: string
+}
+
+export type DiagnosticAdministrationRow = {
+  id: number
+  subject: { id: number; name: string; code: string }
+  course: { id: number; title: string } | null
+  paper_version: {
+    id: number
+    source_id: number
+    title: string
+    kind: string
+    kind_label: string
+    version_no: number
+    content_hash: string
+    published_at: string
+  }
+  purpose: 'entry_diagnostic' | 'research_pretest' | 'research_posttest' | 'pilot'
+  purpose_label: string
+  batch_code: string
+  title: string
+  open_at: string | null
+  close_at: string | null
+  status: 'draft' | 'published' | 'closed'
+  status_label: string
+  availability_status: 'draft' | 'scheduled' | 'open' | 'closed'
+  content_hash: string
+  assignment_count: number
+  submission_count: number
+  created_at: string
+  updated_at: string
+  published_at: string | null
+  closed_at: string | null
+  assignments?: DiagnosticAdministrationAssignmentRow[] | null
+}
+
+export type DiagnosticAdministrationPayload = {
+  subject_id: number
+  course_id?: number | null
+  paper_version_id: number
+  purpose: DiagnosticAdministrationRow['purpose']
+  batch_code: string
+  title: string
+  open_at?: string | null
+  close_at?: string | null
+  expected_updated_at?: string
+}
+
+export type PretestMaterialReviewRow = {
+  material_id: string
+  student: { id: number; username: string; display_name: string }
+  class_group: { id: number; name: string; grade: string } | null
+  subject: { id: number; name: string }
+  learning_target_code: string
+  material_type: string
+  material_type_label: string
+  material_status: string
+  material_status_label: string
+  question_id: string
+  question_type: string
+  answer: unknown
+  process_explanation: unknown
+  attachments: Array<{
+    attachment_id: string
+    original_name: string
+    file_ext: string
+    content_type: string
+    file_size: number
+    file_sha256: string
+    download_url: string
+  }>
+  material_requirements: string[]
+  score_max: number | null
+  recorded_at: string
 }
 
 export type StudentRow = {
@@ -253,7 +368,6 @@ export type StudentPayload = {
   password?: string
   student_no: string
   class_group: number | string
-  current_layer: string
   current_group_no: number | string | null
   score: number | string
   is_active: boolean
@@ -559,6 +673,12 @@ export function getPretestPapers(params: PageQuery = {}) {
   return apiRequest<PageResult<PretestPaperRow>>(`/api/v1/school-admin/pretests/${queryString(params)}`)
 }
 
+export function getDiagnosticLearningTargetVersions(params: PageQuery = {}) {
+  return apiRequest<DiagnosticLearningTargetVersionOption[]>(
+    `/api/v1/school-admin/pretests/learning-target-versions/${queryString(params)}`
+  )
+}
+
 export function getPretestPaper(id: number) {
   return apiRequest<PretestPaperRow>(`/api/v1/school-admin/pretests/${id}/`)
 }
@@ -589,6 +709,51 @@ export function archivePretestPaper(id: number) {
   return apiRequest<PretestPaperRow>(`/api/v1/school-admin/pretests/${id}/archive/`, { method: 'POST' })
 }
 
+export function getDiagnosticAdministrations(params: PageQuery = {}) {
+  return apiRequest<DiagnosticAdministrationRow[]>(`/api/v1/school-admin/diagnostic-administrations/${queryString(params)}`)
+}
+
+export function getDiagnosticAdministration(id: number) {
+  return apiRequest<DiagnosticAdministrationRow>(`/api/v1/school-admin/diagnostic-administrations/${id}/`)
+}
+
+export function createDiagnosticAdministration(payload: DiagnosticAdministrationPayload) {
+  return apiRequest<DiagnosticAdministrationRow>('/api/v1/school-admin/diagnostic-administrations/', {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
+export function updateDiagnosticAdministration(id: number, payload: DiagnosticAdministrationPayload) {
+  return apiRequest<DiagnosticAdministrationRow>(`/api/v1/school-admin/diagnostic-administrations/${id}/`, {
+    method: 'PATCH',
+    body: toJsonBody(payload)
+  })
+}
+
+export function replaceDiagnosticAdministrationAssignments(
+  id: number,
+  assignments: Array<{
+    class_group_id: number
+    cohort_role: DiagnosticAdministrationAssignmentRow['cohort_role']
+    opportunity_status: DiagnosticAdministrationAssignmentRow['opportunity_status']
+  }>,
+  expectedUpdatedAt?: string
+) {
+  return apiRequest<DiagnosticAdministrationRow>(`/api/v1/school-admin/diagnostic-administrations/${id}/assignments/`, {
+    method: 'PUT',
+    body: toJsonBody({ assignments, expected_updated_at: expectedUpdatedAt })
+  })
+}
+
+export function publishDiagnosticAdministration(id: number) {
+  return apiRequest<DiagnosticAdministrationRow>(`/api/v1/school-admin/diagnostic-administrations/${id}/publish/`, { method: 'POST' })
+}
+
+export function closeDiagnosticAdministration(id: number) {
+  return apiRequest<DiagnosticAdministrationRow>(`/api/v1/school-admin/diagnostic-administrations/${id}/close/`, { method: 'POST' })
+}
+
 export function getPretestQuestions(paperId: number) {
   return apiRequest<PretestQuestionRow[]>(`/api/v1/school-admin/pretests/${paperId}/questions/`)
 }
@@ -610,6 +775,23 @@ export function updatePretestQuestion(paperId: number, questionId: number, paylo
 export function deletePretestQuestion(paperId: number, questionId: number) {
   return apiRequest<Record<string, never>>(`/api/v1/school-admin/pretests/${paperId}/questions/${questionId}/`, {
     method: 'DELETE'
+  })
+}
+
+export function getPendingPretestMaterials(params: { subject?: number | string; class_group?: number | string } = {}) {
+  return apiRequest<PretestMaterialReviewRow[]>(`/api/v1/school-admin/pretest-materials/pending/${queryString(params)}`)
+}
+
+export function reviewPretestMaterial(materialId: string, payload: { score: number; score_max?: number; feedback: string }) {
+  return apiRequest<{
+    score_material_id: string
+    target_state_id: number
+    evidence_status: string
+    evidence_coverage: number
+    estimate: number | null
+  }>(`/api/v1/school-admin/pretest-materials/${materialId}/review/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
   })
 }
 

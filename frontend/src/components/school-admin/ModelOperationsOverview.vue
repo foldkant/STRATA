@@ -8,6 +8,7 @@ import type {
   ModelValidation
 } from '@/api/analytics'
 import EChartPanel from '@/components/EChartPanel.vue'
+import { governanceChartTextStyle } from '@/utils/chartOptions'
 
 const props = defineProps<{
   datasets: AnalysisDataset[]
@@ -114,15 +115,15 @@ const headlineEvaluation = computed<ModelEvaluation | null>(() => {
 })
 
 const trainingState = computed(() => {
-  if (!selectedDataset.value) return { label: '尚无可训练数据', tone: 'warning' }
+  if (!selectedDataset.value) return { label: '尚无可分析材料', tone: 'warning' }
   const run = calibrationRun.value
-  if (!run) return { label: '等待训练', tone: 'info' }
-  if (run.release?.status === 'active') return { label: '当前模型已发布', tone: 'success' }
-  if (run.release?.status === 'superseded') return { label: '该训练版本已被替代', tone: 'info' }
-  if (run.release?.status === 'rolled_back') return { label: '该训练版本已停用', tone: 'info' }
-  if (run.status === 'candidate') return { label: '本次候选待发布', tone: 'warning' }
-  if (run.status === 'blocked') return { label: '训练检查未通过', tone: 'warning' }
-  if (run.status === 'failed') return { label: '训练失败', tone: 'error' }
+  if (!run) return { label: '等待分析', tone: 'info' }
+  if (run.release?.status === 'active') return { label: '当前分析版本已启用', tone: 'success' }
+  if (run.release?.status === 'superseded') return { label: '该分析版本已被替代', tone: 'info' }
+  if (run.release?.status === 'rolled_back') return { label: '该分析版本已停用', tone: 'info' }
+  if (run.status === 'candidate') return { label: '本次结果待确认启用', tone: 'warning' }
+  if (run.status === 'blocked') return { label: '材料检查未通过', tone: 'warning' }
+  if (run.status === 'failed') return { label: '分析任务未完成', tone: 'error' }
   return { label: run.status_label, tone: 'info' }
 })
 
@@ -184,7 +185,8 @@ function chartToolbox(name: string) {
 const errorChart = computed<EChartsCoreOption>(() => {
   const rows = selectedEvaluations.value.filter((item) => item.status === 'ready')
   return {
-    color: ['#1f6feb', '#0f766e'],
+    color: ['#183d37', '#52786f'],
+    textStyle: governanceChartTextStyle,
     toolbox: chartToolbox(`STRATA-${selectedValidation.value}-误差比较`),
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     legend: { top: 4, left: 0, data: ['MAE', 'RMSE'] },
@@ -194,7 +196,7 @@ const errorChart = computed<EChartsCoreOption>(() => {
       data: rows.map((item) => modelLabel(item.model_key)),
       axisTick: { show: false }
     },
-    yAxis: { type: 'value', name: '误差', splitLine: { lineStyle: { color: '#e2e8f0' } } },
+    yAxis: { type: 'value', name: '误差', splitLine: { lineStyle: { color: '#e1e7e2' } } },
     series: [
       { name: 'MAE', type: 'bar', data: rows.map((item) => item.mae), barMaxWidth: 32 },
       { name: 'RMSE', type: 'bar', data: rows.map((item) => item.rmse), barMaxWidth: 32 }
@@ -205,7 +207,8 @@ const errorChart = computed<EChartsCoreOption>(() => {
 const fitChart = computed<EChartsCoreOption>(() => {
   const rows = selectedEvaluations.value.filter((item) => item.status === 'ready')
   return {
-    color: ['#7c3aed', '#b45309'],
+    color: ['#b54a3a', '#9a6328'],
+    textStyle: governanceChartTextStyle,
     toolbox: chartToolbox(`STRATA-${selectedValidation.value}-拟合与覆盖率`),
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     legend: { top: 4, left: 0, data: ['R²', '预测覆盖率'] },
@@ -220,7 +223,7 @@ const fitChart = computed<EChartsCoreOption>(() => {
       name: '比例',
       max: 1,
       axisLabel: { formatter: '{value}' },
-      splitLine: { lineStyle: { color: '#e2e8f0' } }
+      splitLine: { lineStyle: { color: '#e1e7e2' } }
     },
     series: [
       { name: 'R²', type: 'bar', data: rows.map((item) => item.r_squared), barMaxWidth: 32 },
@@ -234,7 +237,8 @@ const residualChart = computed<EChartsCoreOption>(() => {
     ? headlineEvaluation.value?.metrics.residual_histogram as Array<{ label: string; count: number }>
     : []
   return {
-    color: ['#2563eb'],
+    color: ['#183d37'],
+    textStyle: governanceChartTextStyle,
     toolbox: chartToolbox(`STRATA-${bestModelKey.value || '模型'}-残差分布`),
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
     grid: { top: 40, right: 18, bottom: 58, left: 44, containLabel: true },
@@ -249,24 +253,24 @@ const residualChart = computed<EChartsCoreOption>(() => {
       },
       axisTick: { show: false }
     },
-    yAxis: { type: 'value', name: '记录数', splitLine: { lineStyle: { color: '#e2e8f0' } } },
+    yAxis: { type: 'value', name: '记录数', splitLine: { lineStyle: { color: '#e1e7e2' } } },
     series: [{ type: 'bar', data: histogram.map((item) => item.count), barMaxWidth: 42 }]
   }
 })
 </script>
 
 <template>
-  <section class="model-operations" aria-label="模型运行概览">
+  <section class="model-operations" aria-label="学习情况分析概览">
     <section class="model-run-band">
       <div class="model-run-copy">
         <span>当前操作</span>
-        <h2>训练分层模型</h2>
-        <p>选择已经准备好的学习数据，一次完成模型比较、班级调整和教师建议生成。</p>
+        <h2>更新学习情况分析</h2>
+        <p>选择已经核对的学习材料，生成供任课教师复核的学习内容与支持建议。</p>
       </div>
       <label class="model-dataset-select">
-        <span>训练数据</span>
+        <span>学习材料版本</span>
         <AppSelect v-model.number="selectedDatasetId" :disabled="working || !readyDatasets.length">
-          <option v-if="!readyDatasets.length" :value="0">暂无可训练数据</option>
+          <option v-if="!readyDatasets.length" :value="0">暂无可分析材料</option>
           <option v-for="dataset in readyDatasets" :key="dataset.id" :value="dataset.id">
             {{ dataset.subject.name }} · {{ dataset.outcome.label }} · {{ dataset.row_count }} 条
           </option>
@@ -274,31 +278,31 @@ const residualChart = computed<EChartsCoreOption>(() => {
       </label>
       <div class="model-run-action">
         <span class="analysis-status" :class="`analysis-tone-${trainingState.tone}`">{{ trainingState.label }}</span>
-        <small>{{ calibrationRun ? `最近完成：${formatDateTime(calibrationRun.finished_at || calibrationRun.created_at)}` : '尚无训练记录' }}</small>
+        <small>{{ calibrationRun ? `最近完成：${formatDateTime(calibrationRun.finished_at || calibrationRun.created_at)}` : '尚无分析记录' }}</small>
         <button
           class="primary-button"
           type="button"
           :disabled="working || !selectedDataset"
           @click="selectedDataset && emit('train', selectedDataset)"
-        >{{ working ? '正在训练' : calibrationRun ? '重新检查训练' : '开始模型训练' }}</button>
+        >{{ working ? '正在分析' : calibrationRun ? '重新检查并分析' : '开始分析' }}</button>
       </div>
     </section>
 
-    <section class="model-current-strip" aria-label="当前模型状态">
+    <section class="model-current-strip" aria-label="当前分析状态">
       <article>
-        <span>当前使用模型</span>
-        <strong>{{ modelLabel(activeCalibrationRun?.model_key || '-') }}</strong>
-        <small>{{ activeComparisonRun ? `${activeComparisonRun.comparison_version} · ${formatDateTime(activeComparisonRun.finished_at || activeComparisonRun.created_at)}` : '尚未发布' }}</small>
+        <span>当前分析状态</span>
+        <strong>{{ activeCalibrationRun ? trainingState.label : '尚未分析' }}</strong>
+        <small>{{ activeComparisonRun ? `完成于 ${formatDateTime(activeComparisonRun.finished_at || activeComparisonRun.created_at)}` : '尚未发布' }}</small>
       </article>
       <article>
-        <span>当前训练记录</span>
+        <span>本次使用材料</span>
         <strong>{{ activeComparisonRun?.row_count || 0 }}</strong>
-        <small>冻结、已观察记录</small>
+        <small>已冻结且结果可用</small>
       </article>
       <article>
-        <span>班级参数</span>
+        <span>适用班级</span>
         <strong>{{ Object.keys(activeCalibrationRun?.class_parameters || {}).length }}</strong>
-        <small>按班级修正</small>
+        <small>已按班级检查</small>
       </article>
       <article>
         <span>学习支持</span>
@@ -306,7 +310,7 @@ const residualChart = computed<EChartsCoreOption>(() => {
         <small>发布后教师可见</small>
       </article>
       <article>
-        <span>当前发布版本</span>
+        <span>当前分析版本</span>
         <strong>{{ activeRelease ? `v${activeRelease.release_version}` : '-' }}</strong>
         <small>{{ activeRelease ? `${activeRelease.status_label} · ${formatDateTime(activeRelease.released_at)}` : '尚未发布' }}</small>
       </article>
@@ -315,7 +319,7 @@ const residualChart = computed<EChartsCoreOption>(() => {
     <section v-if="calibrationRun" class="model-release-band" :class="`model-release-band-${trainingState.tone}`">
       <div>
         <strong>{{ calibrationRun.subject.name }} · {{ trainingState.label }}</strong>
-        <span>训练完成：{{ formatDateTime(calibrationRun.finished_at || calibrationRun.created_at) }}<template v-if="calibrationRun.release"> · 发布时间：{{ formatDateTime(calibrationRun.release.released_at) }}</template></span>
+        <span>分析完成：{{ formatDateTime(calibrationRun.finished_at || calibrationRun.created_at) }}<template v-if="calibrationRun.release"> · 启用时间：{{ formatDateTime(calibrationRun.release.released_at) }}</template></span>
       </div>
       <div class="model-release-band-actions">
         <button
@@ -324,18 +328,19 @@ const residualChart = computed<EChartsCoreOption>(() => {
           type="button"
           :disabled="working"
           @click="emit('publish', calibrationRun.id)"
-        >发布给教师</button>
+        >启用并交教师复核</button>
         <button
           v-if="calibrationRun.release"
           class="secondary-button compact-action"
           type="button"
           :disabled="working"
           @click="emit('verify', calibrationRun.release.id)"
-        >校验模型包</button>
+        >校验分析版本</button>
       </div>
     </section>
 
-    <template v-if="comparisonRun">
+    <details v-if="comparisonRun" class="analysis-technical-details">
+      <summary>查看技术检验指标（供数据人员复核）</summary>
       <section class="model-metric-heading">
         <div>
           <h2>模型指标</h2>
@@ -386,8 +391,8 @@ const residualChart = computed<EChartsCoreOption>(() => {
           </table>
         </div>
       </section>
-    </template>
+    </details>
 
-    <p v-else class="panel analysis-empty-copy">请选择可训练数据并开始训练，完成后这里会显示模型指标和图表。</p>
+    <p v-else class="panel analysis-empty-copy">请选择可分析的学习材料并开始分析，完成后这里会显示可供教师复核的结果。</p>
   </section>
 </template>

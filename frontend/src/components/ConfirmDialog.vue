@@ -1,5 +1,7 @@
 <script setup lang="ts">
-defineProps<{
+import { vModalFocus } from '@/directives/modalFocus'
+
+const props = defineProps<{
   open: boolean
   title: string
   message: string
@@ -12,16 +14,21 @@ const emit = defineEmits<{
   close: []
   confirm: []
 }>()
+
+function requestClose() {
+  if (!props.loading) emit('close')
+}
+
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-      <section class="confirm-dialog" role="dialog" aria-modal="true" :aria-labelledby="`${title}-title`">
+    <div v-if="open" class="modal-backdrop" role="presentation" @click.self="requestClose">
+      <section v-modal-focus="requestClose" class="confirm-dialog" role="dialog" aria-modal="true" :aria-labelledby="`${title}-title`">
         <h2 :id="`${title}-title`">{{ title }}</h2>
         <p>{{ message }}</p>
         <div class="modal-actions">
-          <button class="secondary-button" type="button" :disabled="loading" @click="emit('close')">取消</button>
+          <button class="secondary-button" type="button" data-modal-initial-focus :disabled="loading" @click="requestClose">取消</button>
           <button
             class="primary-button"
             :class="{ danger: danger }"

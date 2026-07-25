@@ -60,6 +60,11 @@ const confirmTitle = ref('')
 const confirmMessage = ref('')
 const confirmDanger = ref(false)
 const confirmAction = ref<null | (() => Promise<void>)>(null)
+
+function formatDate(value?: string | null) {
+  return value ? new Date(value).toLocaleString('zh-CN') : '-'
+}
+
 const {
   selectedIds,
   selectedIdSet,
@@ -276,7 +281,7 @@ function removeRow(row: AccountRow) {
     notice.value = '请先停用账号，再执行删除。'
     return
   }
-  ask('删除账号', `确认删除 ${row.username}？已有业务数据时系统会拒绝物理删除。`, async () => {
+  ask('删除账号', `确认删除 ${row.username}？如果该账号已有管理记录，系统将保留停用状态。`, async () => {
     await deleteSchoolAdmin(row.id)
     notice.value = '学校管理员已删除。'
   }, true)
@@ -330,7 +335,7 @@ function download(url: string) {
 }
 
 function showImportNotice() {
-  notice.value = '批量导入上传弹窗下一步接入；当前可先通过调试页验证模板。'
+  notice.value = '批量导入功能尚未开放，请暂时使用“新增管理员”逐项登记。'
 }
 
 onMounted(async () => {
@@ -340,13 +345,13 @@ onMounted(async () => {
 </script>
 
 <template>
-  <AppShell title="学校管理员" eyebrow="超级管理员" :nav-items="navItems">
+  <AppShell title="学校管理员" eyebrow="超级管理员" :nav-items="navItems" shell-variant="super-admin">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <ManagementPage
       v-model:query="query"
       v-model:status="status"
       title="学校管理员"
-      description="维护各校本地管理账号。管理员账号使用强密码规则，删除前必须先停用。"
+      description="为每所学校设置负责本校账号、班级和教学安排的管理员。停用账号后，已有管理记录仍会保留。"
       :total="total"
       :page="page"
       :page-size="pageSize"
@@ -411,7 +416,7 @@ onMounted(async () => {
           <td>{{ row.phone || '-' }}</td>
           <td><StatusBadge :active="row.is_active" /></td>
           <td>{{ row.is_first_login ? '是' : '否' }}</td>
-          <td>{{ row.last_login || '-' }}</td>
+          <td>{{ formatDate(row.last_login) }}</td>
           <td class="row-actions">
             <button type="button" @click="editRow(row)">编辑</button>
             <button type="button" @click="toggleActive(row)">{{ row.is_active ? '停用' : '启用' }}</button>

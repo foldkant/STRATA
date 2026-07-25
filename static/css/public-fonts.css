@@ -1,0 +1,15 @@
+@font-face {
+  font-family: "STRATA WenKai";
+  src: url("../fonts/lxgw-wenkai-lite-v1.522/LXGWWenKaiLite-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "STRATA WenKai";
+  src: url("../fonts/lxgw-wenkai-lite-v1.522/LXGWWenKaiLite-Medium.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}

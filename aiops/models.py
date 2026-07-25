@@ -81,4 +81,50 @@ class TrainingJob(models.Model):
     class Meta:
         ordering = ["-created_at"]
 
-# Create your models here.
+
+class QuestionDraftGenerationJob(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "等待生成"
+        RUNNING = "running", "正在生成"
+        SUCCEEDED = "succeeded", "草稿已生成"
+        FAILED = "failed", "生成未完成"
+        CANCELLED = "cancelled", "已取消"
+
+    teacher = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="question_draft_generation_jobs",
+        limit_choices_to={"role": "teacher"},
+    )
+    subject = models.ForeignKey(
+        "courses.Subject",
+        on_delete=models.PROTECT,
+        related_name="question_draft_generation_jobs",
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.QUEUED,
+        db_index=True,
+    )
+    request_payload = models.JSONField(default=dict)
+    result_payload = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    error_fields = models.JSONField(default=dict, blank=True)
+    provider = models.CharField(max_length=32, blank=True)
+    model = models.CharField(max_length=64, blank=True)
+    celery_task_id = models.CharField(max_length=128, blank=True)
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(
+                fields=["teacher", "status", "created_at"],
+                name="aiops_qd_teach_s_4d35d1_idx",
+            )
+        ]

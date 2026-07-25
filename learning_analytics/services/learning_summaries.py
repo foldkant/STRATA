@@ -9,7 +9,10 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from courses.models import ClassroomEvaluationSubmission, Course, CourseClass
-from learning.models import StratificationDecision
+from learning.models import (
+    LearningSupportRecommendation,
+    StratificationDecision,
+)
 from learning.services.bands import resolve_student_band
 from learning_analytics.models import (
     AssessmentResultFact,
@@ -23,8 +26,8 @@ from school.models import StudentProfile
 
 
 SUMMARY_GENERATOR_VERSION = "summary-v1"
-RULE_VERSION = "transparent-rules-v2"
-SUPPORT_POLICY_VERSION = "support-policy-v2"
+RULE_VERSION = "transparent-rules-v3"
+SUPPORT_POLICY_VERSION = "support-policy-v3"
 MIN_REQUIRED_OPPORTUNITIES = 5
 MIN_GRADED_ITEMS = 3
 
@@ -116,6 +119,13 @@ def _evaluation_metrics(*, student, course, window_start, window_end):
             "rated_item_count": len(values),
             "not_assessed_item_count": not_assessed_count,
             "average_stars": round(sum(values) / len(values), 2) if values else None,
+            # Classroom stars remain useful descriptive feedback. They have not
+            # been calibrated as a comparable learning-target measure, so they
+            # must never be promoted to a target estimate or weighted into an
+            # automated support/content decision.
+            "aggregation_role": "descriptive_only",
+            "calibration_status": "not_calibrated",
+            "eligible_for_learning_target_estimate": False,
         }
     return result, source_rows
 
@@ -378,9 +388,6 @@ def _support_priority(metrics: dict):
     completion = metrics.get("completion_rate")
     score = metrics.get("score", {}).get("score_rate")
     resource = metrics.get("resources", {}).get("opened_rate")
-    teacher_stars = metrics.get("evaluation", {}).get("teacher", {}).get(
-        "average_stars"
-    )
     weighted = []
     if score is not None:
         weighted.append((float(score), 0.45))
@@ -388,8 +395,6 @@ def _support_priority(metrics: dict):
         weighted.append((float(completion), 0.30))
     if resource is not None:
         weighted.append((float(resource), 0.15))
-    if teacher_stars is not None:
-        weighted.append((float(teacher_stars) / 5, 0.10))
     if not weighted:
         return "", None
     index = sum(value * weight for value, weight in weighted) / sum(
@@ -404,12 +409,27 @@ def _support_priority(metrics: dict):
 
 @transaction.atomic
 def build_transparent_suggestion(*, summary: StudentLearningSummary):
+    decision_rule_version = f"{RULE_VERSION}:{summary.source_hash}"
     existing = StratificationDecision.objects.filter(
         student=summary.student,
         course=summary.course,
         window_end=summary.window_end,
-        rule_version=RULE_VERSION,
+        rule_version=decision_rule_version,
     ).first()
+    # A rule revision creates a new auditable suggestion. Superseded pending
+    # transparent-rule candidates must not remain actionable beside it.
+    StratificationDecision.objects.filter(
+        student=summary.student,
+        course=summary.course,
+        window_end=summary.window_end,
+        decision_kind=StratificationDecision.DecisionKind.SUPPORT,
+        status=StratificationDecision.Status.PENDING,
+        rule_version__startswith="transparent-rules-",
+    ).exclude(rule_version=decision_rule_version).update(
+        status=StratificationDecision.Status.DEFERRED,
+        review_note="支持建议规则已更新，本记录仅保留用于审计。",
+        reviewed_at=timezone.now(),
+    )
     model_candidate = (
         StratificationDecision.objects.filter(
             student=summary.student,
@@ -488,13 +508,57 @@ def build_transparent_suggestion(*, summary: StudentLearningSummary):
         for field, value in defaults.items():
             setattr(existing, field, value)
         existing.save()
-        return existing
-    return StratificationDecision.objects.create(
-        student=summary.student,
-        course=summary.course,
-        rule_version=RULE_VERSION,
-        **defaults,
+        decision = existing
+    else:
+        decision = StratificationDecision.objects.create(
+            student=summary.student,
+            course=summary.course,
+            rule_version=decision_rule_version,
+            **defaults,
+        )
+    recommendation_priority = {
+        StratificationDecision.SupportPriority.ROUTINE: LearningSupportRecommendation.Priority.ROUTINE,
+        StratificationDecision.SupportPriority.WATCH: LearningSupportRecommendation.Priority.WATCH,
+        StratificationDecision.SupportPriority.HIGH: LearningSupportRecommendation.Priority.PRIORITY,
+    }.get(support_priority, LearningSupportRecommendation.Priority.ROUTINE)
+    valid_until = summary.window_end + timedelta(days=30)
+    recommendation_source_hash = _canonical_hash(
+        {
+            "summary_id": summary.id,
+            "summary_source_hash": summary.source_hash,
+            "policy_version": SUPPORT_POLICY_VERSION,
+            "support_priority": recommendation_priority,
+            "suggestion": support_suggestion,
+            "rationale": reasons,
+            "valid_until": valid_until,
+        }
     )
+    LearningSupportRecommendation.objects.get_or_create(
+        source_decision=decision,
+        defaults={
+            "target_state": None,
+            "source_summary": summary,
+            "source_summary_hash": summary.source_hash,
+            "source_hash": recommendation_source_hash,
+            "evidence_snapshot": {
+                "schema_version": 1,
+                "summary_id": summary.id,
+                "summary_source_hash": summary.source_hash,
+                "data_status": summary.data_status,
+                "metrics": summary.metrics,
+                "missing_data": summary.missing_data,
+                "aggregation_role": "descriptive_support_only",
+                "learning_target_estimate": None,
+                "valid_from": summary.window_end.isoformat(),
+                "valid_until": valid_until.isoformat(),
+            },
+            "priority": recommendation_priority,
+            "suggestion": support_suggestion,
+            "rationale": reasons,
+            "status": LearningSupportRecommendation.Status.PENDING,
+        },
+    )
+    return decision
 
 
 def rebuild_school_learning_summaries(*, school, as_of: date | None = None):

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ast
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from django.urls import reverse
 from rest_framework.decorators import api_view, permission_classes
@@ -11,11 +14,14 @@ from api.responses import fail, ok
 from courses.models import Course, LessonStep
 from learning_analytics.evaluation_models import (
     EvaluationPlan,
+    EvaluationPlanVersion,
     EvaluationScope,
     EvaluationReviewStatus,
     EvaluationStandard,
     EvaluationStandardVersion,
     EvaluationDimension,
+    EvaluationMode,
+    EvidenceOwnership,
     EvaluationTrialConclusion,
     EvaluationTrialRecord,
     EvaluationTrialStatus,
@@ -23,9 +29,13 @@ from learning_analytics.evaluation_models import (
     LessonStepEvaluationBinding,
 )
 from learning_analytics.services.evaluation import (
+    EvaluationPublishConflict,
     THINKING_REQUIREMENT_VALUES,
+    confirm_plan_review,
+    confirm_standard_review,
     publish_plan,
     publish_standard,
+    standard_curriculum_alignment,
 )
 
 from .evaluation_serializers import (
@@ -34,6 +44,70 @@ from .evaluation_serializers import (
     EvaluationTrialRecordWriteSerializer,
 )
 from ops.xlsx import build_workbook, workbook_response
+
+
+def _course_school_stage(course: Course) -> str:
+    """Infer the curriculum school stage from the classes using the course.
+
+    Course historically had no school-stage field.  Evaluation authoring still needs
+    a deterministic stage so teachers are not asked to choose a curriculum standard
+    that the lesson context already makes clear.
+    """
+
+    grades = {
+        str(link.class_group.grade or "").strip().lower()
+        for link in course.course_classes.all()
+        if link.class_group_id
+    }
+    joined = " ".join(grades)
+    high_school_markers = (
+        "高中",
+        "高一",
+        "高二",
+        "高三",
+        "高1",
+        "高2",
+        "高3",
+        "grade 10",
+        "grade 11",
+        "grade 12",
+        "10年级",
+        "11年级",
+        "12年级",
+        "k10",
+        "k11",
+        "k12",
+    )
+    compulsory_markers = (
+        "小学",
+        "初中",
+        "一年级",
+        "二年级",
+        "三年级",
+        "四年级",
+        "五年级",
+        "六年级",
+        "七年级",
+        "八年级",
+        "九年级",
+        "初一",
+        "初二",
+        "初三",
+        "grade 1",
+        "grade 2",
+        "grade 3",
+        "grade 4",
+        "grade 5",
+        "grade 6",
+        "grade 7",
+        "grade 8",
+        "grade 9",
+    )
+    if any(marker in joined for marker in high_school_markers):
+        return "k10_k12"
+    if any(marker in joined for marker in compulsory_markers):
+        return "k1_k9"
+    return ""
 
 
 def _validation_errors(exc: DjangoValidationError) -> dict[str, list[str]]:
@@ -54,9 +128,63 @@ def _version_summary(version) -> dict | None:
         "content_hash": version.content_hash,
         "review_status": version.review_status,
         "review_status_label": version.get_review_status_display(),
+        "reviewed_by": (
+            version.reviewed_by.display_name or version.reviewed_by.username
+            if version.reviewed_by_id
+            else None
+        ),
+        "reviewed_at": version.reviewed_at,
+        "reviewed_content_hash": version.reviewed_content_hash,
         "published_by": version.published_by.display_name
         or version.published_by.username,
         "published_at": version.published_at,
+    }
+
+
+def _plan_version_option(version) -> dict | None:
+    if version is None:
+        return None
+    return {
+        "id": version.id,
+        "source_plan_id": version.source_id,
+        "title": version.title,
+        "version_no": version.version_no,
+        "content_hash": version.content_hash,
+        "review_status": version.review_status,
+        "subject": {
+            "id": version.subject_id,
+            "name": version.subject.name,
+        },
+        "course": (
+            {"id": version.course_id, "title": version.course.title}
+            if version.course_id
+            else None
+        ),
+        "learning_goals": version.learning_goals,
+        "evaluation_tasks": version.evaluation_tasks,
+    }
+
+
+def _review_audit(source) -> dict:
+    reviewed = bool(
+        source.review_status == EvaluationReviewStatus.REVIEWED
+        and source.reviewed_by_id
+        and source.reviewed_at
+        and source.reviewed_content_hash
+    )
+    return {
+        "reviewed_by": (
+            source.reviewed_by.display_name or source.reviewed_by.username
+            if source.reviewed_by_id
+            else None
+        ),
+        "reviewed_at": source.reviewed_at,
+        "reviewed_content_hash": source.reviewed_content_hash,
+        "allowed_actions": {
+            "edit": True,
+            "review": source.review_status == EvaluationReviewStatus.DRAFT,
+            "publish": reviewed,
+        },
     }
 
 
@@ -93,7 +221,7 @@ def _curriculum_reference_row(reference) -> dict:
 def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
     latest = next(iter(getattr(plan, "prefetched_versions", [])), None)
     if latest is None and detail:
-        latest = plan.versions.select_related("published_by").order_by("-version_no").first()
+        latest = plan.versions.select_related("published_by", "reviewed_by").order_by("-version_no").first()
     row = {
         "id": plan.id,
         "title": plan.title,
@@ -106,15 +234,21 @@ def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
         "scope": plan.scope,
         "scope_label": plan.get_scope_display(),
         "content_version": plan.content_version,
+        "learning_goal": plan.learning_goal,
+        "assessment_modes": plan.assessment_modes,
         "goal_count": len(plan.learning_goals),
         "basis_count": len(plan.evaluation_basis),
-        "task_count": len(plan.learning_tasks),
+        # 新评价链以“评价任务”为可评价单元；learning_tasks 仅为历史兼容字段。
+        "task_count": len(plan.evaluation_tasks),
+        "activity_count": len(plan.learning_activities),
+        "evaluation_task_count": len(plan.evaluation_tasks),
         "curriculum_reference_count": len(plan.curriculum_references.all()),
         "review_status": plan.review_status,
         "review_status_label": plan.get_review_status_display(),
         "latest_version": _version_summary(latest),
         "created_at": plan.created_at,
         "updated_at": plan.updated_at,
+        **_review_audit(plan),
     }
     if detail:
         row.update(
@@ -123,7 +257,10 @@ def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
                 "learning_goal": plan.learning_goal,
                 "learning_goals": plan.learning_goals,
                 "evaluation_basis": plan.evaluation_basis,
+                "learning_activities": plan.learning_activities,
                 "learning_tasks": plan.learning_tasks,
+                "evaluation_tasks": plan.evaluation_tasks,
+                "assessment_modes": plan.assessment_modes,
                 "content_scope": plan.content_scope,
                 "thinking_requirements": plan.thinking_requirements,
                 "support_options": plan.support_options,
@@ -135,7 +272,7 @@ def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
                 ],
                 "versions": [
                     _version_summary(version)
-                    for version in plan.versions.select_related("published_by").order_by("-version_no")
+                    for version in plan.versions.select_related("published_by", "reviewed_by").order_by("-version_no")
                 ],
             }
         )
@@ -145,7 +282,7 @@ def _plan_row(plan: EvaluationPlan, *, detail: bool = False) -> dict:
 def _standard_row(standard: EvaluationStandard, *, detail: bool = False) -> dict:
     latest = next(iter(getattr(standard, "prefetched_versions", [])), None)
     if latest is None and detail:
-        latest = standard.versions.select_related("published_by").order_by("-version_no").first()
+        latest = standard.versions.select_related("published_by", "reviewed_by").order_by("-version_no").first()
     row = {
         "id": standard.id,
         "title": standard.title,
@@ -153,6 +290,7 @@ def _standard_row(standard: EvaluationStandard, *, detail: bool = False) -> dict
             "id": standard.plan_id,
             "title": standard.plan.title,
         },
+        "plan_version": _plan_version_option(standard.plan_version),
         "subject": {"id": standard.subject_id, "name": standard.subject.name},
         "course": (
             {"id": standard.course_id, "title": standard.course.title}
@@ -163,11 +301,13 @@ def _standard_row(standard: EvaluationStandard, *, detail: bool = False) -> dict
         "scope_label": standard.get_scope_display(),
         "evaluation_target": standard.evaluation_target,
         "criterion_count": len(standard.criteria),
+        "ai_assisted": standard.ai_draft_sessions.exists(),
         "review_status": standard.review_status,
         "review_status_label": standard.get_review_status_display(),
         "latest_version": _version_summary(latest),
         "created_at": standard.created_at,
         "updated_at": standard.updated_at,
+        **_review_audit(standard),
     }
     if detail:
         row.update(
@@ -175,7 +315,7 @@ def _standard_row(standard: EvaluationStandard, *, detail: bool = False) -> dict
                 "criteria": standard.criteria,
                 "versions": [
                     _version_summary(version)
-                    for version in standard.versions.select_related("published_by").order_by("-version_no")
+                    for version in standard.versions.select_related("published_by", "reviewed_by").order_by("-version_no")
                 ],
             }
         )
@@ -213,6 +353,13 @@ def _trial_row(record: EvaluationTrialRecord) -> dict:
         "summary": record.summary,
         "issues": record.issues,
         "action_items": record.action_items,
+        "completion_hash": record.completion_hash,
+        "completed_by": (
+            record.completed_by.display_name or record.completed_by.username
+            if record.completed_by_id
+            else None
+        ),
+        "completed_at": record.completed_at,
         "created_by": record.created_by.display_name or record.created_by.username,
         "updated_by": record.updated_by.display_name or record.updated_by.username,
         "created_at": record.created_at,
@@ -224,7 +371,7 @@ def _teacher_plans(request):
     return EvaluationPlan.objects.filter(
         school=request.user.school,
         course__teacher=request.user,
-    ).select_related("subject", "course").prefetch_related(
+    ).select_related("subject", "course", "reviewed_by").prefetch_related(
         "curriculum_references__node__version__source"
     )
 
@@ -233,8 +380,23 @@ def _request_bool(value) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _criterion_version_row(criterion) -> dict:
-    return {
+def _criterion_version_row(criterion, curriculum_alignment: dict | None = None) -> dict:
+    level_descriptions = []
+    for description in criterion.level_descriptions:
+        cleaned = description
+        if isinstance(description, str) and description.lstrip().startswith("{"):
+            try:
+                legacy_value = ast.literal_eval(description)
+            except (SyntaxError, ValueError):
+                legacy_value = None
+            if isinstance(legacy_value, dict):
+                cleaned = str(
+                    legacy_value.get("description")
+                    or legacy_value.get("text")
+                    or description
+                ).strip()
+        level_descriptions.append(cleaned)
+    row = {
         "id": criterion.id,
         "code": criterion.code,
         "title": criterion.title,
@@ -242,16 +404,25 @@ def _criterion_version_row(criterion) -> dict:
         "dimension_label": criterion.get_dimension_display(),
         "evaluation_target": criterion.evaluation_target,
         "evaluation_sources": criterion.evaluation_sources,
+        "learning_goal_codes": criterion.learning_goal_codes,
+        "evaluation_task_codes": criterion.evaluation_task_codes,
+        "evidence_ownership": criterion.evidence_ownership,
+        "evidence_ownership_label": criterion.get_evidence_ownership_display(),
+        "material_types": criterion.material_types,
         "expected_performance": criterion.expected_performance,
-        "level_descriptions": criterion.level_descriptions,
+        "level_descriptions": level_descriptions,
         "skip_condition": criterion.skip_condition,
         "support_options": criterion.support_options,
         "common_problems": criterion.common_problems,
         "follow_up_suggestion": criterion.follow_up_suggestion,
     }
+    if curriculum_alignment is not None:
+        row["curriculum_alignment"] = curriculum_alignment
+    return row
 
 
 def _standard_version_option(version) -> dict:
+    curriculum_alignment = standard_curriculum_alignment(version)
     return {
         "id": version.id,
         "title": version.title,
@@ -260,7 +431,10 @@ def _standard_version_option(version) -> dict:
         "review_status_label": version.get_review_status_display(),
         "criterion_count": len(version.criteria.all()),
         "criteria": [
-            _criterion_version_row(criterion)
+            _criterion_version_row(
+                criterion,
+                curriculum_alignment.get(criterion.code, {}),
+            )
             for criterion in version.criteria.all()
         ],
     }
@@ -270,6 +444,7 @@ def _binding_row(binding):
     if binding is None:
         return None
     version = binding.standard_version
+    curriculum_alignment = standard_curriculum_alignment(version)
     return {
         "id": binding.id,
         "lesson_step": binding.lesson_step_id,
@@ -280,10 +455,55 @@ def _binding_row(binding):
         "enable_peer": binding.enable_peer,
         "enable_teacher": binding.enable_teacher,
         "locked": binding.classroom_uses.exists(),
-        "criteria": [_criterion_version_row(item) for item in version.criteria.all()],
+        "criteria": [
+            _criterion_version_row(
+                item,
+                curriculum_alignment.get(item.code, {}),
+            )
+            for item in version.criteria.all()
+        ],
         "created_at": binding.created_at,
         "updated_at": binding.updated_at,
     }
+
+
+def _lesson_step_evaluation_use_boundaries():
+    """Describe what a lesson-step evaluation binding is allowed to do today.
+
+    These are product and evidence-governance boundaries, not a claim that a
+    published standard has already passed measurement or research validation.
+    Keeping the contract on the server prevents a future client from presenting
+    an ordinary classroom rating as an automatic mastery or training signal.
+    """
+    return [
+        {
+            "code": "classroom_feedback",
+            "label": "课堂反馈",
+            "status": "available",
+            "status_label": "绑定后可用",
+            "description": "用于学生自评、小组互评、教师评价和后续教学反馈。",
+        },
+        {
+            "code": "learning_state_update",
+            "label": "学习情况更新",
+            "status": "requires_review",
+            "status_label": "需另行审查",
+            "description": (
+                "只有目标对应、个人归属、材料质量、评价标准与评分质量均符合要求的材料，"
+                "才可作为目标级学习情况的候选依据。"
+            ),
+        },
+        {
+            "code": "research_and_model",
+            "label": "后续教学安排",
+            "status": "not_direct",
+            "status_label": "需教师再确认",
+            "description": (
+                "课堂星级和小组结果不会直接决定学生后续学习内容、支持方式或分组；"
+                "教师需查看具体材料，研究数据则须由冻结方案另行构建。"
+            ),
+        },
+    ]
 
 
 @api_view(["GET", "PATCH", "DELETE"])
@@ -297,14 +517,30 @@ def lesson_step_binding(request, step_id: int):
     if step is None:
         return fail("课时环节不存在或无权访问。", status=404)
     binding = (
-        LessonStepEvaluationBinding.objects.select_related("standard_version")
-        .prefetch_related("standard_version__criteria")
+        LessonStepEvaluationBinding.objects.select_related(
+            "standard_version__plan_version"
+        )
+        .prefetch_related(
+            "standard_version__criteria",
+            "standard_version__plan_version__curriculum_references__node",
+        )
         .filter(lesson_step=step)
         .first()
     )
     versions = (
-        EvaluationStandardVersion.objects.filter(course=step.lesson.course)
-        .prefetch_related("criteria")
+        EvaluationStandardVersion.objects.filter(
+            course=step.lesson.course,
+            review_status=EvaluationReviewStatus.REVIEWED,
+            reviewed_by__isnull=False,
+            reviewed_at__isnull=False,
+            reviewed_content_hash=F("content_hash"),
+            plan_version__review_status=EvaluationReviewStatus.REVIEWED,
+            plan_version__reviewed_by__isnull=False,
+            plan_version__reviewed_at__isnull=False,
+            plan_version__reviewed_content_hash=F("plan_version__content_hash"),
+        )
+        .select_related("plan_version")
+        .prefetch_related("criteria", "plan_version__curriculum_references__node")
         .order_by("title", "-version_no")
     )
     if request.method == "GET":
@@ -312,6 +548,7 @@ def lesson_step_binding(request, step_id: int):
             {
                 "binding": _binding_row(binding),
                 "standards": [_standard_version_option(version) for version in versions],
+                "use_boundaries": _lesson_step_evaluation_use_boundaries(),
             }
         )
     if request.method == "DELETE":
@@ -359,8 +596,11 @@ def lesson_step_binding(request, step_id: int):
             },
         )
     binding = LessonStepEvaluationBinding.objects.select_related(
-        "standard_version"
-    ).prefetch_related("standard_version__criteria").get(pk=binding.pk)
+        "standard_version__plan_version"
+    ).prefetch_related(
+        "standard_version__criteria",
+        "standard_version__plan_version__curriculum_references__node",
+    ).get(pk=binding.pk)
     return ok(_binding_row(binding), "当前环节评价标准已保存。")
 
 
@@ -368,7 +608,15 @@ def _teacher_standards(request):
     return EvaluationStandard.objects.filter(
         school=request.user.school,
         course__teacher=request.user,
-    ).select_related("subject", "course", "plan")
+    ).select_related(
+        "subject",
+        "course",
+        "plan",
+        "plan_version__source",
+        "plan_version__subject",
+        "plan_version__course",
+        "reviewed_by",
+    ).prefetch_related("ai_draft_sessions")
 
 
 def _teacher_trial_records(request):
@@ -380,6 +628,7 @@ def _teacher_trial_records(request):
         "standard_version__course",
         "created_by",
         "updated_by",
+        "completed_by",
     )
 
 
@@ -392,14 +641,35 @@ def evaluation_options(request):
             teacher=request.user,
         )
         .select_related("subject")
+        .prefetch_related("course_classes__class_group")
         .order_by("subject__name", "title")
     )
     standard_versions = list(
         EvaluationStandardVersion.objects.filter(
             school=request.user.school,
             course__teacher=request.user,
+            review_status=EvaluationReviewStatus.REVIEWED,
+            reviewed_by__isnull=False,
+            reviewed_at__isnull=False,
+            reviewed_content_hash=F("content_hash"),
+            plan_version__review_status=EvaluationReviewStatus.REVIEWED,
+            plan_version__reviewed_by__isnull=False,
+            plan_version__reviewed_at__isnull=False,
+            plan_version__reviewed_content_hash=F("plan_version__content_hash"),
         )
         .select_related("subject", "course", "source")
+        .order_by("subject__name", "title", "-version_no")
+    )
+    plan_versions = list(
+        EvaluationPlanVersion.objects.filter(
+            school=request.user.school,
+            course__teacher=request.user,
+            review_status=EvaluationReviewStatus.REVIEWED,
+            reviewed_by__isnull=False,
+            reviewed_at__isnull=False,
+            reviewed_content_hash=F("content_hash"),
+        )
+        .select_related("source", "subject", "course")
         .order_by("subject__name", "title", "-version_no")
     )
     return ok(
@@ -411,7 +681,9 @@ def evaluation_options(request):
                     "subject": {
                         "id": course.subject_id,
                         "name": course.subject.name,
+                        "code": course.subject.code,
                     },
+                    "school_stage": _course_school_stage(course),
                     "is_active": course.is_active,
                 }
                 for course in courses
@@ -431,6 +703,25 @@ def evaluation_options(request):
             "dimensions": [
                 {"value": value, "label": label}
                 for value, label in EvaluationDimension.choices
+            ],
+            "assessment_modes": [
+                {"value": value, "label": label}
+                for value, label in EvaluationMode.choices
+            ],
+            "evidence_ownerships": [
+                {"value": value, "label": label}
+                for value, label in EvidenceOwnership.choices
+            ],
+            "material_types": [
+                {"value": value, "label": label}
+                for value, label in (
+                    ("answer", "作答记录"),
+                    ("artifact", "作品材料"),
+                    ("operation", "操作记录"),
+                    ("oral_defense", "答辩记录"),
+                    ("observation", "观察记录"),
+                    ("score", "评分记录"),
+                )
             ],
             "thinking_requirements": [
                 {"value": value, "label": label}
@@ -461,6 +752,10 @@ def evaluation_options(request):
                 }
                 for version in standard_versions
             ],
+            "plan_versions": [
+                _plan_version_option(version)
+                for version in plan_versions
+            ],
             "trial_types": [
                 {"value": value, "label": label}
                 for value, label in EvaluationTrialType.choices
@@ -481,7 +776,10 @@ def evaluation_options(request):
 @permission_classes([IsTeacher])
 def plans(request):
     if request.method == "GET":
-        rows = _teacher_plans(request).prefetch_related("versions__published_by")
+        rows = _teacher_plans(request).prefetch_related(
+            "versions__published_by",
+            "versions__reviewed_by",
+        )
         for row in rows:
             row.prefetched_versions = sorted(
                 row.versions.all(),
@@ -522,6 +820,20 @@ def plan_detail(request, pk: int):
 
 @api_view(["POST"])
 @permission_classes([IsTeacher])
+def review_confirm_plan_view(request, pk: int):
+    plan = _teacher_plans(request).filter(pk=pk).first()
+    if plan is None:
+        return fail("评价方案不存在或无权访问。", status=404)
+    try:
+        plan = confirm_plan_review(plan=plan, reviewed_by=request.user)
+    except DjangoValidationError as exc:
+        return fail("评价方案复核未完成。", errors=_validation_errors(exc), status=400)
+    plan = _teacher_plans(request).get(pk=plan.pk)
+    return ok(_plan_row(plan, detail=True), "教师已完成评价方案复核。")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
 def publish_plan_view(request, pk: int):
     plan = _teacher_plans(request).filter(pk=pk).first()
     if plan is None:
@@ -530,6 +842,8 @@ def publish_plan_view(request, pk: int):
         result = publish_plan(plan, published_by=request.user)
     except DjangoValidationError as exc:
         return fail("评价方案发布前检查未通过。", errors=_validation_errors(exc), status=400)
+    except EvaluationPublishConflict as exc:
+        return fail(str(exc), status=409)
     message = "已发布新的评价方案版本。" if result.created else "当前内容与已发布版本一致。"
     plan.refresh_from_db()
     return ok(_plan_row(plan, detail=True), message)
@@ -539,7 +853,10 @@ def publish_plan_view(request, pk: int):
 @permission_classes([IsTeacher])
 def standards(request):
     if request.method == "GET":
-        rows = _teacher_standards(request).prefetch_related("versions__published_by")
+        rows = _teacher_standards(request).prefetch_related(
+            "versions__published_by",
+            "versions__reviewed_by",
+        )
         for row in rows:
             row.prefetched_versions = sorted(
                 row.versions.all(),
@@ -580,6 +897,23 @@ def standard_detail(request, pk: int):
 
 @api_view(["POST"])
 @permission_classes([IsTeacher])
+def review_confirm_standard_view(request, pk: int):
+    standard = _teacher_standards(request).filter(pk=pk).first()
+    if standard is None:
+        return fail("评价标准不存在或无权访问。", status=404)
+    try:
+        standard = confirm_standard_review(
+            standard=standard,
+            reviewed_by=request.user,
+        )
+    except DjangoValidationError as exc:
+        return fail("评价标准复核未完成。", errors=_validation_errors(exc), status=400)
+    standard = _teacher_standards(request).get(pk=standard.pk)
+    return ok(_standard_row(standard, detail=True), "教师已完成评价标准复核。")
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
 def publish_standard_view(request, pk: int):
     standard = _teacher_standards(request).filter(pk=pk).first()
     if standard is None:
@@ -588,6 +922,8 @@ def publish_standard_view(request, pk: int):
         result = publish_standard(standard, published_by=request.user)
     except DjangoValidationError as exc:
         return fail("评价标准发布前检查未通过。", errors=_validation_errors(exc), status=400)
+    except EvaluationPublishConflict as exc:
+        return fail(str(exc), status=409)
     message = "已发布新的评价标准版本。" if result.created else "当前内容与已发布版本一致。"
     standard.refresh_from_db()
     return ok(_standard_row(standard, detail=True), message)

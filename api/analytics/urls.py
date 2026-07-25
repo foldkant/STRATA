@@ -1,6 +1,12 @@
 from django.urls import path
 
-from . import evaluation_views, event_views, school_admin_views, teacher_views
+from . import (
+    evaluation_ai_views,
+    evaluation_views,
+    event_views,
+    school_admin_views,
+    teacher_views,
+)
 
 app_name = "analytics_api"
 urlpatterns = [
@@ -55,6 +61,11 @@ urlpatterns = [
         name="teacher_mastery_snapshots",
     ),
     path(
+        "teacher/analytics/learning-target-states/",
+        teacher_views.learning_target_states,
+        name="teacher_learning_target_states",
+    ),
+    path(
         "teacher/analytics/mastery/refresh/",
         teacher_views.refresh_mastery_snapshots,
         name="teacher_mastery_snapshots_refresh",
@@ -65,6 +76,51 @@ urlpatterns = [
         name="teacher_evaluation_options",
     ),
     path(
+        "teacher/evaluations/ai-drafts/options/",
+        evaluation_ai_views.ai_draft_options,
+        name="teacher_evaluation_ai_draft_options",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/",
+        evaluation_ai_views.ai_drafts,
+        name="teacher_evaluation_ai_drafts",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/<int:pk>/",
+        evaluation_ai_views.ai_draft_detail,
+        name="teacher_evaluation_ai_draft_detail",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/<int:pk>/retrieve/",
+        evaluation_ai_views.ai_draft_retrieve,
+        name="teacher_evaluation_ai_draft_retrieve",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/<int:pk>/suggest-modes/",
+        evaluation_ai_views.ai_draft_suggest_modes,
+        name="teacher_evaluation_ai_draft_suggest_modes",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/<int:pk>/confirm-modes/",
+        evaluation_ai_views.ai_draft_confirm_modes,
+        name="teacher_evaluation_ai_draft_confirm_modes",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/<int:pk>/generate/",
+        evaluation_ai_views.ai_draft_generate,
+        name="teacher_evaluation_ai_draft_generate",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/<int:pk>/save-plan-draft/",
+        evaluation_ai_views.ai_draft_save_plan,
+        name="teacher_evaluation_ai_draft_save_plan",
+    ),
+    path(
+        "teacher/evaluations/ai-drafts/<int:pk>/cancel/",
+        evaluation_ai_views.ai_draft_cancel,
+        name="teacher_evaluation_ai_draft_cancel",
+    ),
+    path(
         "teacher/evaluations/plans/",
         evaluation_views.plans,
         name="teacher_evaluation_plans",
@@ -73,6 +129,11 @@ urlpatterns = [
         "teacher/evaluations/plans/<int:pk>/",
         evaluation_views.plan_detail,
         name="teacher_evaluation_plan_detail",
+    ),
+    path(
+        "teacher/evaluations/plans/<int:pk>/review-confirm/",
+        evaluation_views.review_confirm_plan_view,
+        name="teacher_evaluation_plan_review_confirm",
     ),
     path(
         "teacher/evaluations/plans/<int:pk>/publish/",
@@ -88,6 +149,11 @@ urlpatterns = [
         "teacher/evaluations/standards/<int:pk>/",
         evaluation_views.standard_detail,
         name="teacher_evaluation_standard_detail",
+    ),
+    path(
+        "teacher/evaluations/standards/<int:pk>/review-confirm/",
+        evaluation_views.review_confirm_standard_view,
+        name="teacher_evaluation_standard_review_confirm",
     ),
     path(
         "teacher/evaluations/standards/<int:pk>/publish/",

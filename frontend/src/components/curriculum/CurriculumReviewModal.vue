@@ -46,7 +46,7 @@ async function review(approved: boolean) {
 
       <div class="modal-body curriculum-review-body">
         <aside>
-          请对照 PDF 原文检查结构化文本、课程标准内容条目、原文页码和文件校验信息。复核通过不代表直接发布，仍需单独确认发布。
+          请对照 PDF 原文检查 AI 辅助读取文本、课程标准内容条目和原文页码。复核通过后仍需单独确认发布，未经发布的内容不会提供给教师使用。
         </aside>
         <label>
           <span>复核意见</span>
@@ -81,11 +81,11 @@ async function review(approved: boolean) {
 }
 
 .curriculum-review-body aside {
-  border: 1px solid #bfdbfe;
-  border-radius: 6px;
+  border: 1px solid #c8d2cb;
+  border-radius: 4px;
   padding: 11px 13px;
-  background: #eff6ff;
-  color: #1e40af;
+  background: #edf3ef;
+  color: #315b53;
   line-height: 1.6;
 }
 

@@ -3,6 +3,15 @@ import { apiRequest, queryString, toJsonBody, uploadRequest } from './client'
 export type SubjectOption = { id: number; name: string; code: string }
 export type ClassOption = { id: number; name: string; grade: string }
 export type CourseOption = { id: number; title: string; subject: number }
+export type LearningTargetVersionOption = {
+  id: number
+  code: string
+  title: string
+  subject: number
+  course: number
+  course_title: string
+  content_hash: string
+}
 
 export type AssessmentOptions = {
   subjects: SubjectOption[]
@@ -14,6 +23,7 @@ export type AssessmentOptions = {
   question_sources: Array<{ value: BankQuestionSource; label: string }>
   item_roles: Array<{ value: string; label: string }>
   layer_scopes: Array<{ value: string; label: string }>
+  learning_target_versions: LearningTargetVersionOption[]
   common_question_sets: Array<{
     id: number
     title: string
@@ -55,6 +65,15 @@ export type BankQuestion = {
   layer_scope: string
   layer_scope_label: string
   comparison_code: string
+  learning_target_version: {
+    id: number
+    code: string
+    title: string
+    content_hash: string
+    course_id: number
+    alignment_status: string
+  } | null
+  legacy_unmapped: boolean
   version_no: number
   content_hash: string
   usage_count: number
@@ -111,6 +130,7 @@ export type BankQuestionPayload = {
   default_score: number
   item_role?: 'regular' | 'layered'
   layer_scope?: string
+  learning_target_version_id?: number | string
 }
 
 export type AiQuestionDraft = BankQuestionPayload & {
@@ -135,6 +155,20 @@ export type AiQuestionGenerationResult = {
   valid_count: number
 }
 
+export type AiQuestionGenerationJob = {
+  id: number
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  status_label: string
+  subject: SubjectOption
+  result: AiQuestionGenerationResult | Record<string, never>
+  error_message: string
+  error_fields: Record<string, string[]>
+  attempt_count: number
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
 export type AssessmentQuestion = {
   id: number
   source_question?: number | null
@@ -143,6 +177,8 @@ export type AssessmentQuestion = {
   item_role?: 'regular' | 'common' | 'layered'
   layer_scope?: string
   comparison_code?: string
+  learning_target_version_id?: number | null
+  legacy_unmapped?: boolean
   question_type: string
   question_type_label: string
   stem: string
@@ -369,9 +405,29 @@ export function archiveCommonQuestionSet(id: number) {
 export const commonQuestionSetsExportUrl = '/api/v1/school-admin/common-question-sets/export/'
 
 export function generateQuestionBankDrafts(payload: AiQuestionGenerationPayload) {
-  return apiRequest<AiQuestionGenerationResult>('/api/v1/teacher/question-bank/ai-generate/', {
+  return apiRequest<AiQuestionGenerationJob>('/api/v1/teacher/question-bank/ai-generate/', {
     method: 'POST',
     body: toJsonBody(payload)
+  })
+}
+
+export function getLatestQuestionBankDraftJob() {
+  return apiRequest<AiQuestionGenerationJob | null>('/api/v1/teacher/question-bank/ai-jobs/latest/')
+}
+
+export function getQuestionBankDraftJob(id: number) {
+  return apiRequest<AiQuestionGenerationJob>(`/api/v1/teacher/question-bank/ai-jobs/${id}/`)
+}
+
+export function retryQuestionBankDraftJob(id: number) {
+  return apiRequest<AiQuestionGenerationJob>(`/api/v1/teacher/question-bank/ai-jobs/${id}/retry/`, {
+    method: 'POST'
+  })
+}
+
+export function cancelQuestionBankDraftJob(id: number) {
+  return apiRequest<AiQuestionGenerationJob>(`/api/v1/teacher/question-bank/ai-jobs/${id}/cancel/`, {
+    method: 'POST'
   })
 }
 

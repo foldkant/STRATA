@@ -24,7 +24,8 @@ describe('login and route permissions', () => {
     expect(resolveRouteAccess({ roles: ['teacher', 'student'] }, 'school_admin')).toBe('/school-admin')
   })
 
-  it('redirects an authenticated user away from login', () => {
-    expect(resolveRouteAccess({ public: true }, 'teacher')).toBe('/teacher')
+  it('keeps general public pages available and redirects authenticated users away from login', () => {
+    expect(resolveRouteAccess({ public: true }, 'teacher')).toBe(true)
+    expect(resolveRouteAccess({ public: true, guestOnly: true }, 'teacher')).toBe('/teacher')
   })
 })

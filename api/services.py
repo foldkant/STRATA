@@ -459,8 +459,13 @@ def test_teacher_ai_provider(request) -> TeacherAIProvider:
 
 
 def _call_teacher_chat_json(
-    request, *, system_prompt: str, user_prompt: str, max_tokens: int = 1800
-) -> dict:
+    request,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 1800,
+    include_raw_response: bool = False,
+) -> dict | tuple[dict, str]:
     provider = get_teacher_ai_provider(request.user)
     api_key = decrypt_secret(provider.api_key_encrypted)
     if not provider.is_enabled:
@@ -566,6 +571,8 @@ def _call_teacher_chat_json(
         )
     provider.last_error = ""
     provider.save(update_fields=["last_error", "updated_at"])
+    if include_raw_response:
+        return result, content
     return result
 
 
@@ -1867,6 +1874,8 @@ def delete_account(request, user, *, action_prefix: str) -> None:
 
 
 def reset_school_admin_password(request, user, password: str) -> None:
+    from config.login_security import clear_login_failures_for_username
+
     if not _matches(PASSWORD_PATTERN, password):
         raise ServiceError(
             "密码需为 8-32 位，并至少包含字母和数字。",
@@ -1875,6 +1884,7 @@ def reset_school_admin_password(request, user, password: str) -> None:
     user.set_password(password)
     user.is_first_login = True
     user.save(update_fields=["password", "is_first_login"])
+    clear_login_failures_for_username(user.username)
     write_audit(
         request,
         "school_admin.reset_password",
@@ -1886,6 +1896,8 @@ def reset_school_admin_password(request, user, password: str) -> None:
 
 
 def reset_teacher_password(request, teacher, password: str) -> None:
+    from config.login_security import clear_login_failures_for_username
+
     if not _matches(TEACHING_PASSWORD_PATTERN, password):
         raise ServiceError(
             "教师密码需为 6-32 位，可使用字母、数字和常用符号。",
@@ -1894,6 +1906,7 @@ def reset_teacher_password(request, teacher, password: str) -> None:
     teacher.set_password(password)
     teacher.is_first_login = True
     teacher.save(update_fields=["password", "is_first_login"])
+    clear_login_failures_for_username(teacher.username)
     write_audit(
         request,
         "teacher.reset_password",
@@ -1957,9 +1970,9 @@ def delete_subject(request, subject: Subject) -> None:
     if subject.courses.exists():
         blockers.append("课程")
     if subject.pretest_papers.exists():
-        blockers.append("前测套卷")
+        blockers.append("学习起点诊断版本")
     if subject.pretest_submissions.exists():
-        blockers.append("前测作答")
+        blockers.append("学习起点诊断提交")
     if blockers:
         raise ServiceError(
             f"该学科已有{', '.join(blockers)}关联，不能物理删除；请保持停用状态。",
@@ -2525,7 +2538,6 @@ from .resource_services import (
     save_teacher_resource,
 )
 from .student_services import (
-    _layer_value,
     _school_class_by_name,
     _student_brief,
     _student_payload_errors,

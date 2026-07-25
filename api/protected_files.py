@@ -9,9 +9,17 @@ from django.http import FileResponse, Http404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
-from courses.models import ClassroomGroup, ClassroomGroupFile, Course, Resource, ResourceFile
-from learning.models import StudentWorkAttachment
-from school.models import StudentProfile
+from courses.models import (
+    ClassroomGroup,
+    ClassroomGroupFile,
+    Course,
+    CourseClass,
+    Resource,
+    ResourceFile,
+)
+from learning.models import PretestMaterialAttachment, StudentWorkAttachment
+from school.models import StudentProfile, TeachingAssignment
+from .resource_access import student_has_active_classroom_resource_access
 
 FILE_TOKEN_SALT = "strata.protected-file.v1"
 FILE_TOKEN_MAX_AGE = 60 * 60
@@ -119,6 +127,8 @@ def _resource_access(user, resource: Resource) -> bool:
     profile = _student_profile(user)
     if not profile or not profile.class_group_id:
         return False
+    if student_has_active_classroom_resource_access(profile, resource.id):
+        return True
     local_school = Q(owner__school_id=profile.user.school_id)
     allowed = (
         (local_school & Q(
@@ -155,6 +165,33 @@ def _student_work_access(user, work: StudentWorkAttachment) -> bool:
     if user.role == "student":
         return work.student_id == user.id
     return user.role == "teacher" and work.course.teacher_id == user.id
+
+
+def _pretest_material_access(user, attachment: PretestMaterialAttachment) -> bool:
+    material = attachment.material
+    if _is_super_admin(user) or _is_school_admin(user, material.school_id):
+        return True
+    if not user.is_authenticated:
+        return False
+    if user.role == "student":
+        return attachment.student_id == user.id
+    if user.role != "teacher" or user.school_id != material.school_id:
+        return False
+    if not material.course_id or not material.class_group_id:
+        return False
+    if material.course.teacher_id != user.id:
+        return False
+    return (
+        CourseClass.objects.filter(
+            course_id=material.course_id,
+            class_group_id=material.class_group_id,
+        ).exists()
+        and TeachingAssignment.objects.filter(
+            school_id=material.school_id,
+            class_group_id=material.class_group_id,
+            teacher=user,
+        ).exists()
+    )
 
 
 def _file_response(field, *, display_name: str, as_attachment: bool):
@@ -255,6 +292,29 @@ def student_work_file(request, pk):
     if work is None or not _student_work_access(request.user, work):
         raise Http404
     return _file_response(work.attachment, display_name=work.original_name, as_attachment=True)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def pretest_material_file(request, attachment_id):
+    attachment = (
+        PretestMaterialAttachment.objects.select_related(
+            "student",
+            "material",
+            "material__subject",
+            "material__class_group",
+            "material__course",
+        )
+        .filter(attachment_id=attachment_id)
+        .first()
+    )
+    if attachment is None or not _pretest_material_access(request.user, attachment):
+        raise Http404
+    return _file_response(
+        attachment.attachment,
+        display_name=attachment.original_name,
+        as_attachment=True,
+    )
 
 
 @api_view(["GET"])

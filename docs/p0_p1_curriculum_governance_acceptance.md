@@ -285,7 +285,7 @@ P1 工程专项迁移、权限、版本不可变、解析失败处理、差异�
 | 前端测试、类型检查和生产构建 | `npm.cmd run test:run`、`npm.cmd run build` | 10 个测试文件、30/30 通过；`vue-tsc` 通过；861 个模块构建通过 | `frontend/` 实际命令记录 |
 | 构建产物清理 | `postbuild` 自动清理 | 最终构建删除 85 个陈旧哈希资源，只保留当前与上一构建清单引用的 182 个资源文件 | `frontend/scripts/prune-build-assets.mjs` |
 | 键盘与响应式约束 | 超级管理员课程标准管理页面代码审查 | 已实现可见标签、焦点初始定位、Esc 关闭、Tab/Shift+Tab 焦点约束、关闭后焦点恢复及响应式布局；本轮未执行独立浏览器多视口截图对比 | `frontend/src/components/curriculum/`、`CurriculumStandardsView.vue` |
-| 后台队列资源隔离与真实领取 | 安全取消旧任务、迁移后重新入队 15 份扫描文件并启动专用 worker | worker 真实连接 filesystem broker；并发 1、预取 1、`BelowNormal`，CPU 亲和性限制为 2 个逻辑处理器。重启验收时 1 份运行、14 份等待；任务成功后自动重建对应检索索引 | `config/settings.py`、`scripts/start_curriculum_ocr_worker.ps1`、任务 ID 18—32、`docs/private_deployment.md` |
+| 后台队列资源隔离与真实领取 | 安全取消旧任务、迁移后重新入队 15 份扫描文件并启动专用 worker | worker 真实连接 filesystem broker；并发 1、预取 1、`BelowNormal`，本机默认 CPU 亲和性限制为 1 个逻辑处理器。重启验收时 1 份运行、其余等待；任务成功后自动重建对应检索索引 | `config/settings.py`、`scripts/start_curriculum_ocr_worker.ps1`、任务 ID 18—32、`docs/private_deployment.md` |
 
 只有表中各项产生真实运行结果后，才能把第 5 节对应工程项改为已完成。若某项因环境或数据条件未执行，应明确写“未执行”和原因，不能用“代码已实现”替代运行证据。
 

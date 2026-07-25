@@ -979,7 +979,9 @@ def teacher_learning_web_page_responses(request, pk):
                 status=400,
             )
         classroom_session = (
-            ClassroomSession.objects.select_related("class_group", "course", "lesson")
+            ClassroomSession.objects.select_related(
+                "class_group", "course", "course__subject", "lesson"
+            )
             .filter(
                 pk=classroom_session_pk, school=_school(request), teacher=request.user
             )
@@ -1026,6 +1028,15 @@ def teacher_learning_web_page_responses(request, pk):
         completed_count = 0
         started_count = 0
         for profile in profiles:
+            student_band = (
+                resolve_student_band(
+                    student=profile.user,
+                    subject=classroom_session.course.subject,
+                    course=classroom_session.course,
+                )
+                if classroom_session.course.subject_id
+                else None
+            )
             student_responses = responses_by_student.get(profile.user_id, [])
             submitted_form_ids = {
                 item.form_id for item in student_responses if item.form_id
@@ -1040,7 +1051,7 @@ def teacher_learning_web_page_responses(request, pk):
                 {
                     "student": user_summary(profile.user),
                     "student_no": profile.student_no,
-                    "current_layer": profile.current_layer or "",
+                    "current_layer": student_band or "",
                     "status": (
                         "completed"
                         if completed

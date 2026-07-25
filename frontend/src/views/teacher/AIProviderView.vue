@@ -136,7 +136,7 @@ onMounted(load)
 </script>
 
 <template>
-  <AppShell title="AI接入" eyebrow="教师工作台" :nav-items="navItems">
+  <AppShell title="个人 AI 设置" eyebrow="个人设置" :nav-items="navItems">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section v-if="loading" class="panel">
@@ -154,7 +154,7 @@ onMounted(load)
       <section class="screen-grid ai-provider-layout">
         <form class="panel ai-provider-form" @submit.prevent="save">
           <div class="panel-heading">
-            <h2>DeepSeek 接入</h2>
+            <h2>AI 辅助服务</h2>
             <p>教师填写自己的 API Key。未配置或测试失败时，只影响 AI 辅助功能，平台其他功能可照常使用。</p>
           </div>
 

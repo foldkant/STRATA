@@ -150,16 +150,16 @@ async function save() {
         <label v-if="!draft" class="span-2">
           <span>PDF 原文<b>*</b></span>
           <input type="file" accept=".pdf,application/pdf" @change="fileSelected" />
-          <small>保留原始 PDF，供页码核验和历史追溯。系统先登记文件并提取内嵌文字；扫描件将显示为“待文字识别”，由受控后台或离线任务处理后再逐页复核。PDF 保存后不可在同一版本中替换。</small>
+          <small>保留原始 PDF，供页码核验和历史追溯。系统会先提取文件中的文字；扫描件将显示为“待文字识别”，完成识别后还需逐页复核。PDF 保存后不可在同一版本中替换。</small>
           <small v-if="errors.pdf_file" class="field-error">{{ errors.pdf_file[0] }}</small>
         </label>
         <aside v-else class="span-2 pdf-locked-notice">
-          PDF 原文已保存并计算校验值。若原文文件有变化，请新增课程标准版本，不能在当前版本中覆盖。
+          PDF 原文已保存并生成文件校验信息。若原文文件有变化，请新增课程标准版本，不能在当前版本中覆盖。
         </aside>
         <label class="span-2">
-          <span>结构化文本</span>
+          <span>AI 辅助读取文本</span>
           <textarea v-model="form.structured_text" rows="11" placeholder="多页 PDF 请按实际页序保留完整的 # PDF 第 N 页 标记；单页 PDF 可直接填写经校对的文本。" />
-          <small>多页 PDF 的人工文本必须保留完整的“# PDF 第 N 页”页标记，并与 PDF 实际页数一致；无页标记的纯文本仅允许用于单页 PDF。结构化文本用于检索和辅助阅读，不替代 PDF 原文。</small>
+          <small>多页 PDF 的校对文本必须保留完整的“# PDF 第 N 页”页标记，并与 PDF 实际页数一致；无页标记的纯文本仅用于单页 PDF。此文本供课程标准检索和 AI 辅助读取，不能替代 PDF 原文。</small>
         </label>
       </div>
 
@@ -207,7 +207,7 @@ async function save() {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 10px 12px;
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--primary) 3%, #fff);
   color: var(--muted);
   font-size: 13px;
   line-height: 1.55;
@@ -253,9 +253,11 @@ async function save() {
 }
 
 .replacement-notice {
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  color: #1e40af;
+  border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--line));
+  border-left: 3px solid var(--primary);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary) 7%, #fff);
+  color: var(--primary-dark);
 }
 
 .modal-actions > span {

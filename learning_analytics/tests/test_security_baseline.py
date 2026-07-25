@@ -21,6 +21,16 @@ from courses.models import (
     LessonStep,
     Subject,
 )
+from curriculum_standards.models import (
+    CurriculumDocumentType,
+    CurriculumNodeType,
+    CurriculumStandard,
+    CurriculumStandardNode,
+    CurriculumStandardVersion,
+    CurriculumVersionStatus,
+    SchoolStage,
+)
+from curriculum_standards.services import replace_plan_curriculum_references
 from learning.models import StratificationDecision, StudentSubjectBand
 from learning_analytics.models import (
     AnalyticsOperatingMode,
@@ -38,7 +48,12 @@ from learning_analytics.schemas.registry import (
     validate_event_payload,
 )
 from learning_analytics.services.access_audit import audit_teacher_class_scope
-from learning_analytics.services.evaluation import publish_plan, publish_standard
+from learning_analytics.services.evaluation import (
+    confirm_plan_review,
+    confirm_standard_review,
+    publish_plan,
+    publish_standard,
+)
 from learning_analytics.services.operating_mode import transition_operating_mode
 from learning_analytics.services.opportunities import release_learning_opportunities
 from learning_analytics.services.schema_registry import (
@@ -361,7 +376,7 @@ class StudentHiddenStratificationContractTests(TestCase):
             user=self.student,
             class_group=self.class_group,
             student_no="2026001",
-            current_layer=StudentProfile.Layer.A,
+            current_layer=StudentProfile.Layer.C,
             current_group_no=1,
             is_first_use=False,
             onboarding_status=StudentProfile.OnboardingStatus.ACTIVE,
@@ -477,6 +492,63 @@ class StudentHiddenStratificationContractTests(TestCase):
             student=self.peer,
             student_profile=self.peer_profile,
         )
+        curriculum_standard = CurriculumStandard.objects.create(
+            title="普通高中信息科技课程标准",
+            document_type=CurriculumDocumentType.SUBJECT_STANDARD,
+            school_stage=SchoolStage.SENIOR_HIGH,
+            subject_code="information_technology_security",
+            subject_name=self.subject.name,
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        curriculum_version = CurriculumStandardVersion.objects.create(
+            source=curriculum_standard,
+            version_label="2025-security",
+            publication_year=2025,
+            effective_year=2025,
+            title_snapshot=curriculum_standard.title,
+            official_title="普通高中信息科技课程标准（安全测试版）",
+            document_type_snapshot=curriculum_standard.document_type,
+            school_stage_snapshot=curriculum_standard.school_stage,
+            subject_code_snapshot=curriculum_standard.subject_code,
+            subject_name_snapshot=curriculum_standard.subject_name,
+            pdf_file="curriculum_standards/tests/security-standard.pdf",
+            pdf_sha256="a" * 64,
+            pdf_size_bytes=1024,
+            pdf_page_count=4,
+            content_hash="b" * 64,
+            created_by=self.teacher,
+        )
+        curriculum_node_ids = []
+        for index, (node_type, code, title) in enumerate(
+            (
+                (CurriculumNodeType.CORE_COMPETENCY, "SEC.CORE", "核心素养"),
+                (CurriculumNodeType.COURSE_OBJECTIVE, "SEC.GOAL", "课程目标"),
+                (CurriculumNodeType.COURSE_CONTENT, "SEC.CONTENT", "课程内容"),
+                (CurriculumNodeType.ACADEMIC_QUALITY, "SEC.QUALITY", "学业质量"),
+            ),
+            start=1,
+        ):
+            node = CurriculumStandardNode.objects.create(
+                version=curriculum_version,
+                node_type=node_type,
+                code=code,
+                title=title,
+                content=f"信息科技小组协作评价所依据的{title}原文内容。",
+                source_page_start=index,
+                source_page_end=index,
+                source_paragraph=title,
+                sort_order=index,
+            )
+            curriculum_node_ids.append(node.id)
+        CurriculumStandardVersion.objects.filter(pk=curriculum_version.pk).update(
+            status=CurriculumVersionStatus.PUBLISHED,
+            reviewed_by=self.teacher,
+            published_by=self.teacher,
+        )
+        CurriculumStandard.objects.filter(pk=curriculum_standard.pk).update(
+            current_version=curriculum_version,
+        )
         plan = EvaluationPlan.objects.create(
             school=self.school,
             subject=self.subject,
@@ -490,6 +562,7 @@ class StudentHiddenStratificationContractTests(TestCase):
                     "code": "G1",
                     "title": "参与协作",
                     "description": "学生能够主动参与小组任务并回应同伴。",
+                    "curriculum_node_ids": curriculum_node_ids,
                 }
             ],
             evaluation_basis=[
@@ -500,14 +573,28 @@ class StudentHiddenStratificationContractTests(TestCase):
                     "source_types": ["课堂观察"],
                 }
             ],
-            learning_tasks=[
+            learning_activities=[
                 {
-                    "code": "T1",
-                    "title": "小组任务",
-                    "basis_codes": ["E1"],
-                    "description": "共同完成小组任务。",
+                    "code": "A1",
+                    "title": "小组协作活动",
+                    "goal_codes": ["G1"],
+                    "description": "学生共同协商分工并完成小组学习活动。",
                 }
             ],
+            evaluation_tasks=[
+                {
+                    "code": "T1",
+                    "title": "小组协作评价任务",
+                    "goal_codes": ["G1"],
+                    "activity_codes": ["A1"],
+                    "mode": "project",
+                    "evidence_ownership": "group",
+                    "material_types": ["observation"],
+                    "weight": 100,
+                    "description": "依据课堂观察材料评价学生的小组协作表现。",
+                }
+            ],
+            assessment_modes=["project"],
             content_scope=["小组任务"],
             thinking_requirements=["apply"],
             support_options=[],
@@ -516,12 +603,21 @@ class StudentHiddenStratificationContractTests(TestCase):
             created_by=self.teacher,
             updated_by=self.teacher,
         )
-        publish_plan(plan, published_by=self.teacher)
+        replace_plan_curriculum_references(
+            plan=plan,
+            node_ids=curriculum_node_ids,
+            actor=self.teacher,
+        )
+        confirm_plan_review(plan=plan, reviewed_by=self.teacher)
+        published_plan_version = publish_plan(
+            plan, published_by=self.teacher
+        ).version
         standard = EvaluationStandard.objects.create(
             school=self.school,
             subject=self.subject,
             course=self.course,
             plan=plan,
+            plan_version=published_plan_version,
             title="协作评价标准",
             evaluation_target="学生小组协作过程",
             criteria=[
@@ -531,6 +627,10 @@ class StudentHiddenStratificationContractTests(TestCase):
                     "title": "协作表现",
                     "evaluation_target": "学生小组协作过程",
                     "evaluation_sources": ["课堂观察"],
+                    "learning_goal_codes": ["G1"],
+                    "evaluation_task_codes": ["T1"],
+                    "evidence_ownership": "group",
+                    "material_types": ["observation"],
                     "expected_performance": "学生参与任务并回应同伴。",
                     "skip_condition": "未安排协作时暂不评价。",
                     "support_options": [],
@@ -558,6 +658,7 @@ class StudentHiddenStratificationContractTests(TestCase):
             created_by=self.teacher,
             updated_by=self.teacher,
         )
+        confirm_standard_review(standard=standard, reviewed_by=self.teacher)
         standard_version = publish_standard(
             standard, published_by=self.teacher
         ).version

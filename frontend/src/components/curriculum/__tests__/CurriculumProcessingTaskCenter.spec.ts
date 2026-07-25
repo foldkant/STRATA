@@ -8,11 +8,12 @@ import type {
 } from '@/api/curriculumStandards'
 import CurriculumProcessingTaskCenter from '../CurriculumProcessingTaskCenter.vue'
 
-const { getJobs, createJob, cancelJob, retryJob } = vi.hoisted(() => ({
+const { getJobs, createJob, cancelJob, retryJob, resumeJob } = vi.hoisted(() => ({
   getJobs: vi.fn(),
   createJob: vi.fn(),
   cancelJob: vi.fn(),
-  retryJob: vi.fn()
+  retryJob: vi.fn(),
+  resumeJob: vi.fn()
 }))
 
 vi.mock('@/api/curriculumStandards', async (importOriginal) => {
@@ -22,7 +23,8 @@ vi.mock('@/api/curriculumStandards', async (importOriginal) => {
     getCurriculumProcessingJobs: getJobs,
     createCurriculumProcessingJob: createJob,
     cancelCurriculumProcessingJob: cancelJob,
-    retryCurriculumProcessingJob: retryJob
+    retryCurriculumProcessingJob: retryJob,
+    resumeCurriculumProcessingJob: resumeJob
   }
 })
 
@@ -62,6 +64,7 @@ function job(id: number, status: CurriculumProcessingJob['status']): CurriculumP
     retry_of: null,
     retry_count: 0,
     can_retry: status === 'failed' || status === 'cancelled',
+    can_resume: status === 'queued',
     can_cancel: status === 'queued' || status === 'running',
     error_code: status === 'failed' ? 'OCR_FAILED' : '',
     error_message: status === 'failed' ? '第 3 页识别失败。' : '',
@@ -90,12 +93,12 @@ function index(jobs: CurriculumProcessingJob[]): CurriculumProcessingJobsIndex {
     statuses,
     modes: [
       { value: 'auto', label: '自动选择文本提取方式' },
-      { value: 'ocr', label: '逐页 OCR 识别' }
+      { value: 'ocr', label: '逐页扫描文字识别' }
     ],
     priorities: [
-      { value: 'low', label: '低优先级（后台慢速）' },
-      { value: 'normal', label: '普通优先级' },
-      { value: 'high', label: '高优先级' }
+      { value: 'low', label: '批量处理（速度较慢）' },
+      { value: 'normal', label: '常规处理' },
+      { value: 'high', label: '优先处理' }
     ]
   }
 }
@@ -131,6 +134,11 @@ function mountCenter(version: CurriculumStandardVersion | null = selectedVersion
   return wrapper
 }
 
+async function setTaskScope(view: VueWrapper, scope: string) {
+  view.findAllComponents(AppSelect)[2].vm.$emit('update:modelValue', scope)
+  await view.vm.$nextTick()
+}
+
 afterEach(() => {
   wrapper?.unmount()
   wrapper = null
@@ -140,7 +148,7 @@ afterEach(() => {
 })
 
 describe('curriculum processing task center', () => {
-  it('keeps the default overview bounded while preserving textual status, progress and recovery actions', async () => {
+  it('opens active work by default and keeps the optional overview bounded', async () => {
     const rows = Array.from({ length: 16 }, (_, offset) => {
       if (offset === 0) return job(1, 'running')
       if (offset === 1) return job(2, 'failed')
@@ -151,12 +159,16 @@ describe('curriculum processing task center', () => {
     const view = mountCenter()
     await flushPromises()
 
+    expect(view.findAll('.task-card')).toHaveLength(6)
+    expect(view.text()).toContain('当前共有 15 个待处理任务，已显示 6 个')
+
+    await setTaskScope(view, 'overview')
     expect(view.findAll('.task-card')).toHaveLength(5)
-    expect(view.text()).toContain('概览显示 5 项：4 个活动任务、1 条最近记录')
+    expect(view.text()).toContain('概览显示 5 项：4 个待处理任务、1 条最近记录')
     expect(view.text()).toContain('运行中')
     expect(view.text()).toContain('失败')
     expect(view.text()).toContain('第 3 页识别失败。')
-    expect(view.text()).toContain('重新排队')
+    expect(view.text()).toContain('重新提交')
     expect(view.text()).toContain('取消任务')
     expect(view.find('progress').attributes('aria-label')).toContain('处理进度')
     expect(view.findAll('.task-details')).toHaveLength(5)
@@ -164,7 +176,7 @@ describe('curriculum processing task center', () => {
 
     await view.get('[data-task-scope="active"]').trigger('click')
     expect(view.findAll('.task-card')).toHaveLength(6)
-    expect(view.text()).toContain('显示前 6 项，共 15 项')
+    expect(view.text()).toContain('当前共有 15 个待处理任务，已显示 6 个')
     expect(view.text()).toContain('查看更多（还有 9 项）')
 
     await view.get('[data-action="show-more"]').trigger('click')
@@ -181,8 +193,9 @@ describe('curriculum processing task center', () => {
     const view = mountCenter()
     await flushPromises()
 
+    await setTaskScope(view, 'overview')
     expect(view.findAll('.task-card')).toHaveLength(2)
-    expect(view.text()).toContain('0 个活动任务、2 条最近记录')
+    expect(view.text()).toContain('0 个待处理任务、2 条最近记录')
     expect(view.text()).toContain('查看全部历史记录（16）')
 
     await view.get('[data-task-scope="history"]').trigger('click')
@@ -203,7 +216,7 @@ describe('curriculum processing task center', () => {
     await vi.advanceTimersByTimeAsync(5000)
     await flushPromises()
     expect(getJobs).toHaveBeenCalledTimes(2)
-    expect(view.text()).toContain('当前没有运行中的任务')
+    expect(view.text()).toContain('当前没有待处理的课程标准')
 
     await vi.advanceTimersByTimeAsync(10000)
     expect(getJobs).toHaveBeenCalledTimes(2)
@@ -219,7 +232,7 @@ describe('curriculum processing task center', () => {
     expect(getJobs).toHaveBeenCalledTimes(3)
   })
 
-  it('creates one low-priority background task for the selected version and prevents active duplicates', async () => {
+  it('creates one batch processing task for the selected version and prevents active duplicates', async () => {
     const queued = job(1, 'queued')
     getJobs.mockResolvedValueOnce(index([])).mockResolvedValueOnce(index([queued]))
     createJob.mockResolvedValue(queued)
@@ -230,9 +243,48 @@ describe('curriculum processing task center', () => {
     await flushPromises()
 
     expect(createJob).toHaveBeenCalledWith(1, { mode: 'auto', priority: 'low' })
-    expect(view.text()).toContain('已加入后台处理队列')
+    expect(view.text()).toContain('已提交处理')
     const submit = view.get<HTMLButtonElement>('.task-create-form > button')
-    expect(submit.attributes()).toHaveProperty('disabled')
-    expect(submit.text()).toContain('该版本已排队')
+    expect(submit.attributes()).not.toHaveProperty('disabled')
+    expect(submit.text()).toContain('继续处理')
+  })
+
+  it('re-sends a queued task when the teacher uses continue processing', async () => {
+    const queued = job(1, 'queued')
+    getJobs.mockResolvedValue(index([queued]))
+    resumeJob.mockResolvedValue(queued)
+
+    const view = mountCenter()
+    await flushPromises()
+    await view.get('.task-create-form').trigger('submit')
+    await flushPromises()
+
+    expect(resumeJob).toHaveBeenCalledWith(1)
+    expect(createJob).not.toHaveBeenCalled()
+    expect(view.text()).toContain('已重新提交，将继续处理')
+    expect(view.text()).toContain('历史失败')
+  })
+
+  it('reveals and highlights the active replacement after a cancelled task is retried', async () => {
+    const cancelled = job(1, 'cancelled')
+    const replacement = { ...job(2, 'queued'), version: cancelled.version, retry_of: cancelled.id, retry_count: 1 }
+    getJobs
+      .mockResolvedValueOnce(index([cancelled]))
+      .mockResolvedValue(index([replacement, cancelled]))
+    retryJob.mockResolvedValue(replacement)
+
+    const view = mountCenter()
+    await flushPromises()
+    await view.get('.task-card button').trigger('click')
+    await flushPromises()
+
+    expect(retryJob).toHaveBeenCalledWith(cancelled.id)
+    expect((view.get('.task-list-toolbar select').element as HTMLSelectElement).value).toBe('active')
+    expect(view.get('.task-card.is-highlighted').text()).toContain(replacement.standard_title)
+    expect(view.text()).toContain('已重新提交处理')
+
+    await setTaskScope(view, 'history')
+    expect(view.text()).toContain('已重新提交，当前任务为“等待中”')
+    expect(view.find('.task-card button').exists()).toBe(false)
   })
 })

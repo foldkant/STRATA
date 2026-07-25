@@ -1,5 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import {
+  IconAward,
+  IconBook2,
+  IconChecklist,
+  IconTargetArrow
+} from '@tabler/icons-vue'
 import { ApiError } from '@/api/client'
 import {
   archiveCurriculumStandardVersion,
@@ -48,6 +54,14 @@ const workspaceSection = ref<'standards' | 'tasks'>('standards')
 const detailTab = ref<'nodes' | 'text' | 'versions' | 'audit'>('nodes')
 const activeNodeType = ref<CurriculumNodeType>('core_competency')
 const standardPage = ref(1)
+const standardTotal = ref(0)
+const standardServerPageCount = ref(1)
+const standardSummary = ref({
+  total: 0,
+  published: 0,
+  k1_k9: 0,
+  k10_k12: 0
+})
 const nodePage = ref(1)
 const standardEditor = ref(false)
 const editingStandard = ref<CurriculumStandard | null>(null)
@@ -75,15 +89,35 @@ const nodeTypeOrder: CurriculumNodeType[] = [
   'academic_quality'
 ]
 
+const curriculumReadingGuide = [
+  {
+    title: '核心素养',
+    description: '明确课程育人价值，以及学生在课程学习中应形成的正确价值观、必备品格和关键能力。',
+    icon: IconAward
+  },
+  {
+    title: '课程目标',
+    description: '把核心素养要求落实到课程总体目标、学段要求和具体学习表现。',
+    icon: IconTargetArrow
+  },
+  {
+    title: '课程内容',
+    description: '明确学习主题、内容要求和学业要求，为学习活动与评价任务提供内容依据。',
+    icon: IconBook2
+  },
+  {
+    title: '学业质量',
+    description: '描述学生完成课程学习后的学业成就表现，是设计评价标准的重要参照。',
+    icon: IconChecklist
+  }
+]
+
 const summary = computed(() => {
-  const published = rows.value.filter((row) => row.is_active !== false && row.current_version?.status === 'published').length
-  const k1k9 = rows.value.filter((row) => row.school_stage === 'k1_k9').length
-  const k10k12 = rows.value.filter((row) => row.school_stage === 'k10_k12').length
   return [
-    { label: '已登记标准', value: rows.value.length, detail: '主记录' },
-    { label: '当前使用', value: published, detail: '已发布版本' },
-    { label: '义务教育', value: k1k9, detail: 'K1—K9' },
-    { label: '普通高中', value: k10k12, detail: 'K10—K12' }
+    { label: '已登记标准', value: standardSummary.value.total, detail: '课程标准档案' },
+    { label: '当前使用', value: standardSummary.value.published, detail: '已发布版本' },
+    { label: '义务教育', value: standardSummary.value.k1_k9, detail: 'K1—K9' },
+    { label: '普通高中', value: standardSummary.value.k10_k12, detail: 'K10—K12' }
   ]
 })
 
@@ -95,16 +129,13 @@ const groupedNodes = computed(() => nodeTypeOrder.map((type) => ({
 
 const structureCoverage = computed(() => new Set((selectedVersion.value?.nodes || []).map((node) => node.node_type)))
 
-const standardPageCount = computed(() => Math.max(1, Math.ceil(rows.value.length / STANDARD_PAGE_SIZE)))
-const paginatedRows = computed(() => {
-  const start = (standardPage.value - 1) * STANDARD_PAGE_SIZE
-  return rows.value.slice(start, start + STANDARD_PAGE_SIZE)
-})
+const standardPageCount = computed(() => standardServerPageCount.value)
+const paginatedRows = computed(() => rows.value)
 const standardRangeLabel = computed(() => {
-  if (!rows.value.length) return '0 项'
+  if (!standardTotal.value) return '0 项'
   const start = (standardPage.value - 1) * STANDARD_PAGE_SIZE + 1
-  const end = Math.min(rows.value.length, start + STANDARD_PAGE_SIZE - 1)
-  return `第 ${start}—${end} 项，共 ${rows.value.length} 项`
+  const end = Math.min(standardTotal.value, start + rows.value.length - 1)
+  return `第 ${start}—${end} 项，共 ${standardTotal.value} 项`
 })
 
 const activeNodeGroup = computed(() => (
@@ -170,15 +201,15 @@ function versionStatusLabel(version: CurriculumStandardVersion) {
 
 function auditActionLabel(action: string) {
   return {
-    standard_created: '创建课程标准主档',
-    standard_updated: '更新课程标准主档',
+    standard_created: '创建课程标准档案',
+    standard_updated: '更新课程标准档案',
     created: '创建课程标准版本',
     imported: '导入课程标准版本',
     draft_metadata_updated: '更新版本基本信息',
     content_item_created: '新增内容条目',
     content_item_updated: '更新内容条目',
     content_item_deleted: '删除内容条目',
-    structured_text_replaced: '更新结构化文本',
+    structured_text_replaced: '更新 AI 辅助读取文本',
     page_text_updated: '修订逐页文本',
     text_reprocessed: '重新处理课程标准原文',
     submitted_for_review: '提交课程标准复核',
@@ -190,7 +221,7 @@ function auditActionLabel(action: string) {
     restored_as_current: '恢复为当前使用版本',
     draft_discarded: '丢弃课程标准草稿',
     pages_reviewed: '完成逐页原文复核',
-    processing_job_queued: '加入原文处理队列',
+    processing_job_queued: '加入原文处理任务',
     processing_job_started: '开始处理课程标准原文',
     processing_job_succeeded: '课程标准原文处理完成',
     processing_job_failed: '课程标准原文处理失败',
@@ -205,7 +236,7 @@ function auditActionLabel(action: string) {
 }
 
 function auditVersionLabel(log: CurriculumAuditLog) {
-  if (!log.version) return '课程标准主档'
+  if (!log.version) return '课程标准档案'
   return selectedStandard.value?.versions?.find((version) => version.id === log.version)?.version_label || `版本 #${log.version}`
 }
 
@@ -213,8 +244,9 @@ function auditDetailText(detail: Record<string, unknown>) {
   return JSON.stringify(detail, null, 2)
 }
 
-function setStandardPage(page: number) {
+function setStandardPage(page: number, reload = true) {
   standardPage.value = Math.min(standardPageCount.value, Math.max(1, page))
+  if (reload) void load()
 }
 
 function setNodePage(page: number) {
@@ -252,10 +284,30 @@ async function load(resetPage = false) {
     const result = await getCurriculumStandards({
       q: query.value.trim(),
       school_stage: schoolStage.value,
-      document_type: documentType.value
+      document_type: documentType.value,
+      page: standardPage.value,
+      page_size: STANDARD_PAGE_SIZE
     })
-    rows.value = result.standards
-    setStandardPage(standardPage.value)
+    // Keep the page bounded even if an older API or an offline adapter still
+    // returns the complete catalogue. New APIs remain authoritative for totals.
+    if (result.pagination) {
+      rows.value = result.standards.slice(0, STANDARD_PAGE_SIZE)
+      standardPage.value = result.pagination.page
+      standardTotal.value = result.pagination.total
+      standardServerPageCount.value = result.pagination.page_count
+      standardSummary.value = result.summary
+    } else {
+      const start = (standardPage.value - 1) * STANDARD_PAGE_SIZE
+      rows.value = result.standards.slice(start, start + STANDARD_PAGE_SIZE)
+      standardTotal.value = result.standards.length
+      standardServerPageCount.value = Math.max(1, Math.ceil(result.standards.length / STANDARD_PAGE_SIZE))
+      standardSummary.value = {
+        total: result.standards.length,
+        published: result.standards.filter((item) => item.current_version?.status === 'published').length,
+        k1_k9: result.standards.filter((item) => item.school_stage === 'k1_k9').length,
+        k10_k12: result.standards.filter((item) => item.school_stage === 'k10_k12').length
+      }
+    }
     if (selectedStandard.value) {
       const matching = rows.value.find((row) => row.id === selectedStandard.value?.id)
       if (!matching) {
@@ -347,7 +399,7 @@ function openEditNode(node: CurriculumNode) {
 async function standardSaved(row: CurriculumStandard) {
   standardEditor.value = false
   editingStandard.value = null
-  notice.value = '课程标准元数据已保存。'
+  notice.value = '课程标准基本信息已保存。'
   noticeTone.value = 'success'
   await load()
   await openStandard(row)
@@ -357,7 +409,7 @@ async function versionSaved(version: CurriculumStandardVersion) {
   versionEditor.value = false
   editingVersion.value = null
   replacingVersion.value = null
-  notice.value = '课程标准版本草稿已保存，请复核结构化文本和内容条目后提交复核。'
+  notice.value = '课程标准版本草稿已保存，请核对 AI 辅助读取文本和内容条目后提交复核。'
   noticeTone.value = 'success'
   await load()
   if (selectedStandard.value) await openStandard(selectedStandard.value, version.id)
@@ -386,7 +438,7 @@ async function confirmVersionAction() {
             ? await restoreCurriculumStandardVersion(target.version.id)
             : await archiveCurriculumStandardVersion(target.version.id)
     notice.value = target.kind === 'discard'
-      ? '课程标准草稿已丢弃；原文、处理结果和审计记录仍可查看。'
+      ? '课程标准草稿已丢弃，原文、处理结果和操作记录仍可查看。'
       : target.kind === 'submit_review'
         ? '课程标准版本已提交复核。'
         : target.kind === 'publish'
@@ -416,14 +468,14 @@ async function confirmStandardStatus() {
   try {
     const updated = await setCurriculumStandardActive(target.id, nextActive)
     notice.value = nextActive
-      ? '课程标准主档已启用，可继续供教师选择当前发布版本。'
-      : '课程标准主档已停用，不再供教师新选择；已有评价方案中的历史引用仍会保留。'
+      ? '课程标准档案已启用，教师可以继续选择当前发布版本。'
+      : '课程标准档案已停用，教师不能再新选用，但已有评价方案中的历史引用仍会保留。'
     noticeTone.value = nextActive ? 'success' : 'warning'
     standardStatusTarget.value = null
     await load()
     await openStandard(updated, preferredVersionId)
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '课程标准主档状态更新失败。'
+    notice.value = error instanceof ApiError ? error.message : '课程标准档案状态更新失败。'
     noticeTone.value = 'error'
     standardStatusTarget.value = null
   } finally {
@@ -478,25 +530,37 @@ onMounted(() => load(true))
 </script>
 
 <template>
-  <AppShell title="课程标准" eyebrow="超级管理员" :nav-items="navItems" natural-scroll>
+  <AppShell title="课程标准" eyebrow="超级管理员" :nav-items="navItems" shell-variant="super-admin" natural-scroll>
     <NoticeLine v-if="notice" :message="notice" :tone="noticeTone" floating @dismiss="notice = ''" />
 
     <header class="console-page-heading curriculum-page-heading">
       <div>
         <h2>课程标准管理</h2>
-        <p>集中管理权威原文、结构化文本和正式版本，为评价方案提供可核验的课程标准依据。</p>
+        <p>保存课程标准权威原文、版本和便于 AI 辅助读取的文本，为教师设计学习目标与评价任务提供可追溯的依据。</p>
       </div>
       <button class="primary-button" type="button" @click="openCreateStandard">登记课程标准</button>
     </header>
 
-    <section class="curriculum-principle" aria-label="课程标准内容关系">
-      <strong>课程标准内容关系</strong>
-      <ol>
-        <li v-for="(item, index) in ['核心素养', '课程目标', '课程内容', '学业质量']" :key="item">
-          <span>{{ item }}</span><i v-if="index < 3" aria-hidden="true">→</i>
-        </li>
-      </ol>
-      <p>用于建立评价依据和适用边界，不直接换算为学生分数。</p>
+    <section class="curriculum-reading-guide" aria-labelledby="curriculum-reading-guide-title">
+      <header>
+        <div>
+          <strong id="curriculum-reading-guide-title">阅读课程标准时重点核对</strong>
+          <p>四个部分相互联系，需要结合具体学科、学段和课程内容整体理解。</p>
+        </div>
+        <span>课程标准阅读提示</span>
+      </header>
+      <dl>
+        <div v-for="item in curriculumReadingGuide" :key="item.title">
+          <dt>
+            <component :is="item.icon" aria-hidden="true" />
+            {{ item.title }}
+          </dt>
+          <dd>{{ item.description }}</dd>
+        </div>
+      </dl>
+      <footer>
+        评价设计应依据具体课程目标、课程内容要求和学业质量描述。课程标准条目不能直接换算为学生分数。
+      </footer>
     </section>
 
     <section class="curriculum-summary" aria-label="课程标准概况">
@@ -526,8 +590,8 @@ onMounted(() => load(true))
         :class="{ active: workspaceSection === 'standards' }"
         @click="workspaceSection = 'standards'"
       >
-        <strong>课标档案</strong>
-        <small>查询、复核与版本管理</small>
+        <strong>课程标准档案</strong>
+        <small>查找、核对、复核和管理版本</small>
       </button>
       <button
         id="curriculum-tasks-tab"
@@ -539,8 +603,8 @@ onMounted(() => load(true))
         :class="{ active: workspaceSection === 'tasks' }"
         @click="workspaceSection = 'tasks'"
       >
-        <strong>后台任务</strong>
-        <small>查看 OCR 与文本处理进度</small>
+        <strong>原文处理进度</strong>
+        <small>查看 PDF 解析和扫描文字识别进度</small>
       </button>
     </nav>
 
@@ -568,7 +632,7 @@ onMounted(() => load(true))
     >
       <div class="panel-heading">
         <h2>课程标准目录</h2>
-        <p>课程标准的历史版本不会被覆盖；教师只能在评价方案中选择已发布版本。</p>
+        <p>历史版本始终保留。教师在评价方案中只能选择经过复核并已发布的版本。</p>
       </div>
 
       <form class="toolbar curriculum-toolbar" @submit.prevent="load(true)">
@@ -634,7 +698,7 @@ onMounted(() => load(true))
           </button>
           <div v-if="!selectedStandard" class="curriculum-detail-empty">
             <strong>选择一项课程标准</strong>
-            <p>可查看版本、结构化文本、课程标准内容条目及其原文位置。</p>
+            <p>可以查看版本、课程标准内容条目、AI 辅助读取文本和对应的 PDF 原文页码。</p>
           </div>
           <template v-else>
             <header class="curriculum-detail-header">
@@ -647,14 +711,14 @@ onMounted(() => load(true))
                 <p>{{ documentTypeLabel(selectedStandard.document_type) }} · 学科代码 {{ selectedStandard.subject_code }}</p>
               </div>
               <div class="curriculum-detail-actions">
-                <button class="secondary-button" type="button" @click="openEditStandard(selectedStandard)">编辑元数据</button>
+                <button class="secondary-button" type="button" @click="openEditStandard(selectedStandard)">编辑基本信息</button>
                 <button class="secondary-button" type="button" :disabled="(selectedStandard.versions?.length || 0) < 2" @click="versionComparer = true">版本比较</button>
                 <button
                   :class="selectedStandard.is_active === false ? 'secondary-button' : 'danger-outline-button'"
                   type="button"
                   :aria-pressed="selectedStandard.is_active !== false"
                   @click="standardStatusTarget = selectedStandard"
-                >{{ selectedStandard.is_active === false ? '启用主档' : '停用主档' }}</button>
+                >{{ selectedStandard.is_active === false ? '启用档案' : '停用档案' }}</button>
                 <button class="primary-button" type="button" @click="openCreateVersion()">新增版本</button>
               </div>
             </header>
@@ -675,7 +739,7 @@ onMounted(() => load(true))
             <div v-if="detailLoading" class="curriculum-detail-empty">正在加载版本内容</div>
             <div v-else-if="!selectedVersion" class="curriculum-detail-empty">
               <strong>尚无课程标准版本</strong>
-              <p>上传 PDF 原文并生成结构化文本，复核完成后再发布。</p>
+              <p>上传 PDF 原文并生成便于 AI 辅助读取的文本，完成逐页核对和内容复核后再发布。</p>
               <button class="primary-button" type="button" @click="openCreateVersion()">新增首个版本</button>
             </div>
             <template v-else>
@@ -687,8 +751,8 @@ onMounted(() => load(true))
                 </div>
                 <dl>
                   <div><dt>内容条目</dt><dd>{{ selectedVersion.nodes?.length ?? selectedVersion.node_count ?? 0 }}</dd></div>
-                  <div><dt>原文校验值</dt><dd :title="selectedVersion.pdf_sha256 || ''">{{ selectedVersion.pdf_sha256?.slice(0, 12) || '待生成' }}</dd></div>
-                  <div><dt>文本处理</dt><dd>{{ selectedVersion.extraction_status_label || '状态未提供' }}</dd></div>
+                  <div><dt>原文校验信息</dt><dd :title="selectedVersion.pdf_sha256 || ''">{{ selectedVersion.pdf_sha256?.slice(0, 12) || '待生成' }}</dd></div>
+                  <div><dt>原文处理</dt><dd>{{ selectedVersion.extraction_status_label || '状态未提供' }}</dd></div>
                   <div><dt>发布时间</dt><dd>{{ formatDate(selectedVersion.published_at) }}</dd></div>
                 </dl>
                 <div class="curriculum-version-actions">
@@ -716,8 +780,8 @@ onMounted(() => load(true))
               <details class="curriculum-governance-details">
                 <summary>
                   <span>
-                    <strong>处理与内容完整性</strong>
-                    <small>展开查看逐页处理、复核与四类内容覆盖情况</small>
+                    <strong>原文处理与内容核对</strong>
+                    <small>展开查看逐页处理、原文复核和四部分内容登记情况</small>
                   </span>
                   <span class="curriculum-governance-indicators">
                     <em :class="{ attention: selectedVersion.page_quality_counts?.failed }">
@@ -744,12 +808,12 @@ onMounted(() => load(true))
                   {{ selectedVersion.governance_waiver_note }}
                 </p>
 
-                <section class="curriculum-coverage" aria-label="结构化内容覆盖情况">
+                <section class="curriculum-coverage" aria-label="课程标准四部分内容登记情况">
                   <div v-for="type in nodeTypeOrder" :key="type" :class="{ covered: structureCoverage.has(type) }">
                     <span aria-hidden="true">{{ structureCoverage.has(type) ? '✓' : '—' }}</span>
                     <strong>{{ nodeTypeLabel(type) }}</strong>
                   </div>
-                  <p>提交复核前应按原文结构完成内容条目检查；不适用的内容需要在复核记录中说明。</p>
+                  <p>提交复核前，应根据原文核对四部分内容。某部分不适用于当前文件时，需要在复核记录中说明。</p>
                 </section>
               </details>
 
@@ -763,14 +827,14 @@ onMounted(() => load(true))
                 @keydown.end.prevent="moveTabFocus($event, 'last')"
               >
                 <button id="curriculum-detail-tab-nodes" type="button" role="tab" :aria-selected="detailTab === 'nodes'" :tabindex="detailTab === 'nodes' ? 0 : -1" aria-controls="curriculum-detail-panel-nodes" :class="{ active: detailTab === 'nodes' }" @click="detailTab = 'nodes'">内容条目</button>
-                <button id="curriculum-detail-tab-text" type="button" role="tab" :aria-selected="detailTab === 'text'" :tabindex="detailTab === 'text' ? 0 : -1" aria-controls="curriculum-detail-panel-text" :class="{ active: detailTab === 'text' }" @click="detailTab = 'text'">结构化文本</button>
+                <button id="curriculum-detail-tab-text" type="button" role="tab" :aria-selected="detailTab === 'text'" :tabindex="detailTab === 'text' ? 0 : -1" aria-controls="curriculum-detail-panel-text" :class="{ active: detailTab === 'text' }" @click="detailTab = 'text'">AI 辅助读取文本</button>
                 <button id="curriculum-detail-tab-versions" type="button" role="tab" :aria-selected="detailTab === 'versions'" :tabindex="detailTab === 'versions' ? 0 : -1" aria-controls="curriculum-detail-panel-versions" :class="{ active: detailTab === 'versions' }" @click="detailTab = 'versions'">版本记录</button>
                 <button id="curriculum-detail-tab-audit" type="button" role="tab" :aria-selected="detailTab === 'audit'" :tabindex="detailTab === 'audit' ? 0 : -1" aria-controls="curriculum-detail-panel-audit" :class="{ active: detailTab === 'audit' }" @click="detailTab = 'audit'">操作记录</button>
               </div>
 
               <div v-if="detailTab === 'nodes'" id="curriculum-detail-panel-nodes" class="curriculum-node-area" role="tabpanel" aria-labelledby="curriculum-detail-tab-nodes" tabindex="0">
                 <header>
-                  <div><strong>课程标准内容条目</strong><small>条目保留类型、页码和原文内容，供评价方案只读引用。</small></div>
+                  <div><strong>课程标准内容条目</strong><small>每条内容都保留类型、页码和原文，供教师设计评价方案时查阅引用。</small></div>
                   <button v-if="selectedVersion.status === 'draft'" class="secondary-button" type="button" @click="openCreateNode">新增条目</button>
                 </header>
 
@@ -829,7 +893,7 @@ onMounted(() => load(true))
 
               <div v-else-if="detailTab === 'text'" id="curriculum-detail-panel-text" class="curriculum-text-area" role="tabpanel" aria-labelledby="curriculum-detail-tab-text" tabindex="0">
                 <header>
-                  <div><strong>便于检索的结构化文本</strong><small>以 PDF 原文为最终核验依据，结构化文本不得改变原意。</small></div>
+                  <div><strong>AI 辅助读取文本</strong><small>系统根据 PDF 原文整理，便于检索和 AI 辅助使用。核对内容时始终以 PDF 原文为准。</small></div>
                   <div class="curriculum-text-actions">
                     <span>{{ (selectedVersion.structured_text?.length || 0).toLocaleString('zh-CN') }} 字符</span>
                     <a v-if="selectedVersion.structured_markdown_url" :href="selectedVersion.structured_markdown_url">下载 Markdown</a>
@@ -845,7 +909,7 @@ onMounted(() => load(true))
                     ，也可下载 Markdown 或 JSONL 文件。
                   </p>
                 </template>
-                <p v-else class="curriculum-empty">尚未生成结构化文本，请编辑草稿补充或重新解析 PDF。</p>
+                <p v-else class="curriculum-empty">尚未生成 AI 辅助读取文本，请编辑草稿补充文本或重新处理 PDF 原文。</p>
               </div>
 
               <div v-else-if="detailTab === 'versions'" id="curriculum-detail-panel-versions" class="curriculum-history-area" role="tabpanel" aria-labelledby="curriculum-detail-tab-versions" tabindex="0">
@@ -868,7 +932,7 @@ onMounted(() => load(true))
                 <header>
                   <div>
                     <strong>课程标准操作记录</strong>
-                    <small>记录主档、版本、原文处理与复核发布等关键操作，按时间倒序呈现。</small>
+                    <small>记录课程标准档案、版本、原文处理、复核和发布等操作，按时间倒序显示。</small>
                   </div>
                   <span>共 {{ standardAuditLogs.length }} 条</span>
                 </header>
@@ -882,7 +946,7 @@ onMounted(() => load(true))
                       </header>
                       <p>
                         <span>操作人：{{ log.actor || '系统任务' }}</span>
-                        <span>对象：{{ auditVersionLabel(log) }}</span>
+                        <span>相关内容：{{ auditVersionLabel(log) }}</span>
                       </p>
                       <details v-if="Object.keys(log.detail || {}).length">
                         <summary>查看记录详情</summary>
@@ -924,13 +988,13 @@ onMounted(() => load(true))
       :open="Boolean(actionTarget)"
       :title="actionTarget?.kind === 'publish' ? '发布课程标准版本' : actionTarget?.kind === 'submit_review' ? '提交课程标准复核' : actionTarget?.kind === 'restore' ? '恢复为当前使用版本' : actionTarget?.kind === 'discard' ? '丢弃课程标准草稿' : '归档课程标准版本'"
       :message="actionTarget?.kind === 'publish'
-        ? `确认发布“${actionTarget?.version.version_label || ''}”。发布后原文、结构化文本和内容条目将被冻结。`
+        ? `确认发布“${actionTarget?.version.version_label || ''}”。发布后 PDF 原文、AI 辅助读取文本和内容条目将不能修改。`
         : actionTarget?.kind === 'submit_review'
           ? `确认将“${actionTarget?.version.version_label || ''}”提交复核。提交后需登记复核结果，复核通过后才能发布。`
           : actionTarget?.kind === 'restore'
             ? `确认将“${actionTarget?.version.version_label || ''}”恢复为当前使用版本。现有当前版本将转为已归档，历史记录保持不变。`
             : actionTarget?.kind === 'discard'
-              ? `确认丢弃草稿“${actionTarget?.version.version_label || ''}”。丢弃后不能继续编辑或提交复核，但原文、处理结果和审计记录仍会保留。`
+              ? `确认丢弃草稿“${actionTarget?.version.version_label || ''}”。丢弃后不能继续编辑或提交复核，但原文、处理结果和操作记录仍会保留。`
               : `确认归档“${actionTarget?.version.version_label || ''}”。该版本不再供新评价方案选择，但历史引用仍会保留。`"
       :confirm-label="actionTarget?.kind === 'publish' ? '确认发布' : actionTarget?.kind === 'submit_review' ? '提交复核' : actionTarget?.kind === 'restore' ? '确认恢复' : actionTarget?.kind === 'discard' ? '确认丢弃' : '确认归档'"
       :danger="actionTarget?.kind === 'archive' || actionTarget?.kind === 'discard'"
@@ -950,10 +1014,10 @@ onMounted(() => load(true))
     />
     <CurriculumConfirmDialog
       :open="Boolean(standardStatusTarget)"
-      :title="standardStatusTarget?.is_active === false ? '启用课程标准主档' : '停用课程标准主档'"
+      :title="standardStatusTarget?.is_active === false ? '启用课程标准档案' : '停用课程标准档案'"
       :message="standardStatusTarget?.is_active === false
         ? `确认启用“${standardStatusTarget?.title || ''}”。启用后，教师可重新选择其当前发布版本作为评价依据。`
-        : `确认停用“${standardStatusTarget?.title || ''}”。停用后不再供教师新选择，但已有评价方案的历史引用和审计记录仍会保留。`"
+        : `确认停用“${standardStatusTarget?.title || ''}”。停用后不再供教师新选择，但已有评价方案的历史引用和操作记录仍会保留。`"
       :confirm-label="standardStatusTarget?.is_active === false ? '确认启用' : '确认停用'"
       :danger="standardStatusTarget?.is_active !== false"
       :loading="actionBusy"
@@ -986,48 +1050,96 @@ onMounted(() => load(true))
   align-items: center;
 }
 
-.curriculum-principle {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  border: 1px solid #bfdbfe;
-  border-radius: 8px;
-  padding: 10px 14px;
-  background: #f8fbff;
+.curriculum-reading-guide {
+  overflow: hidden;
+  border: 1px solid #c8d2cb;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 14px 38px rgba(31, 55, 48, .04);
 }
 
-.curriculum-principle > strong {
-  flex: 0 0 auto;
-  color: #1e3a8a;
+.curriculum-reading-guide > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px 15px;
+  border-bottom: 1px solid #d7ded8;
+  background: #f5f7f4;
 }
 
-.curriculum-principle ol {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.curriculum-reading-guide > header > div {
+  display: grid;
+  gap: 5px;
+}
+
+.curriculum-reading-guide > header strong {
+  color: #173a34;
+  font-family: "STRATA WenKai UI", "STKaiti", "KaiTi", serif;
+  font-size: 19px;
+}
+
+.curriculum-reading-guide > header p,
+.curriculum-reading-guide > header > span {
   margin: 0;
-  padding: 0;
-  list-style: none;
+  color: #687872;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.curriculum-principle li {
+.curriculum-reading-guide > header > span {
+  flex: 0 0 auto;
+  color: #9a3d31;
+  font-weight: 700;
+}
+
+.curriculum-reading-guide dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+}
+
+.curriculum-reading-guide dl > div {
+  min-width: 0;
+  padding: 18px 20px 20px;
+  border-right: 1px solid #dfe5e0;
+}
+
+.curriculum-reading-guide dl > div:last-child {
+  border-right: 0;
+}
+
+.curriculum-reading-guide dt {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #1d4ed8;
-  font-size: 12px;
+  color: #203b34;
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.curriculum-principle i {
-  color: #93a4bd;
-  font-style: normal;
+.curriculum-reading-guide dt svg {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  color: #315b53;
+  stroke-width: 1.55;
 }
 
-.curriculum-principle p {
-  margin: 0 0 0 auto;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: right;
+.curriculum-reading-guide dd {
+  margin: 9px 0 0;
+  color: #687872;
+  font-size: 11px;
+  line-height: 1.72;
+}
+
+.curriculum-reading-guide > footer {
+  padding: 11px 20px;
+  border-top: 1px solid #d7ded8;
+  color: #68544f;
+  background: #fbf5f2;
+  font-size: 11px;
+  line-height: 1.65;
 }
 
 .curriculum-summary {
@@ -1035,7 +1147,7 @@ onMounted(() => load(true))
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 16px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 4px;
   background: #fff;
 }
 
@@ -1083,7 +1195,7 @@ onMounted(() => load(true))
 }
 
 .curriculum-section-tabs button:hover {
-  background: #f8fafc;
+  background: #f5f7f4;
 }
 
 .curriculum-section-tabs button.active {
@@ -1099,7 +1211,7 @@ onMounted(() => load(true))
 }
 
 .curriculum-section-panel:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, .28);
+  outline: 3px solid rgba(181, 74, 58, .28);
   outline-offset: 3px;
 }
 
@@ -1127,7 +1239,7 @@ onMounted(() => load(true))
 
 .curriculum-list {
   border-right: 1px solid var(--line);
-  background: #f8fafc;
+  background: #f5f7f4;
 }
 
 .curriculum-list > button {
@@ -1178,8 +1290,8 @@ onMounted(() => load(true))
 }
 
 .curriculum-list-heading .is-draft {
-  background: #f1f5f9;
-  color: #64748b;
+  background: #edf1ed;
+  color: #687872;
 }
 
 .curriculum-list-heading .is-inactive {
@@ -1223,7 +1335,7 @@ onMounted(() => load(true))
 
 .curriculum-list-pagination button:disabled,
 .curriculum-node-pagination button:disabled {
-  color: #94a3b8;
+  color: #89958f;
   cursor: not-allowed;
 }
 
@@ -1290,7 +1402,7 @@ onMounted(() => load(true))
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   padding: 10px 20px;
-  background: #f8fafc;
+  background: #f5f7f4;
 }
 
 .curriculum-version-strip button {
@@ -1309,7 +1421,7 @@ onMounted(() => load(true))
 
 .curriculum-version-strip button.active {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, .12);
+  box-shadow: 0 0 0 2px rgba(49, 91, 83, .14);
 }
 
 .curriculum-version-strip small {
@@ -1342,8 +1454,8 @@ onMounted(() => load(true))
   min-height: 25px;
   border-radius: 999px;
   padding: 0 8px;
-  background: #f1f5f9;
-  color: #475569;
+  background: #edf1ed;
+  color: #53665f;
   font-size: 12px;
   font-weight: 600;
 }
@@ -1364,19 +1476,19 @@ onMounted(() => load(true))
 }
 
 .curriculum-status.status-reviewed {
-  background: #e0e7ff;
-  color: #3730a3;
+  background: #edf3ef;
+  color: #315b53;
 }
 
 .curriculum-status.status-archived {
-  background: #f1f5f9;
-  color: #64748b;
+  background: #edf1ed;
+  color: #687872;
 }
 
 .curriculum-status.status-discarded {
-  border-color: #cbd5e1;
-  background: #f1f5f9;
-  color: #475569;
+  border-color: #c8d2cb;
+  background: #edf1ed;
+  color: #53665f;
 }
 
 .curriculum-version-overview dl {
@@ -1387,7 +1499,7 @@ onMounted(() => load(true))
 
 .curriculum-governance-details {
   border-bottom: 1px solid var(--line);
-  background: #fbfdff;
+  background: #fafbf9;
 }
 
 .curriculum-governance-details > summary {
@@ -1423,8 +1535,8 @@ onMounted(() => load(true))
 .curriculum-governance-indicators em {
   border-radius: 999px;
   padding: 5px 9px;
-  background: #eef2f7;
-  color: #475569;
+  background: #edf1ed;
+  color: #53665f;
   font-size: 12px;
   font-style: normal;
   white-space: nowrap;
@@ -1439,7 +1551,7 @@ onMounted(() => load(true))
   margin: 0;
   border-bottom: 1px solid var(--line);
   padding: 10px 20px;
-  background: #f8fafc;
+  background: #f5f7f4;
   color: var(--muted);
   line-height: 1.55;
 }
@@ -1456,13 +1568,13 @@ onMounted(() => load(true))
   gap: 8px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--line);
-  background: #fbfdff;
+  background: #fafbf9;
 }
 
 .curriculum-page-quality > div {
   display: grid;
   gap: 3px;
-  border-left: 3px solid #cbd5e1;
+  border-left: 3px solid #8fa39a;
   padding: 6px 10px;
 }
 
@@ -1536,7 +1648,7 @@ onMounted(() => load(true))
   gap: 8px;
   padding: 14px 20px;
   border-bottom: 1px solid var(--line);
-  background: #fbfdff;
+  background: #fafbf9;
 }
 
 .curriculum-coverage > div {
@@ -1644,7 +1756,7 @@ onMounted(() => load(true))
 
 .curriculum-node-type-tabs button.active {
   border-color: var(--primary);
-  background: #eff6ff;
+  background: #edf3ef;
   color: var(--primary-dark);
   font-weight: 700;
 }
@@ -1656,7 +1768,7 @@ onMounted(() => load(true))
   height: 21px;
   margin-left: 4px;
   border-radius: 999px;
-  background: #e8f1ff;
+  background: #edf3ef;
   font-size: 11px;
 }
 
@@ -1675,7 +1787,7 @@ onMounted(() => load(true))
   height: 22px;
   margin-left: 5px;
   border-radius: 999px;
-  background: #e8f1ff;
+  background: #edf3ef;
   color: var(--primary-dark);
   font-size: 12px;
 }
@@ -1763,7 +1875,7 @@ onMounted(() => load(true))
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 18px;
-  background: #fbfdff;
+  background: #fafbf9;
   color: var(--text);
   font-family: inherit;
   font-size: 14px;
@@ -1774,10 +1886,12 @@ onMounted(() => load(true))
 
 .curriculum-text-preview-note {
   margin: 10px 0 0;
-  border-left: 3px solid #93c5fd;
+  border: 1px solid #c8d2cb;
+  border-left: 3px solid #315b53;
+  border-radius: 3px;
   padding: 9px 12px;
-  background: #eff6ff;
-  color: #475569;
+  background: #edf3ef;
+  color: #315b53;
   font-size: 12px;
   line-height: 1.6;
 }
@@ -1813,7 +1927,7 @@ onMounted(() => load(true))
   display: grid;
   gap: 10px;
   margin: 0 0 0 7px;
-  border-left: 2px solid #dbe7f5;
+  border-left: 2px solid #d7ded8;
   padding: 0 0 0 18px;
   list-style: none;
 }
@@ -1828,7 +1942,7 @@ onMounted(() => load(true))
   left: -25px;
   width: 12px;
   height: 12px;
-  border: 3px solid #dbeafe;
+  border: 3px solid #c8d2cb;
   border-radius: 999px;
   background: var(--primary);
 }
@@ -1887,7 +2001,7 @@ onMounted(() => load(true))
   overflow: auto;
   border-top: 1px solid var(--line);
   padding: 12px 13px;
-  background: #f8fafc;
+  background: #f5f7f4;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   line-height: 1.6;
@@ -1917,7 +2031,7 @@ onMounted(() => load(true))
   .curriculum-node-pagination button,
   .curriculum-audit-timeline summary
 ):focus-visible {
-  outline: 3px solid rgba(37, 99, 235, .32);
+  outline: 3px solid rgba(181, 74, 58, .3);
   outline-offset: 2px;
 }
 
@@ -1936,14 +2050,16 @@ onMounted(() => load(true))
 }
 
 @media (max-width: 800px) {
-  .curriculum-principle {
-    flex-wrap: wrap;
+  .curriculum-reading-guide dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .curriculum-principle p {
-    flex-basis: 100%;
-    margin-left: 0;
-    text-align: left;
+  .curriculum-reading-guide dl > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .curriculum-reading-guide dl > div:nth-child(-n + 2) {
+    border-bottom: 1px solid #dfe5e0;
   }
 
   .curriculum-summary {
@@ -1992,7 +2108,7 @@ onMounted(() => load(true))
     border: 0;
     border-bottom: 1px solid var(--line);
     padding: 0 16px;
-    background: #f8fafc;
+    background: #f5f7f4;
     color: var(--primary-dark);
     font-weight: 700;
     cursor: pointer;
@@ -2019,18 +2135,25 @@ onMounted(() => load(true))
     flex-direction: column;
   }
 
-  .curriculum-principle {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
+  .curriculum-reading-guide > header {
+    display: grid;
   }
 
-  .curriculum-principle ol {
-    flex-wrap: wrap;
+  .curriculum-reading-guide > header > span {
+    order: -1;
   }
 
-  .curriculum-principle p {
-    margin: 0;
+  .curriculum-reading-guide dl {
+    grid-template-columns: 1fr;
+  }
+
+  .curriculum-reading-guide dl > div {
+    border-right: 0;
+    border-bottom: 1px solid #dfe5e0;
+  }
+
+  .curriculum-reading-guide dl > div:last-child {
+    border-bottom: 0;
   }
 
   .curriculum-coverage {

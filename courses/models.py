@@ -58,6 +58,21 @@ def resource_extra_file_upload_path(instance, filename: str) -> str:
     return f"resources/school_{school_id}/resource_{resource_id}/extras/{filename}"
 
 
+def resource_document_version_upload_path(instance, filename: str) -> str:
+    resource = instance.resource
+    school_id = resource.owner.school_id or "unknown"
+    resource_id = resource.id or "unknown"
+    suffix = (
+        str(filename or "").rsplit(".", 1)[-1].lower()
+        if "." in str(filename or "")
+        else "bin"
+    )
+    return (
+        f"resources/school_{school_id}/resource_{resource_id}/versions/"
+        f"version_{instance.version_no}.{suffix}"
+    )
+
+
 class Subject(models.Model):
     school = models.ForeignKey(
         "school.School", on_delete=models.CASCADE, related_name="subjects"
@@ -582,6 +597,51 @@ class Resource(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+
+class ResourceDocumentVersion(models.Model):
+    class Source(models.TextChoices):
+        INITIAL = "initial", "初始文件"
+        ONLYOFFICE_CALLBACK = "onlyoffice_callback", "OnlyOffice 保存"
+
+    resource = models.ForeignKey(
+        Resource,
+        on_delete=models.CASCADE,
+        related_name="document_versions",
+    )
+    version_no = models.PositiveIntegerField()
+    file = models.FileField(upload_to=resource_document_version_upload_path)
+    file_sha256 = models.CharField(max_length=64)
+    file_size = models.PositiveBigIntegerField(default=0)
+    source = models.CharField(max_length=32, choices=Source.choices)
+    callback_status = models.PositiveSmallIntegerField(null=True, blank=True)
+    callback_key = models.CharField(max_length=255, blank=True)
+    verified_editor_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["resource", "version_no"],
+                name="uniq_resource_document_version",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["resource", "created_at"]),
+            models.Index(fields=["file_sha256"]),
+        ]
+        ordering = ["resource_id", "version_no"]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("资源文档版本是不可变记录，不能原地修改。")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("资源文档版本不能单独删除。")
+
+    def __str__(self) -> str:
+        return f"{self.resource} v{self.version_no}"
 
 
 class ResourceFile(models.Model):

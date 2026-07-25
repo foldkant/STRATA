@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ApiError } from '@/api/client'
 import {
   cancelCurriculumProcessingJob,
   createCurriculumProcessingJob,
   getCurriculumProcessingJobs,
+  resumeCurriculumProcessingJob,
   retryCurriculumProcessingJob,
   type CurriculumProcessingJob,
   type CurriculumProcessingJobMode,
@@ -40,13 +41,13 @@ const fallbackStatuses: CurriculumProcessingJobsIndex['statuses'] = [
   { value: 'cancelled', label: '已取消' }
 ]
 const fallbackModes: CurriculumProcessingJobsIndex['modes'] = [
-  { value: 'auto', label: '自动选择文本提取方式' },
-  { value: 'ocr', label: '逐页 OCR 识别' }
+  { value: 'auto', label: '自动选择原文读取方式' },
+  { value: 'ocr', label: '逐页扫描文字识别' }
 ]
 const fallbackPriorities: CurriculumProcessingJobsIndex['priorities'] = [
-  { value: 'low', label: '低优先级（后台慢速）' },
-  { value: 'normal', label: '普通优先级' },
-  { value: 'high', label: '高优先级' }
+  { value: 'low', label: '批量处理（速度较慢）' },
+  { value: 'normal', label: '正常处理' },
+  { value: 'high', label: '优先处理' }
 ]
 
 const jobs = ref<CurriculumProcessingJob[]>([])
@@ -66,10 +67,12 @@ const cancelTarget = ref<CurriculumProcessingJob | null>(null)
 const feedback = ref('')
 const feedbackTone = ref<'success' | 'error' | 'info'>('info')
 const announcement = ref('')
+const highlightedJobId = ref<number | null>(null)
 let pollTimer: number | null = null
 let unmounted = false
 let requestInFlight = false
 let refreshRequested = false
+let initialScopeResolved = false
 let previousStatuses = new Map<number, CurriculumProcessingJobStatus>()
 
 function createdTimestamp(job: CurriculumProcessingJob) {
@@ -98,14 +101,26 @@ const activeJobs = computed(() => {
 
 const historyJobs = computed(() => newestJobs.value.filter((job) => !activeStatuses.has(job.status)))
 
+const prioritizedActiveJobs = computed(() => {
+  const highlighted = activeJobs.value.find((job) => job.id === highlightedJobId.value)
+  if (!highlighted) return activeJobs.value
+  const leading = activeJobs.value.filter((job) => (
+    job.id !== highlighted.id && ['running', 'cancelling'].includes(job.status)
+  ))
+  const remaining = activeJobs.value.filter((job) => (
+    job.id !== highlighted.id && !['running', 'cancelling'].includes(job.status)
+  ))
+  return [...leading, highlighted, ...remaining]
+})
+
 const scopedJobs = computed(() => {
   if (taskScope.value === 'overview') {
     return [
-      ...activeJobs.value.slice(0, OVERVIEW_ACTIVE_LIMIT),
+      ...prioritizedActiveJobs.value.slice(0, OVERVIEW_ACTIVE_LIMIT),
       ...historyJobs.value.slice(0, OVERVIEW_HISTORY_LIMIT)
     ]
   }
-  if (taskScope.value === 'active') return activeJobs.value
+  if (taskScope.value === 'active') return prioritizedActiveJobs.value
   if (taskScope.value === 'history') return historyJobs.value
   if (taskScope.value === 'all') return newestJobs.value
   return newestJobs.value.filter((job) => job.status === taskScope.value)
@@ -125,10 +140,13 @@ const scopeSummary = computed(() => {
   if (taskScope.value === 'overview') {
     const activeShown = Math.min(activeJobs.value.length, OVERVIEW_ACTIVE_LIMIT)
     const historyShown = Math.min(historyJobs.value.length, OVERVIEW_HISTORY_LIMIT)
-    return `概览显示 ${activeShown + historyShown} 项：${activeShown} 个活动任务、${historyShown} 条最近记录`
+    return `概览显示 ${activeShown + historyShown} 项：${activeShown} 个待处理任务、${historyShown} 条最近记录`
   }
   if (!scopedJobs.value.length) return '当前筛选范围内没有任务'
-  return `显示前 ${visibleJobs.value.length} 项，共 ${scopedJobs.value.length} 项`
+  if (taskScope.value === 'active') {
+    return `当前共有 ${scopedJobs.value.length} 个待处理任务，已显示 ${visibleJobs.value.length} 个`
+  }
+  return `当前共有 ${scopedJobs.value.length} 项，已显示 ${visibleJobs.value.length} 项`
 })
 
 watch(taskScope, () => {
@@ -147,6 +165,29 @@ function collapseJobs() {
   visibleCount.value = TASK_PAGE_SIZE
 }
 
+function activeReplacementFor(job: CurriculumProcessingJob) {
+  return activeJobs.value.find((candidate) => (
+    candidate.version === job.version && candidate.id !== job.id
+  )) || null
+}
+
+function canRetryJob(job: CurriculumProcessingJob) {
+  return job.can_retry && !activeReplacementFor(job)
+}
+
+function activeReplacementStatusLabel(job: CurriculumProcessingJob) {
+  const replacement = activeReplacementFor(job)
+  return replacement ? statusLabel(replacement) : ''
+}
+
+async function revealJob(jobId: number) {
+  highlightedJobId.value = jobId
+  taskScope.value = 'active'
+  visibleCount.value = TASK_PAGE_SIZE
+  await nextTick()
+  document.getElementById(`curriculum-processing-job-${jobId}`)?.focus({ preventScroll: false })
+}
+
 const activeJobForSelectedVersion = computed(() => {
   if (!props.selectedVersion) return null
   return jobs.value.find((job) => (
@@ -162,8 +203,24 @@ const summaryItems = computed(() => {
     { label: '正在处理', value: source?.running || 0, tone: 'running' },
     { label: '等待处理', value: source?.queued || 0, tone: 'queued' },
     { label: '处理成功', value: source?.succeeded || 0, tone: 'succeeded' },
-    { label: '需要处理', value: source?.failed || 0, tone: 'failed' }
+    { label: '历史失败', value: source?.failed || 0, tone: 'failed' }
   ]
+})
+
+const selectedVersionSubmitDisabled = computed(() => {
+  if (!props.selectedVersion || !selectedVersionIsDraft.value || creating.value || actingJobId.value !== null) return true
+  return Boolean(activeJobForSelectedVersion.value && activeJobForSelectedVersion.value.status !== 'queued')
+})
+
+const selectedVersionSubmitLabel = computed(() => {
+  if (creating.value) return '正在提交'
+  if (!selectedVersionIsDraft.value && props.selectedVersion) return '该版本已冻结'
+  if (activeJobForSelectedVersion.value?.status === 'queued') {
+    return actingJobId.value === activeJobForSelectedVersion.value.id ? '正在继续处理' : '继续处理'
+  }
+  if (activeJobForSelectedVersion.value?.status === 'running') return '正在处理原文'
+  if (activeJobForSelectedVersion.value?.status === 'cancelling') return '正在取消任务'
+  return '开始处理原文'
 })
 
 function clearPollTimer() {
@@ -212,9 +269,13 @@ async function loadJobs(silent = false) {
     statuses.value = result.statuses.length ? result.statuses : fallbackStatuses
     modes.value = result.modes.length ? result.modes : fallbackModes
     priorities.value = result.priorities.length ? result.priorities : fallbackPriorities
+    if (!initialScopeResolved) {
+      initialScopeResolved = true
+      taskScope.value = result.summary.active ? 'active' : 'history'
+    }
   } catch (error) {
     if (unmounted) return
-    feedback.value = error instanceof ApiError ? error.message : '后台任务列表加载失败，请稍后重试。'
+    feedback.value = error instanceof ApiError ? error.message : '原文处理记录加载失败，请稍后重试。'
     feedbackTone.value = 'error'
   } finally {
     requestInFlight = false
@@ -241,13 +302,14 @@ async function createJob() {
       mode: mode.value,
       priority: priority.value
     })
-    feedback.value = `“${job.standard_title} ${job.version_label}”已加入后台处理队列。`
+    feedback.value = `“${job.standard_title} ${job.version_label}”已提交处理。`
     feedbackTone.value = 'success'
     announcement.value = feedback.value
     emit('changed', job)
     await loadJobs(true)
+    await revealJob(job.id)
   } catch (error) {
-    feedback.value = error instanceof ApiError ? error.message : '后台任务创建失败，请检查版本状态后重试。'
+    feedback.value = error instanceof ApiError ? error.message : '原文处理任务未能创建，请检查版本状态后重试。'
     feedbackTone.value = 'error'
   } finally {
     creating.value = false
@@ -255,18 +317,50 @@ async function createJob() {
   }
 }
 
+async function submitSelectedVersionJob() {
+  const activeJob = activeJobForSelectedVersion.value
+  if (activeJob?.status === 'queued') {
+    await resumeJob(activeJob)
+    return
+  }
+  await createJob()
+}
+
+async function resumeJob(job: CurriculumProcessingJob) {
+  if (!job.can_resume || actingJobId.value !== null) return
+  actingJobId.value = job.id
+  feedback.value = ''
+  clearPollTimer()
+  try {
+    const updated = await resumeCurriculumProcessingJob(job.id)
+    feedback.value = `“${job.standard_title} ${job.version_label}”已重新提交，将继续处理。`
+    feedbackTone.value = 'success'
+    announcement.value = feedback.value
+    emit('changed', updated)
+    await loadJobs(true)
+    await revealJob(updated.id)
+  } catch (error) {
+    feedback.value = error instanceof ApiError ? error.message : '任务未能继续处理，请检查系统服务后重试。'
+    feedbackTone.value = 'error'
+  } finally {
+    actingJobId.value = null
+    schedulePoll()
+  }
+}
+
 async function retryJob(job: CurriculumProcessingJob) {
-  if (!job.can_retry || actingJobId.value !== null) return
+  if (!canRetryJob(job) || actingJobId.value !== null) return
   actingJobId.value = job.id
   feedback.value = ''
   clearPollTimer()
   try {
     const replacement = await retryCurriculumProcessingJob(job.id)
-    feedback.value = `“${job.standard_title} ${job.version_label}”已重新加入队列。`
+    feedback.value = `“${job.standard_title} ${job.version_label}”已重新提交处理。`
     feedbackTone.value = 'success'
     announcement.value = feedback.value
     emit('changed', replacement)
     await loadJobs(true)
+    await revealJob(replacement.id)
   } catch (error) {
     feedback.value = error instanceof ApiError ? error.message : '任务重试失败，请根据错误信息修复后再试。'
     feedbackTone.value = 'error'
@@ -327,18 +421,18 @@ function displayResourceValue(value: unknown) {
 
 function resourceLabel(job: CurriculumProcessingJob) {
   const labels: Record<string, string> = {
-    queue: '队列',
-    worker_concurrency: '并发',
-    concurrency: '并发',
-    cpu_cores: 'CPU 核心',
-    cpu_affinity: 'CPU 核心',
+    queue: '处理通道',
+    worker_concurrency: '同时处理数量',
+    concurrency: '同时处理数量',
+    cpu_cores: '使用的处理核心',
+    cpu_affinity: '使用的处理核心',
     priority_class: '系统优先级',
     memory_limit: '内存上限',
     one_pdf_per_task: '每份 PDF 独立任务',
     result_state: '状态记录'
   }
   const entries = Object.entries(job.resource_limit || {})
-  if (!entries.length) return '由后台队列统一限制'
+  if (!entries.length) return '由系统统一安排'
   return entries.map(([key, value]) => {
     const displayValue = key === 'result_state' && value === 'database' ? '数据库' : displayResourceValue(value)
     return `${labels[key] || key}：${displayValue}`
@@ -359,33 +453,34 @@ onBeforeUnmount(() => {
   <section class="panel curriculum-task-center" aria-labelledby="curriculum-task-center-title" :aria-busy="loading || polling">
     <header class="task-center-heading">
       <div>
-        <h2 id="curriculum-task-center-title">后台任务中心</h2>
-        <p>每个课程标准版本独立排队。PDF 解析、OCR 和结构化处理在后台逐个完成，不占用管理页面。</p>
+        <h2 id="curriculum-task-center-title">课程标准原文处理</h2>
+        <p>系统逐份读取课程标准 PDF，必要时进行扫描文字识别，并生成便于检索和 AI 辅助读取的文本。离开本页面不会中断处理。</p>
       </div>
       <button class="secondary-button" type="button" :disabled="loading || polling" @click="loadJobs()">
         {{ loading ? '加载中' : polling ? '更新中' : '刷新状态' }}
       </button>
     </header>
 
-    <div class="task-summary" aria-label="后台任务概况">
+    <div class="task-summary" aria-label="课程标准原文处理概况">
       <article v-for="item in summaryItems" :key="item.label" :class="`tone-${item.tone}`">
         <span>{{ item.label }}</span>
         <strong>{{ item.value }}</strong>
       </article>
       <p>
-        <strong>{{ summary?.active ? '后台队列正在工作' : '当前没有运行中的任务' }}</strong>
-        <span>{{ summary?.active ? '仅在存在等待、运行或取消中任务时自动刷新。' : '页面不会继续轮询，避免无效请求。' }}</span>
+        <strong>{{ summary?.active ? '当前有等待或正在处理的课程标准' : '当前没有待处理的课程标准' }}</strong>
+        <span>{{ summary?.active ? '页面会自动更新进度。等待时间过长时，可以使用“继续处理”再次提交。' : '没有处理任务时，页面不会反复刷新。' }}</span>
       </p>
     </div>
 
-    <form class="task-create-form" @submit.prevent="createJob">
+    <form class="task-create-form" @submit.prevent="submitSelectedVersionJob">
       <div class="task-version-context">
         <span>待处理版本</span>
         <strong v-if="selectedVersion">{{ selectedVersion.official_title || selectedVersion.title }} · {{ selectedVersion.version_label }}</strong>
-        <strong v-else>请先在“课标档案”中选择一个课程标准版本</strong>
-        <small v-if="selectedVersion && !selectedVersionIsDraft">只有草稿版本可以创建后台文本处理任务，已提交或已发布版本保持冻结。</small>
+        <strong v-else>请先在“课程标准档案”中选择一个版本</strong>
+        <small v-if="selectedVersion && !selectedVersionIsDraft">只有草稿版本可以重新处理原文。已提交复核或已经发布的版本不能修改。</small>
+        <small v-else-if="activeJobForSelectedVersion?.status === 'queued'">该版本正在等待处理。如果长时间没有进度，可点击“继续处理”再次提交，原有记录仍会保留。</small>
         <small v-else-if="activeJobForSelectedVersion">该版本已有{{ statusLabel(activeJobForSelectedVersion) }}任务，无需重复创建。</small>
-        <small v-else>建议批量迁移使用低优先级；紧急重处理再提高优先级。</small>
+        <small v-else>批量导入时建议选择“批量处理”；需要尽快完成单份课标时再选择“优先处理”。</small>
       </div>
       <label>
         <span>处理方式</span>
@@ -394,7 +489,7 @@ onBeforeUnmount(() => {
         </AppSelect>
       </label>
       <label>
-        <span>任务优先级</span>
+        <span>处理顺序</span>
         <AppSelect v-model="priority" :disabled="creating">
           <option v-for="item in priorities" :key="item.value" :value="item.value">{{ item.label }}</option>
         </AppSelect>
@@ -402,9 +497,9 @@ onBeforeUnmount(() => {
       <button
         class="primary-button"
         type="submit"
-        :disabled="!selectedVersion || !selectedVersionIsDraft || creating || Boolean(activeJobForSelectedVersion)"
+        :disabled="selectedVersionSubmitDisabled"
       >
-        {{ creating ? '正在加入队列' : !selectedVersionIsDraft && selectedVersion ? '该版本已冻结' : activeJobForSelectedVersion ? '该版本已排队' : '加入后台队列' }}
+        {{ selectedVersionSubmitLabel }}
       </button>
     </form>
 
@@ -416,9 +511,9 @@ onBeforeUnmount(() => {
     <div class="task-list-toolbar">
       <label>
         <span>显示范围</span>
-        <AppSelect v-model="taskScope" aria-label="筛选后台任务显示范围">
+        <AppSelect v-model="taskScope" aria-label="筛选原文处理记录显示范围">
           <option value="overview">当前任务与最近记录</option>
-          <option value="active">全部活动任务</option>
+          <option value="active">全部待处理任务</option>
           <option value="history">全部历史记录</option>
           <option value="all">全部任务</option>
           <option v-for="item in statuses" :key="item.value" :value="item.value">{{ item.label }}</option>
@@ -431,7 +526,14 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="task-list" aria-live="off">
-      <article v-for="job in visibleJobs" :key="job.id" class="task-card" :class="`status-${job.status}`">
+      <article
+        v-for="job in visibleJobs"
+        :id="`curriculum-processing-job-${job.id}`"
+        :key="job.id"
+        class="task-card"
+        :class="[`status-${job.status}`, { 'is-highlighted': highlightedJobId === job.id }]"
+        tabindex="-1"
+      >
         <header>
           <div>
             <span>{{ job.subject_name }} · {{ job.version_label }}</span>
@@ -444,7 +546,7 @@ onBeforeUnmount(() => {
 
         <div class="task-progress-block">
           <div>
-            <strong>{{ job.stage_label || '等待后台处理' }}</strong>
+            <strong>{{ job.stage_label || '等待处理原文' }}</strong>
             <span>{{ job.progress_current }} / {{ job.progress_total || '?' }} 页 · {{ progressValue(job) }}%</span>
           </div>
           <progress
@@ -457,7 +559,7 @@ onBeforeUnmount(() => {
         <details class="task-details">
           <summary>
             <span>任务详情</span>
-            <small>处理方式、时间与资源限制</small>
+            <small>处理方式、时间和系统安排</small>
           </summary>
           <dl>
             <div><dt>处理方式</dt><dd>{{ job.mode_label || choiceLabel(modes, job.mode) }}</dd></div>
@@ -466,25 +568,35 @@ onBeforeUnmount(() => {
             <div><dt>创建时间</dt><dd>{{ formatDate(job.created_at) }}</dd></div>
             <div><dt>开始时间</dt><dd>{{ formatDate(job.started_at) }}</dd></div>
             <div><dt>完成时间</dt><dd>{{ formatDate(job.finished_at) }}</dd></div>
-            <div class="task-resource"><dt>资源限制</dt><dd>{{ resourceLabel(job) }}</dd></div>
+            <div class="task-resource"><dt>系统安排</dt><dd>{{ resourceLabel(job) }}</dd></div>
             <div v-if="job.retry_count"><dt>重试次数</dt><dd>{{ job.retry_count }}</dd></div>
           </dl>
         </details>
 
         <div v-if="job.status === 'failed'" class="task-error" role="alert">
           <strong>任务未完成{{ job.error_code ? `（${job.error_code}）` : '' }}</strong>
-          <p>{{ job.error_message || '后台处理发生异常，请检查原 PDF、服务状态及错误日志后重试。' }}</p>
-          <small>修复原因后可使用“重新排队”，原课程标准版本和审计记录不会被删除。</small>
+          <p>{{ job.error_message || '原文处理未完成，请检查 PDF 文件和系统服务后重试。' }}</p>
+          <small>处理问题解决后可使用“重新提交”，原课程标准版本和操作记录不会被删除。</small>
         </div>
 
-        <footer v-if="job.can_cancel || job.can_retry">
+        <footer v-if="job.can_cancel || canRetryJob(job) || job.can_resume || activeReplacementFor(job)">
+          <p v-if="activeReplacementFor(job)" class="task-retry-state" role="status">
+            已重新提交，当前任务为“{{ activeReplacementStatusLabel(job) }}”。取消记录保留用于过程追溯。
+          </p>
           <button
-            v-if="job.can_retry"
+            v-if="job.can_resume"
+            class="secondary-button"
+            type="button"
+            :disabled="actingJobId !== null"
+            @click="resumeJob(job)"
+          >{{ actingJobId === job.id ? '正在继续处理' : '继续处理' }}</button>
+          <button
+            v-if="canRetryJob(job)"
             class="secondary-button"
             type="button"
             :disabled="actingJobId !== null"
             @click="retryJob(job)"
-          >{{ actingJobId === job.id ? '正在重新排队' : '重新排队' }}</button>
+          >{{ actingJobId === job.id ? '正在重新提交' : '重新提交' }}</button>
           <button
             v-if="job.can_cancel"
             class="danger-outline-button"
@@ -496,15 +608,15 @@ onBeforeUnmount(() => {
       </article>
 
       <div v-if="!visibleJobs.length" class="task-empty">
-        <strong>{{ loading ? '正在加载后台任务' : '没有符合条件的后台任务' }}</strong>
-        <p>{{ loading ? '任务状态加载完成后会自动显示。' : '选择课程标准版本并加入队列后，可在这里查看逐页进度。' }}</p>
+        <strong>{{ loading ? '正在加载原文处理记录' : '没有符合条件的原文处理记录' }}</strong>
+        <p>{{ loading ? '加载完成后会自动显示。' : '选择课程标准版本并开始处理后，可以在这里查看逐页进度。' }}</p>
       </div>
     </div>
 
     <nav
       v-if="taskScope === 'overview' ? hiddenActiveJobs || hiddenHistoryJobs : scopedJobs.length > TASK_PAGE_SIZE"
       class="task-list-navigation"
-      aria-label="后台任务列表翻页"
+      aria-label="原文处理记录翻页"
     >
       <p v-if="taskScope === 'overview'">概览保持精简；可按任务阶段查看完整记录。</p>
       <p v-else>已显示 {{ visibleJobs.length }} / {{ scopedJobs.length }} 项</p>
@@ -516,7 +628,7 @@ onBeforeUnmount(() => {
             class="secondary-button"
             data-task-scope="active"
             @click="selectTaskScope('active')"
-          >查看全部活动任务（{{ activeJobs.length }}）</button>
+          >查看全部待处理任务（{{ activeJobs.length }}）</button>
           <button
             v-if="hiddenHistoryJobs"
             type="button"
@@ -545,8 +657,8 @@ onBeforeUnmount(() => {
 
     <CurriculumConfirmDialog
       :open="Boolean(cancelTarget)"
-      title="取消后台处理任务"
-      :message="`确认取消“${cancelTarget?.standard_title || ''} ${cancelTarget?.version_label || ''}”的后台处理？已安全写入的逐页结果会保留，任务停止后可重新排队。`"
+      title="取消课程标准原文处理"
+      :message="`确认取消“${cancelTarget?.standard_title || ''} ${cancelTarget?.version_label || ''}”的原文处理？已经保存的逐页结果会保留，停止后可以重新提交。`"
       confirm-label="确认取消任务"
       :danger="true"
       :loading="actingJobId !== null"
@@ -610,7 +722,7 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(4, minmax(110px, 1fr)) minmax(250px, 1.8fr);
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--primary) 3%, #fff);
 }
 
 .task-summary article,
@@ -626,7 +738,7 @@ onBeforeUnmount(() => {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  border-left: 3px solid #94a3b8;
+  border-left: 3px solid color-mix(in srgb, var(--primary) 38%, var(--line));
 }
 
 .task-summary article.tone-running { border-left-color: var(--primary); }
@@ -693,12 +805,15 @@ onBeforeUnmount(() => {
 
 .task-feedback.tone-success { background: var(--success-bg); color: var(--success-text); }
 .task-feedback.tone-error { background: #fef2f2; color: var(--danger); }
-.task-feedback.tone-info { background: #eff6ff; color: var(--primary-dark); }
+.task-feedback.tone-info {
+  background: color-mix(in srgb, var(--primary) 7%, #fff);
+  color: var(--primary-dark);
+}
 
 .task-list-toolbar {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--primary) 3%, #fff);
 }
 
 .task-list-toolbar label {
@@ -724,14 +839,14 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
   gap: 12px;
   padding: 16px 20px 20px;
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--primary) 3%, #fff);
 }
 
 .task-card {
   min-width: 0;
   align-self: start;
   border: 1px solid var(--line);
-  border-left: 4px solid #94a3b8;
+  border-left: 4px solid color-mix(in srgb, var(--primary) 38%, var(--line));
   border-radius: 8px;
   background: #fff;
   overflow: hidden;
@@ -742,6 +857,16 @@ onBeforeUnmount(() => {
 .task-card.status-failed { border-left-color: var(--danger); }
 .task-card.status-cancelling,
 .task-card.status-cancelled { border-left-color: #64748b; }
+
+.task-card.is-highlighted {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.task-card:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
 
 .task-card > header {
   display: flex;
@@ -770,8 +895,8 @@ onBeforeUnmount(() => {
   gap: 6px;
   border-radius: 999px;
   padding: 0 9px;
-  background: #f1f5f9;
-  color: #475569;
+  background: color-mix(in srgb, var(--primary) 5%, #fff);
+  color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
@@ -783,7 +908,10 @@ onBeforeUnmount(() => {
   background: currentColor;
 }
 
-.task-status.status-running { background: #dbeafe; color: #1d4ed8; }
+.task-status.status-running {
+  background: color-mix(in srgb, var(--primary) 12%, #fff);
+  color: var(--primary-dark);
+}
 .task-status.status-succeeded { background: var(--success-bg); color: var(--success-text); }
 .task-status.status-failed { background: #fef2f2; color: var(--danger); }
 .task-status.status-queued { background: #fff7ed; color: #9a3412; }
@@ -855,7 +983,7 @@ onBeforeUnmount(() => {
 }
 
 .task-details summary:hover {
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--primary) 3%, #fff);
 }
 
 .task-details summary span {
@@ -920,6 +1048,13 @@ onBeforeUnmount(() => {
   padding: 10px 16px;
 }
 
+.task-retry-state {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--success-text);
+  line-height: 1.5;
+}
+
 .task-list-navigation {
   min-width: 0;
   display: flex;
@@ -974,7 +1109,7 @@ onBeforeUnmount(() => {
 button:focus-visible,
 :where(.task-details summary):focus-visible,
 :deep(.app-select:focus-within) {
-  outline: 3px solid rgba(37, 99, 235, .28);
+  outline: 3px solid color-mix(in srgb, var(--primary) 28%, transparent);
   outline-offset: 2px;
 }
 

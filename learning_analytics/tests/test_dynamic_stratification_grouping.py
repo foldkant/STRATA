@@ -1,6 +1,7 @@
 from datetime import timedelta
 from unittest.mock import patch
 
+from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -12,61 +13,47 @@ from courses.models import (
     ClassroomGroupCollaboration,
     ClassroomGroupMember,
     ClassroomSession,
-    Course,
     CourseClass,
     Lesson,
-    Subject,
 )
 from learning.models import (
     BandTransitionAudit,
     CommonQuestionSet,
     ContentBandPolicyVersion,
     StratificationDecision,
+    StudentLearningTargetStateVersion,
     StudentMasterySnapshot,
+    StudentMasteryTargetResult,
     StudentSubjectBand,
     TestAssessment,
     TestAttempt,
 )
-from learning.services.bands import build_content_band_candidate
-from learning.services.mastery import build_guarded_content_band_candidate
+from learning.services.bands import resolve_student_band
+from learning.services.mastery import (
+    build_guarded_content_band_candidate,
+    record_mastery_target_states,
+)
+from learning_analytics.services.evaluation import publish_plan
+from learning_analytics.tests import test_learning_target_versions as target_fixture
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 
 class DynamicStratificationAndGroupingTests(TestCase):
     def setUp(self):
-        self.school = School.objects.create(name="动态策略测试学校", code="DYNAMIC")
+        # Reuse a published curriculum-standard fixture so every formal
+        # content-band suggestion is backed by an exact, aligned target
+        # version instead of the pre-P4 score-only test shortcut.
+        target_fixture.LearningTargetVersionTests.setUp(self)
         self.class_group = ClassGroup.objects.create(
             school=self.school,
             name="高一1班",
             grade="高一",
         )
-        self.subject = Subject.objects.create(
-            school=self.school,
-            name="信息科技",
-            code="IT",
-        )
-        self.teacher = User.objects.create_user(
-            username="dynamic_teacher",
-            password="Teacher123!",
-            role=User.Role.TEACHER,
-            school=self.school,
-        )
-        self.school_admin = User.objects.create_user(
-            username="dynamic_school_admin",
-            password="Admin123!",
-            role=User.Role.SCHOOL_ADMIN,
-            school=self.school,
-        )
+        self.school_admin = self.admin
         TeachingAssignment.objects.create(
             school=self.school,
             class_group=self.class_group,
             teacher=self.teacher,
-        )
-        self.course = Course.objects.create(
-            subject=self.subject,
-            title="数据与计算",
-            teacher=self.teacher,
-            is_active=True,
         )
         CourseClass.objects.create(
             course=self.course,
@@ -88,6 +75,15 @@ class DynamicStratificationAndGroupingTests(TestCase):
             status=ClassroomSession.Status.RUNNING,
             started_at=timezone.now(),
         )
+        target_plan = target_fixture.LearningTargetVersionTests.create_plan(
+            self,
+            title="动态分层共同学习目标",
+            goal_code="IT_DYNAMIC_01",
+        )
+        self.target_version = (
+            publish_plan(target_plan, published_by=self.teacher)
+            .version.learning_target_versions.get(code="IT_DYNAMIC_01")
+        )
         self.profiles = []
         for index, layer in enumerate(("A", "A", "B", "B", "C", "C"), start=1):
             student = User.objects.create_user(
@@ -107,7 +103,17 @@ class DynamicStratificationAndGroupingTests(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(self.teacher)
 
-    def _mastery_snapshot(self, *, score, error, observed_at, version):
+    def _mastery_snapshot(
+        self,
+        *,
+        score,
+        error,
+        observed_at,
+        version,
+        profile=None,
+        data_status=StudentMasterySnapshot.DataStatus.AVAILABLE,
+    ):
+        profile = profile or self.profiles[0]
         question_set, _created = CommonQuestionSet.objects.get_or_create(
             school=self.school,
             subject=self.subject,
@@ -137,14 +143,15 @@ class DynamicStratificationAndGroupingTests(TestCase):
         assessment.target_classes.add(self.class_group)
         attempt = TestAttempt.objects.create(
             assessment=assessment,
-            student=self.profiles[0].user,
+            student=profile.user,
             class_group=self.class_group,
             status=TestAttempt.Status.GRADED,
             submitted_at=observed_at,
             graded_at=observed_at,
         )
-        return StudentMasterySnapshot.objects.create(
-            student=self.profiles[0].user,
+        available = data_status == StudentMasterySnapshot.DataStatus.AVAILABLE
+        snapshot = StudentMasterySnapshot.objects.create(
+            student=profile.user,
             school=self.school,
             class_group=self.class_group,
             subject=self.subject,
@@ -154,38 +161,75 @@ class DynamicStratificationAndGroupingTests(TestCase):
             common_question_set=question_set,
             measurement_series="IT-COMMON-01",
             assessment_version=version,
-            data_status=StudentMasterySnapshot.DataStatus.AVAILABLE,
+            data_status=data_status,
             score_obtained=score * 10,
             score_max=10,
-            mastery_score=score,
-            measurement_error=error,
+            mastery_score=score if available else None,
+            measurement_error=error if available else None,
             common_item_count=10,
             answered_item_count=10,
             answered_ratio=1,
-            source_hash=f"snapshot-{version}",
+            knowledge_results=[],
+            comparability_evidence={
+                "comparability_status": "verified",
+                "target_mapping_status": "complete",
+            },
+            source_hash=f"snapshot-{profile.user_id}-{version}",
+            legacy_unmapped=False,
             observed_at=observed_at,
         )
+        StudentMasteryTargetResult.objects.create(
+            snapshot=snapshot,
+            learning_target_version=self.target_version,
+            data_status=data_status,
+            score_obtained=score * 10,
+            score_max=10,
+            mastery_score=score if available else None,
+            measurement_error=error if available else None,
+            item_count=10,
+            answered_item_count=10,
+            evidence_coverage=1,
+            evidence_snapshot={
+                "assessment_question_ids": list(range(1, 11)),
+                "uncertainty_method": "test-fixture-conservative-v1",
+            },
+        )
+        return snapshot
 
     def _comparable_candidate(self, profile, score, *, version, window_end):
-        return build_content_band_candidate(
-            student_profile=profile,
+        policy, _created = ContentBandPolicyVersion.objects.get_or_create(
+            school=self.school,
             subject=self.subject,
             course=self.course,
-            mastery_score=score,
-            evidence_snapshot={
-                "comparability_status": "verified",
-                "measurement_series": "IT-COMMON-01",
-                "assessment_version": version,
-                "reasons": ["共同测试掌握度记录完整。"],
-            },
-            policy={
-                "version": "criterion-v1",
+            policy_version="criterion-v1",
+            defaults={
+                "name": "信息科技学习内容层级标准",
+                "version_no": 1,
                 "a_min": 0.8,
                 "b_min": 0.6,
-                "boundary_margin": 0.03,
+                "boundary_margin": 0.01,
+                "hysteresis_margin": 0,
+                "max_measurement_error": 0.1,
+                "min_common_items": 5,
+                "min_answered_ratio": 0.8,
+                "required_consecutive_windows": 1,
+                "cooldown_days": 0,
+                "status": ContentBandPolicyVersion.Status.ACTIVE,
+                "created_by": self.teacher,
+                "published_by": self.teacher,
+                "published_at": timezone.now(),
             },
-            window_start=window_end - timedelta(days=7),
-            window_end=window_end,
+        )
+        snapshot = self._mastery_snapshot(
+            profile=profile,
+            score=score,
+            error=0.01,
+            observed_at=window_end,
+            version=version,
+        )
+        return build_guarded_content_band_candidate(
+            snapshot=snapshot,
+            policy=policy,
         )
 
     def _accept(self, decision):
@@ -256,16 +300,11 @@ class DynamicStratificationAndGroupingTests(TestCase):
 
     def test_bulk_review_accepts_support_and_content_band_together(self):
         support = self._support_decision(self.profiles[0], "mixed-support")
-        content_band = StratificationDecision.objects.create(
-            student=self.profiles[1].user,
-            class_group=self.class_group,
-            subject=self.subject,
-            course=self.course,
-            previous_layer="A",
-            suggested_layer="B",
-            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
-            policy_version="criterion-test-v1",
-            rule_version="content-bulk-mixed",
+        content_band = self._comparable_candidate(
+            self.profiles[1],
+            0.68,
+            version="content-bulk-mixed",
+            window_end=timezone.now(),
         )
 
         response = self.client.post(
@@ -279,9 +318,11 @@ class DynamicStratificationAndGroupingTests(TestCase):
         support.refresh_from_db()
         content_band.refresh_from_db()
         self.profiles[0].refresh_from_db()
+        self.profiles[1].refresh_from_db()
         self.assertEqual(support.status, StratificationDecision.Status.ACCEPTED)
         self.assertEqual(content_band.status, StratificationDecision.Status.ACCEPTED)
         self.assertEqual(self.profiles[0].current_layer, "A")
+        self.assertEqual(self.profiles[1].current_layer, "A")
         self.assertEqual(
             StudentSubjectBand.objects.get(source_decision=content_band).band,
             "B",
@@ -344,6 +385,7 @@ class DynamicStratificationAndGroupingTests(TestCase):
             {
                 "student": profile.user_id,
                 "course": self.course.id,
+                "source_decision": model_decision.id,
                 "layer": "B",
                 "reason_code": "classroom_evidence",
                 "note": "课堂作品显示核心任务更适合当前阶段。",
@@ -364,7 +406,7 @@ class DynamicStratificationAndGroupingTests(TestCase):
             valid_until__isnull=True,
         )
         self.assertEqual(current_band.band, "B")
-        self.assertEqual(current_band.source_decision.suggested_layer, "")
+        self.assertEqual(current_band.source_decision.suggested_layer, "B")
         self.assertEqual(current_band.source_decision.teacher_selected_layer, "B")
         self.assertTrue(current_band.source_decision.rule_version.startswith("teacher-manual-"))
         self.assertTrue(
@@ -375,11 +417,19 @@ class DynamicStratificationAndGroupingTests(TestCase):
             ).exists()
         )
         profile.refresh_from_db()
-        self.assertEqual(profile.current_layer, "B")
+        self.assertEqual(profile.current_layer, "A")
+        self.assertEqual(
+            resolve_student_band(
+                student=profile.user,
+                subject=self.subject,
+                course=self.course,
+            ),
+            "B",
+        )
 
     def test_comparable_mastery_creates_versioned_formal_band(self):
         profile = self.profiles[0]
-        now = timezone.now()
+        now = timezone.now() - timedelta(seconds=2)
         first = self._comparable_candidate(
             profile,
             0.86,
@@ -404,7 +454,54 @@ class DynamicStratificationAndGroupingTests(TestCase):
         self.assertEqual(second_band.band, "B")
         self.assertIsNone(second_band.valid_until)
         profile.refresh_from_db()
-        self.assertEqual(profile.current_layer, "B")
+        self.assertEqual(profile.current_layer, "A")
+        self.assertEqual(
+            resolve_student_band(
+                student=profile.user,
+                subject=self.subject,
+                course=self.course,
+            ),
+            "B",
+        )
+
+    def test_cross_school_band_record_is_rejected_before_resolution(self):
+        other_school = School.objects.create(
+            name="跨校脏数据测试学校",
+            code="DIRTY-BAND",
+        )
+        profile = self.profiles[-1]
+        decision = StratificationDecision.objects.create(
+            student=profile.user,
+            class_group=self.class_group,
+            subject=self.subject,
+            course=self.course,
+            suggested_layer="C",
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+            policy_version="dirty-school-v1",
+            rule_version="dirty-school-band",
+            status=StratificationDecision.Status.ACCEPTED,
+        )
+        with self.assertRaises(ValidationError):
+            StudentSubjectBand.objects.create(
+                student=profile.user,
+                school=other_school,
+                class_group=self.class_group,
+                subject=self.subject,
+                course=self.course,
+                band="C",
+                valid_from=timezone.now() - timedelta(minutes=1),
+                source_decision=decision,
+                policy_version="dirty-school-v1",
+                confirmed_by=self.teacher,
+            )
+
+        self.assertIsNone(
+            resolve_student_band(
+                student=profile.user,
+                subject=self.subject,
+                course=self.course,
+            )
+        )
 
     def test_ai_grouping_ignores_legacy_layers_without_task_readiness(self):
         first = build_grouping_plan(
@@ -676,6 +773,51 @@ class DynamicStratificationAndGroupingTests(TestCase):
         )
         self.assertEqual(decision.status, StratificationDecision.Status.DEFERRED)
         self.assertEqual(decision.abstain_reason, "measurement_uncertainty")
+        self.assertEqual(decision.suggested_layer, "")
+
+    def test_not_comparable_mastery_abstains_without_target_estimate(self):
+        policy = ContentBandPolicyVersion.objects.create(
+            school=self.school,
+            subject=self.subject,
+            course=self.course,
+            name="信息科技层级标准",
+            version_no=1,
+            policy_version="criterion-v1",
+            required_consecutive_windows=1,
+            cooldown_days=0,
+            status=ContentBandPolicyVersion.Status.ACTIVE,
+            created_by=self.teacher,
+            published_by=self.teacher,
+            published_at=timezone.now(),
+        )
+        snapshot = self._mastery_snapshot(
+            score=0.92,
+            error=0.02,
+            observed_at=timezone.now(),
+            version="not-comparable",
+            data_status=StudentMasterySnapshot.DataStatus.NOT_COMPARABLE,
+        )
+
+        states = record_mastery_target_states(snapshot=snapshot)
+        decision = build_guarded_content_band_candidate(
+            snapshot=snapshot,
+            policy=policy,
+        )
+
+        self.assertTrue(states)
+        self.assertTrue(
+            all(
+                state.evidence_status
+                == StudentLearningTargetStateVersion.EvidenceStatus.INSUFFICIENT
+                and state.estimate is None
+                for state in states
+            )
+        )
+        self.assertEqual(decision.status, StratificationDecision.Status.DEFERRED)
+        self.assertEqual(
+            decision.abstain_reason,
+            StudentMasterySnapshot.DataStatus.NOT_COMPARABLE,
+        )
         self.assertEqual(decision.suggested_layer, "")
 
     def test_school_admin_can_version_and_activate_content_band_policy(self):

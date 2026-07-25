@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { FieldErrors } from '@/api/client'
+import { vModalFocus } from '@/directives/modalFocus'
 import type { FormField } from '@/types/forms'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   title: string
   submitLabel: string
@@ -21,15 +22,19 @@ const emit = defineEmits<{
 function setValue(model: Record<string, string | number | boolean>, name: string, value: string | number | boolean) {
   emit('update:model', { ...model, [name]: value })
 }
+
+function requestClose() {
+  if (!props.loading) emit('close')
+}
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="modal-backdrop" role="presentation" @click.self="emit('close')">
-      <form class="entity-modal" role="dialog" aria-modal="true" @submit.prevent="emit('submit')">
+    <div v-if="open" class="modal-backdrop" role="presentation" @click.self="requestClose">
+      <form v-modal-focus="requestClose" class="entity-modal" role="dialog" aria-modal="true" aria-labelledby="entity-form-modal-title" @submit.prevent="emit('submit')">
         <header class="modal-header">
-          <h2>{{ title }}</h2>
-          <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">×</button>
+          <h2 id="entity-form-modal-title">{{ title }}</h2>
+          <button class="icon-button" type="button" aria-label="关闭" :disabled="loading" @click="requestClose">×</button>
         </header>
 
         <div class="form-grid">

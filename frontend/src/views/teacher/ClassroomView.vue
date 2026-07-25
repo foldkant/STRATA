@@ -500,11 +500,16 @@ onMounted(async () => {
             <div class="row-actions">
               <RouterLink :to="`/teacher/classroom/${item.id}`" target="_blank" rel="noopener">进入课堂</RouterLink>
               <button type="button" @click="openSession(item)">活动</button>
-              <button type="button" :disabled="item.status !== 'draft'" @click="openEditSession(item)">编辑</button>
+              <button v-if="item.status === 'draft'" type="button" @click="openEditSession(item)">编辑</button>
               <button v-if="item.status === 'draft'" type="button" @click="askSession('start', item)">开始</button>
               <button v-if="item.status === 'finished'" type="button" @click="askSession('restart', item)">重新开始</button>
               <button v-if="item.status === 'running'" type="button" @click="askSession('finish', item)">结束</button>
-              <button class="danger-link" type="button" :disabled="item.status !== 'draft'" @click="askSession('delete', item)">删除</button>
+              <button v-if="item.status === 'draft'" class="danger-link" type="button" @click="askSession('delete', item)">删除</button>
+              <span
+                v-else
+                class="row-action-reason"
+                :title="item.status === 'running' ? '课堂已经开始，为保留教学记录不能再编辑或删除。' : '课堂已经结束，为保留教学记录不能再编辑或删除；如需再次使用请选择重新开始。'"
+              >教学记录已保留</span>
             </div>
           </td>
         </tr>
@@ -583,7 +588,7 @@ onMounted(async () => {
               <input v-model.trim="sessionForm.title" maxlength="128" placeholder="不填时按课时和班级自动生成" />
               <small v-if="sessionErrors.title" class="field-error">{{ sessionErrors.title[0] }}</small>
             </label>
-            <p class="form-helper span-2">课堂不再单独设置分层模式。教师在课时设计中设置 A/B/C、A/B、B/C 题目后，学生端会按当前投放环节自动匹配。</p>
+            <p class="form-helper span-2">课堂不再单独设置学生层级。教师在课时设计中安排 A/B/C、A/B、B/C 差异化题目后，学生端会按当前投放环节和教师确认的学习内容安排自动匹配。</p>
           </div>
           <footer class="modal-actions">
             <button class="secondary-button" type="button" :disabled="saving" @click="sessionModalOpen = false">取消</button>

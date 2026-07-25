@@ -22,12 +22,14 @@ import AppShell from '@/layouts/AppShell.vue'
 import MultiSelectActions from '@/components/MultiSelectActions.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
 import { usePageSelection } from '@/composables/usePageSelection'
+import { vModalFocus } from '@/directives/modalFocus'
 import { teacherNav } from './nav'
 
 type MainView = 'roster' | 'pending' | 'evidence' | 'history'
 type ReviewAction = 'accept' | 'keep' | 'adjust' | 'defer'
 type BulkReviewAction = 'accept' | 'keep' | 'defer'
 type ManualAdjustmentTarget = {
+  source_decision_id: number
   student: StratificationSuggestionRow['student']
   class_group: StratificationSuggestionRow['class_group']
   current_layer: string
@@ -72,6 +74,7 @@ const windowType = ref<'day' | '7d' | '30d' | 'unit'>('7d')
 const detail = ref<LearningSummaryRow | null>(null)
 const reviewTarget = ref<StratificationSuggestionRow | null>(null)
 const batchReviewOpen = ref(false)
+const batchReviewScope = ref<'selected' | 'all'>('selected')
 const manualTarget = ref<ManualAdjustmentTarget | null>(null)
 const reviewForm = reactive<{ action: ReviewAction; layer: string; reason_code: string; note: string }>({
   action: 'accept',
@@ -108,10 +111,10 @@ const windowOptions = [
 
 const layerOptions = [
   { key: 'all', label: '全部', short: '总计' },
-  { key: 'A', label: '拓展挑战层', short: 'A 层' },
-  { key: 'B', label: '核心发展层', short: 'B 层' },
-  { key: 'C', label: '基础提升层', short: 'C 层' },
-  { key: 'unassigned', label: '未分层', short: '未分层' }
+  { key: 'A', label: '拓展挑战内容', short: '拓展（A）' },
+  { key: 'B', label: '核心发展内容', short: '发展（B）' },
+  { key: 'C', label: '基础提升内容', short: '提升（C）' },
+  { key: 'unassigned', label: '尚未安排', short: '尚未安排' }
 ] as const
 
 const visibleCourses = computed(() => options.value?.courses || [])
@@ -135,10 +138,10 @@ const pendingSupportCount = computed(() => pendingSuggestions.value.filter((item
 const pendingContentBandCount = computed(() => pendingSuggestions.value.filter((item) => item.decision_kind === 'content_band').length)
 const pendingDescription = computed(() => {
   if (pendingSupportCount.value && pendingContentBandCount.value) {
-    return `含 ${pendingContentBandCount.value} 条层级建议和 ${pendingSupportCount.value} 条学习支持；只有层级建议会更新当前分层。`
+    return `含 ${pendingContentBandCount.value} 条学习内容安排建议和 ${pendingSupportCount.value} 条学习支持建议；两类建议都须由教师结合材料确认。`
   }
-  if (pendingSupportCount.value) return '处理结果用于安排教学支持，不会改变学生当前分层。'
-  if (pendingContentBandCount.value) return '教师确认后才更新学生当前分层。'
+  if (pendingSupportCount.value) return '处理结果用于安排教学支持，不会改变当前学习内容安排。'
+  if (pendingContentBandCount.value) return '教师查看目标级材料并确认后，才更新学习内容安排。'
   return '当前没有需要处理的建议。'
 })
 const historySuggestions = computed(() => {
@@ -168,8 +171,10 @@ const {
   clearSelection: clearSuggestionSelection
 } = usePageSelection(visiblePending)
 const selectedPendingRows = computed(() => pendingSuggestions.value.filter((row) => selectedSuggestionIdSet.value.has(row.id)))
-const selectedSupportCount = computed(() => selectedPendingRows.value.filter((row) => row.decision_kind === 'support').length)
-const selectedContentBandCount = computed(() => selectedPendingRows.value.filter((row) => row.decision_kind === 'content_band').length)
+const batchReviewRows = computed(() => batchReviewScope.value === 'all' ? pendingSuggestions.value : selectedPendingRows.value)
+const batchReviewCount = computed(() => batchReviewRows.value.length)
+const batchSupportCount = computed(() => batchReviewRows.value.filter((row) => row.decision_kind === 'support').length)
+const batchContentBandCount = computed(() => batchReviewRows.value.filter((row) => row.decision_kind === 'content_band').length)
 const visibleEvidence = computed(() => summaries.value.slice((evidencePage.value - 1) * pageSize, evidencePage.value * pageSize))
 const visibleHistory = computed(() => historySuggestions.value.slice((historyPage.value - 1) * pageSize, historyPage.value * pageSize))
 const availableRows = computed(() => summaries.value.filter((item) => item.data_status === 'available'))
@@ -216,7 +221,7 @@ function supportPriorityLabel(value: StratificationSuggestionRow['support_priori
 
 function suggestionLabel(row: StratificationSuggestionRow) {
   if (row.decision_kind === 'support') return supportPriorityLabel(row.support_priority)
-  return row.suggested_layer ? `建议 ${row.suggested_layer} 层` : '暂不调整'
+  return row.suggested_layer ? `建议 ${row.suggested_layer} 层` : '暂不建议'
 }
 
 function layerPercent(layer: 'A' | 'B' | 'C' | 'unassigned') {
@@ -241,7 +246,7 @@ async function loadCore() {
     suggestionPage.value = 1
     historyPage.value = 1
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '学生分层加载失败。'
+    notice.value = error instanceof ApiError ? error.message : '学习内容安排加载失败。'
   } finally {
     loading.value = false
   }
@@ -301,16 +306,38 @@ function openReview(row: StratificationSuggestionRow) {
   reviewForm.note = row.review_note || ''
 }
 
-function openManualAdjustment(target: ManualAdjustmentTarget) {
-  if (!target.course) {
-    notice.value = '请先选择具体课程后再调整层级。'
+function openManualAdjustment(target: StratificationSuggestionRow) {
+  if (!target.course || target.decision_kind !== 'content_band' || !target.target_states.length) {
+    notice.value = '该记录没有可沿用的目标级学习依据，暂不能再次调整。'
     return
   }
   reviewTarget.value = null
-  manualTarget.value = target
+  manualTarget.value = {
+    source_decision_id: target.id,
+    student: target.student,
+    class_group: target.class_group,
+    current_layer: target.current_layer,
+    course: target.course
+  }
   manualForm.layer = (target.current_layer as 'A' | 'B' | 'C') || 'B'
   manualForm.reason_code = ''
   manualForm.note = ''
+}
+
+function closeBatchReview() {
+  if (!reviewing.value) batchReviewOpen.value = false
+}
+
+function closeReview() {
+  if (!reviewing.value) reviewTarget.value = null
+}
+
+function closeDetail() {
+  detail.value = null
+}
+
+function closeManualAdjustment() {
+  if (!reviewing.value) manualTarget.value = null
 }
 
 async function submitReview() {
@@ -325,7 +352,7 @@ async function submitReview() {
     })
     const successMessage = reviewTarget.value.decision_kind === 'content_band'
       && (reviewForm.action === 'accept' || reviewForm.action === 'adjust')
-      ? '分层已更新。'
+      ? '学习内容安排已更新。'
       : '建议已处理。'
     reviewTarget.value = null
     await loadCore()
@@ -342,19 +369,28 @@ function selectAllPendingSuggestions() {
   selectedSuggestionIds.value = pendingSuggestions.value.map((item) => item.id)
 }
 
-function openBatchReview() {
-  if (!selectedSuggestionCount.value) {
-    notice.value = '请先选择需要处理的建议。'
-    return
-  }
+function resetBatchReviewForm() {
   batchReviewForm.action = 'accept'
   batchReviewForm.reason_code = ''
   batchReviewForm.note = ''
+}
+
+function openBatchReview(scope: 'selected' | 'all' = 'selected') {
+  if (scope === 'selected' && !selectedSuggestionCount.value) {
+    notice.value = '请先选择需要处理的建议。'
+    return
+  }
+  if (scope === 'all' && !pendingSuggestions.value.length) {
+    notice.value = '当前范围没有待处理建议。'
+    return
+  }
+  batchReviewScope.value = scope
+  resetBatchReviewForm()
   batchReviewOpen.value = true
 }
 
 async function submitBatchReview() {
-  if (!selectedSuggestionCount.value || reviewing.value) return
+  if (!batchReviewCount.value || reviewing.value) return
   if (batchReviewForm.action !== 'accept' && !batchReviewForm.reason_code) {
     notice.value = '请选择本次批量处理原因。'
     return
@@ -365,8 +401,9 @@ async function submitBatchReview() {
   }
   reviewing.value = true
   try {
+    const targetIds = batchReviewRows.value.map((row) => row.id)
     const result = await bulkReviewStratificationSuggestions({
-      ids: [...selectedSuggestionIds.value],
+      ids: targetIds,
       action: batchReviewForm.action,
       reason_code: batchReviewForm.action === 'accept' ? undefined : batchReviewForm.reason_code,
       note: batchReviewForm.note.trim()
@@ -374,7 +411,9 @@ async function submitBatchReview() {
     batchReviewOpen.value = false
     clearSuggestionSelection()
     await loadCore()
-    notice.value = `已批量处理 ${result.updated_count} 条建议。`
+    notice.value = batchReviewScope.value === 'all'
+      ? `已处理当前范围全部 ${result.updated_count} 条建议。`
+      : `已批量处理 ${result.updated_count} 条建议。`
     if (!pendingSuggestions.value.length) activeView.value = 'roster'
   } catch (error) {
     notice.value = error instanceof ApiError ? error.message : '批量处理失败。'
@@ -398,6 +437,7 @@ async function submitManualAdjustment() {
     await manuallyAdjustStratification({
       student: manualTarget.value.student.id,
       course: manualTarget.value.course.id,
+      source_decision: manualTarget.value.source_decision_id,
       layer: manualForm.layer,
       reason_code: manualForm.reason_code,
       note: manualForm.note.trim()
@@ -407,7 +447,7 @@ async function submitManualAdjustment() {
     await loadCore()
     activeView.value = 'roster'
   } catch (error) {
-    notice.value = error instanceof ApiError ? error.message : '层级调整失败。'
+    notice.value = error instanceof ApiError ? error.message : '学习内容安排调整失败。'
   } finally {
     reviewing.value = false
   }
@@ -429,18 +469,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <AppShell title="学生分层" eyebrow="教师工作台" :nav-items="navItems">
+  <AppShell title="学习内容与学习支持" eyebrow="教师工作台" :nav-items="navItems">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <header class="stratification-page-heading">
       <div>
-        <h2>学生分层</h2>
-        <p>查看当前分层并处理本人课程的最新建议，分层结果仅教师可见。</p>
+        <h2>学习内容与学习支持</h2>
+        <p>先查看学习目标层面的材料，再由教师分别确认学习内容安排与学习支持；结果仅教师可见。</p>
       </div>
-      <a class="secondary-button" :href="overviewExportUrl">导出当前分层</a>
+      <a class="secondary-button" :href="overviewExportUrl">导出当前学习内容与支持安排</a>
     </header>
 
-    <section class="stratification-scope-bar" aria-label="分层范围">
+    <section class="stratification-scope-bar" aria-label="学习内容与支持范围">
       <label>
         <span>任教班级</span>
         <AppSelect v-model="classGroup" class="stratification-select" @change="changeScope">
@@ -461,8 +501,8 @@ onMounted(async () => {
       </div>
     </section>
 
-    <nav class="stratification-tabs" aria-label="学生分层视图">
-      <button type="button" :class="{ active: activeView === 'roster' }" @click="setView('roster')">当前分层</button>
+    <nav class="stratification-tabs" aria-label="学习内容与支持安排视图">
+      <button type="button" :class="{ active: activeView === 'roster' }" @click="setView('roster')">当前内容安排</button>
       <button type="button" :class="{ active: activeView === 'pending' }" @click="setView('pending')">
         待处理建议 <span v-if="pendingSuggestions.length">{{ pendingSuggestions.length }}</span>
       </button>
@@ -473,8 +513,8 @@ onMounted(async () => {
     <template v-if="activeView === 'roster'">
       <section class="panel layer-overview-panel">
         <header>
-          <div><h3>当前分布</h3><p>点击层级可筛选下方学生。</p></div>
-          <span>未分层 {{ overview.counts.unassigned }}</span>
+          <div><h3>当前学习内容安排</h3><p>点击内容类型可筛选下方学生。</p></div>
+          <span>尚未安排 {{ overview.counts.unassigned }}</span>
         </header>
         <div class="layer-stat-grid">
           <button
@@ -489,7 +529,7 @@ onMounted(async () => {
             <small>{{ item.label }}</small>
           </button>
         </div>
-        <div class="layer-distribution" aria-label="当前层级分布">
+        <div class="layer-distribution" aria-label="当前学习内容安排分布">
           <span class="segment-A" :style="{ width: layerPercent('A') }" />
           <span class="segment-B" :style="{ width: layerPercent('B') }" />
           <span class="segment-C" :style="{ width: layerPercent('C') }" />
@@ -507,12 +547,12 @@ onMounted(async () => {
         </header>
         <div class="assessment-table-wrap">
           <table class="assessment-table stratification-roster-table">
-            <thead><tr><th>学生</th><th>班级</th><th>当前分层</th><th>近30日完成率</th><th>近30日得分率</th><th>最新建议</th><th>操作</th></tr></thead>
+            <thead><tr><th>学生</th><th>班级</th><th>当前内容安排</th><th>近30日完成率</th><th>近30日得分率</th><th>最新建议</th><th>操作</th></tr></thead>
             <tbody>
               <tr v-for="row in visibleRoster" :key="row.id">
                 <td data-label="学生"><strong>{{ row.student.display_name }}</strong><small>{{ row.student.student_no || row.student.username }}</small></td>
                 <td data-label="班级">{{ row.class_group.name }}</td>
-                <td data-label="当前分层"><LayerBadge :layer="row.current_layer" :label="row.current_layer_label" /></td>
+                <td data-label="当前内容安排"><LayerBadge :layer="row.current_layer" /></td>
                 <td data-label="近30日完成率">{{ percent(row.learning?.completion_rate) }}</td>
                 <td data-label="近30日得分率">{{ percent(row.learning?.score_rate) }}</td>
                 <td data-label="最新建议">
@@ -530,16 +570,17 @@ onMounted(async () => {
                       {{ row.latest_decision.status === 'pending' ? '处理建议' : '查看记录' }}
                     </button>
                     <button
+                      v-if="row.latest_decision?.decision_kind === 'content_band' && row.latest_decision.status !== 'pending' && row.latest_decision.target_states.length"
                       class="assessment-row-review secondary"
                       type="button"
-                      @click="openManualAdjustment({ student: row.student, class_group: row.class_group, current_layer: row.current_layer, course: overview.scope.course })"
-                    >调整层级</button>
+                      @click="openManualAdjustment(row.latest_decision)"
+                    >依据现有材料调整</button>
                   </div>
                 </td>
               </tr>
             </tbody>
           </table>
-          <p v-if="loading" class="empty">正在加载学生分层</p>
+          <p v-if="loading" class="empty">正在加载学习内容安排</p>
           <p v-else-if="!visibleRoster.length" class="empty">当前筛选下没有学生。</p>
         </div>
         <footer v-if="rosterPageCount > 1" class="stratification-pagination">
@@ -563,9 +604,20 @@ onMounted(async () => {
           @select-all="selectAllPendingSuggestions"
           @clear="clearSuggestionSelection"
         />
-        <button class="primary-button" type="button" :disabled="!selectedSuggestionCount || reviewing" @click="openBatchReview">
-          批量处理
-        </button>
+        <div class="suggestion-bulk-actions">
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="!pendingSuggestions.length || reviewing"
+            data-test="stratification-review-all"
+            @click="openBatchReview('all')"
+          >
+            批量处理全部（{{ pendingSuggestions.length }}）
+          </button>
+          <button class="primary-button" type="button" :disabled="!selectedSuggestionCount || reviewing" @click="openBatchReview('selected')">
+            批量处理已选<span v-if="selectedSuggestionCount">（{{ selectedSuggestionCount }}）</span>
+          </button>
+        </div>
       </div>
       <div class="assessment-table-wrap">
         <table class="assessment-table suggestion-table">
@@ -577,7 +629,8 @@ onMounted(async () => {
               <td data-label="班级">{{ row.class_group.name }}<small>{{ row.course?.title || '-' }}</small></td>
               <td data-label="当前"><LayerBadge :layer="row.current_layer" compact /></td>
               <td data-label="建议">
-                <LayerBadge v-if="row.decision_kind === 'content_band'" :layer="row.suggested_layer" compact />
+                <LayerBadge v-if="row.decision_kind === 'content_band' && row.suggested_layer" :layer="row.suggested_layer" compact />
+                <span v-else-if="row.decision_kind === 'content_band'" class="summary-status-pill summary-status-insufficient">暂不建议</span>
                 <span v-else class="support-priority-pill" :class="`support-${row.support_priority || 'routine'}`">{{ supportPriorityLabel(row.support_priority) }}</span>
               </td>
               <td data-label="参考强度">{{ row.decision_kind === 'content_band' && row.suggested_layer ? `${Math.round(row.confidence * 100)}%` : '-' }}</td>
@@ -649,13 +702,13 @@ onMounted(async () => {
       </header>
       <div class="assessment-table-wrap">
         <table class="assessment-table history-table">
-          <thead><tr><th>学生</th><th>班级 / 课程</th><th>原层级</th><th>模型建议</th><th>教师选择</th><th>处理结果</th><th>处理时间</th><th>详情</th></tr></thead>
+          <thead><tr><th>学生</th><th>班级 / 课程</th><th>原安排</th><th>系统建议</th><th>教师选择</th><th>处理结果</th><th>处理时间</th><th>详情</th></tr></thead>
           <tbody>
             <tr v-for="row in visibleHistory" :key="row.id">
               <td data-label="学生"><strong>{{ row.student.display_name }}</strong><small>{{ row.student.student_no || row.student.username }}</small></td>
               <td data-label="班级 / 课程">{{ row.class_group.name }}<small>{{ row.course?.title || '-' }}</small></td>
-              <td data-label="原层级"><LayerBadge :layer="row.previous_layer" compact /></td>
-              <td data-label="模型建议"><LayerBadge :layer="row.suggested_layer" compact /></td>
+              <td data-label="原安排"><LayerBadge :layer="row.previous_layer" compact /></td>
+              <td data-label="系统建议"><LayerBadge :layer="row.suggested_layer" compact /></td>
               <td data-label="教师选择"><LayerBadge :layer="row.teacher_selected_layer" compact /></td>
               <td data-label="处理结果"><span class="summary-status-pill" :class="decisionStatusClass(row.status)">{{ row.status_label }}</span></td>
               <td data-label="处理时间">{{ formatDateTime(row.reviewed_at) }}</td>
@@ -672,24 +725,30 @@ onMounted(async () => {
       </footer>
     </section>
 
-    <div v-if="batchReviewOpen" class="modal-backdrop" role="presentation" @click.self="!reviewing && (batchReviewOpen = false)">
-      <form class="entity-modal suggestion-review-modal" role="dialog" aria-modal="true" aria-labelledby="batch-review-title" @submit.prevent="submitBatchReview">
+    <div v-if="batchReviewOpen" class="modal-backdrop" role="presentation" @click.self="closeBatchReview">
+      <form v-modal-focus="closeBatchReview" class="entity-modal suggestion-review-modal" role="dialog" aria-modal="true" aria-labelledby="batch-review-title" @submit.prevent="submitBatchReview">
         <header class="modal-header">
-          <div><h2 id="batch-review-title">批量处理建议</h2><p>已选 {{ selectedSuggestionCount }} 条 · 学习支持 {{ selectedSupportCount }} 条 · 层级建议 {{ selectedContentBandCount }} 条</p></div>
-          <button class="icon-button" type="button" aria-label="关闭" :disabled="reviewing" @click="batchReviewOpen = false">×</button>
+          <div>
+            <h2 id="batch-review-title">{{ batchReviewScope === 'all' ? '批量处理全部建议' : '批量处理已选建议' }}</h2>
+            <p>{{ batchReviewScope === 'all' ? '当前筛选范围' : '已选' }} {{ batchReviewCount }} 条 · 学习支持 {{ batchSupportCount }} 条 · 学习内容安排 {{ batchContentBandCount }} 条</p>
+          </div>
+          <button class="icon-button" type="button" aria-label="关闭" :disabled="reviewing" @click="closeBatchReview">×</button>
         </header>
         <div class="suggestion-review-body">
-          <p class="batch-review-note">批量采用层级建议时，系统按每名学生的建议更新层级；学习支持只记录教师安排，不改变 A/B/C。</p>
-          <fieldset class="suggestion-actions"><legend>处理方式</legend><label><input v-model="batchReviewForm.action" type="radio" value="accept" />采用所选建议</label><label><input v-model="batchReviewForm.action" type="radio" value="keep" />保持当前安排</label><label><input v-model="batchReviewForm.action" type="radio" value="defer" />暂缓处理</label></fieldset>
+          <p v-if="batchReviewScope === 'all'" class="batch-review-scope">
+            将处理当前班级和课程筛选范围内的全部待处理建议，不受表格分页影响。请确认处理范围和方式后再继续。
+          </p>
+          <p class="batch-review-note">批量采用学习内容安排建议时，系统仍按每名学生的目标级材料分别更新；学习支持只记录教师确认的支持方式，不改变学习内容安排。</p>
+          <fieldset class="suggestion-actions"><legend>处理方式</legend><label><input v-model="batchReviewForm.action" type="radio" value="accept" />采用{{ batchReviewScope === 'all' ? '全部' : '所选' }}建议</label><label><input v-model="batchReviewForm.action" type="radio" value="keep" />保持当前安排</label><label><input v-model="batchReviewForm.action" type="radio" value="defer" />暂缓处理</label></fieldset>
           <label v-if="batchReviewForm.action !== 'accept'" class="adjust-layer-field"><span>处理原因 <b>*</b></span><AppSelect v-model="batchReviewForm.reason_code" class="stratification-select" required><option value="" disabled>请选择处理原因</option><option v-for="item in manualReasonOptions" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
           <label class="review-note-field"><span>处理说明</span><textarea v-model.trim="batchReviewForm.note" rows="3" maxlength="1000" placeholder="可选，记录统一的后续安排或观察重点" /></label>
         </div>
-        <footer class="modal-actions"><button class="secondary-button" type="button" :disabled="reviewing" @click="batchReviewOpen = false">取消</button><button class="primary-button" type="submit" :disabled="reviewing">{{ reviewing ? '处理中' : `确认处理 ${selectedSuggestionCount} 条` }}</button></footer>
+        <footer class="modal-actions"><button class="secondary-button" type="button" :disabled="reviewing" @click="closeBatchReview">取消</button><button class="primary-button" type="submit" :disabled="reviewing">{{ reviewing ? '处理中' : `确认处理${batchReviewScope === 'all' ? '全部 ' : ' '}${batchReviewCount} 条` }}</button></footer>
       </form>
     </div>
 
     <div v-if="detail" class="modal-backdrop" role="presentation" @click.self="detail = null">
-      <section class="entity-modal learning-summary-detail" role="dialog" aria-modal="true" aria-labelledby="summary-detail-title">
+      <section v-modal-focus="closeDetail" class="entity-modal learning-summary-detail" role="dialog" aria-modal="true" aria-labelledby="summary-detail-title">
         <header class="modal-header"><div><h2 id="summary-detail-title">{{ detail.student.display_name }}的学习依据</h2><p>{{ detail.window_type_label }} · {{ detail.course.title }} · {{ detail.student.class_group.name }}</p></div><button class="icon-button" type="button" aria-label="关闭" @click="detail = null">×</button></header>
         <div class="summary-detail-body">
           <dl class="summary-detail-grid">
@@ -709,22 +768,38 @@ onMounted(async () => {
       </section>
     </div>
 
-    <div v-if="reviewTarget" class="modal-backdrop" role="presentation" @click.self="reviewTarget = null">
-      <section class="entity-modal suggestion-review-modal" role="dialog" aria-modal="true" aria-labelledby="suggestion-review-title">
-        <header class="modal-header"><div><h2 id="suggestion-review-title">{{ reviewTarget.status === 'pending' ? (reviewTarget.decision_kind === 'support' ? '处理学习支持' : '处理层级建议') : '处理记录' }}</h2><p>{{ reviewTarget.student.display_name }} · {{ reviewTarget.course?.title }} · {{ reviewTarget.class_group.name }}</p></div><button class="icon-button" type="button" aria-label="关闭" @click="reviewTarget = null">×</button></header>
+    <div v-if="reviewTarget" class="modal-backdrop" role="presentation" @click.self="closeReview">
+      <section v-modal-focus="closeReview" class="entity-modal suggestion-review-modal" role="dialog" aria-modal="true" aria-labelledby="suggestion-review-title">
+        <header class="modal-header"><div><h2 id="suggestion-review-title">{{ reviewTarget.status === 'pending' ? (reviewTarget.decision_kind === 'support' ? '处理学习支持' : '处理学习内容安排建议') : '处理记录' }}</h2><p>{{ reviewTarget.student.display_name }} · {{ reviewTarget.course?.title }} · {{ reviewTarget.class_group.name }}</p></div><button class="icon-button" type="button" aria-label="关闭" :disabled="reviewing" @click="closeReview">×</button></header>
         <div class="suggestion-review-body">
           <div v-if="reviewTarget.decision_kind === 'content_band'" class="suggestion-layer-flow">
-            <div><span>当前分层</span><LayerBadge :layer="reviewTarget.current_layer" :label="reviewTarget.current_layer_label" /></div>
+            <div><span>当前内容安排</span><LayerBadge :layer="reviewTarget.current_layer" /></div>
             <strong aria-hidden="true">→</strong>
-            <div><span>{{ reviewTarget.status === 'pending' ? '建议分层' : '教师选择' }}</span><LayerBadge :layer="reviewTarget.status === 'pending' ? reviewTarget.suggested_layer : (reviewTarget.teacher_selected_layer || reviewTarget.suggested_layer)" /></div>
+            <div><span>{{ reviewTarget.status === 'pending' ? '建议内容安排' : '教师选择' }}</span><LayerBadge :layer="reviewTarget.status === 'pending' ? reviewTarget.suggested_layer : (reviewTarget.teacher_selected_layer || reviewTarget.suggested_layer)" /></div>
           </div>
           <section class="suggestion-evidence-block">
             <h3>主要依据</h3>
             <ul><li v-for="item in reviewTarget.reasons" :key="item">{{ item }}</li></ul>
           </section>
+          <section v-if="reviewTarget.target_states.length" class="target-evidence-card">
+            <h3>目标级学习依据（{{ reviewTarget.target_states.length }} 项）</h3>
+            <article v-for="state in reviewTarget.target_states" :key="state.id" class="target-evidence-item">
+              <header>
+                <div><span>对应学习目标</span><strong>{{ state.learning_target_code }} · {{ state.learning_target_name }}</strong></div>
+                <span class="summary-status-pill" :class="state.evidence_status === 'available' ? 'summary-status-available' : 'summary-status-insufficient'">{{ state.evidence_status === 'available' ? '材料可用' : '材料不足' }}</span>
+              </header>
+              <dl>
+                <div><dt>材料覆盖</dt><dd>{{ percent(state.evidence_coverage) }}</dd></div>
+                <div><dt>当前情况</dt><dd>{{ percent(state.estimate) }}</dd></div>
+                <div><dt>不确定性</dt><dd>{{ percent(state.uncertainty) }}</dd></div>
+                <div><dt>材料有效至</dt><dd>{{ formatDateTime(state.valid_until) }}</dd></div>
+              </dl>
+            </article>
+            <p v-if="reviewTarget.target_states.some((state) => state.evidence_status !== 'available')">材料不足、设备问题或未获得学习机会时，系统只显示“暂不建议”，不会自动进入 C 层。</p>
+          </section>
           <section class="suggestion-support-block"><h3>教学支持</h3><p>{{ reviewTarget.support_suggestion || '暂无具体建议。' }}</p></section>
           <template v-if="reviewTarget.status === 'pending'">
-            <fieldset class="suggestion-actions"><legend>处理方式</legend><label><input v-model="reviewForm.action" type="radio" value="accept" :disabled="reviewTarget.decision_kind === 'content_band' && !reviewTarget.suggested_layer" />{{ reviewTarget.decision_kind === 'content_band' ? '采纳层级建议' : '采用支持建议' }}</label><label><input v-model="reviewForm.action" type="radio" value="keep" />保持当前安排</label><label v-if="reviewTarget.decision_kind === 'content_band'"><input v-model="reviewForm.action" type="radio" value="adjust" />调整建议层级</label><label><input v-model="reviewForm.action" type="radio" value="defer" />暂缓处理</label></fieldset>
+            <fieldset class="suggestion-actions"><legend>处理方式</legend><label><input v-model="reviewForm.action" type="radio" value="accept" :disabled="reviewTarget.decision_kind === 'content_band' && !reviewTarget.suggested_layer" />{{ reviewTarget.decision_kind === 'content_band' ? '采用学习内容安排建议' : '采用支持建议' }}</label><label><input v-model="reviewForm.action" type="radio" value="keep" />保持当前安排</label><label v-if="reviewTarget.decision_kind === 'content_band'"><input v-model="reviewForm.action" type="radio" value="adjust" />调整学习内容安排</label><label><input v-model="reviewForm.action" type="radio" value="defer" />暂缓处理</label></fieldset>
             <label v-if="reviewForm.action === 'adjust'" class="adjust-layer-field"><span>调整为</span><AppSelect v-model="reviewForm.layer" class="stratification-select"><option value="A">A · 拓展挑战层</option><option value="B">B · 核心发展层</option><option value="C">C · 基础提升层</option></AppSelect></label>
             <label v-if="reviewForm.action !== 'accept'" class="adjust-layer-field"><span>处理原因 <b>*</b></span><AppSelect v-model="reviewForm.reason_code" class="stratification-select" required><option value="" disabled>请选择处理原因</option><option v-for="item in manualReasonOptions" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
             <label class="review-note-field"><span>处理说明</span><textarea v-model.trim="reviewForm.note" rows="3" maxlength="1000" placeholder="可选，记录后续安排或观察重点" /></label>
@@ -739,37 +814,37 @@ onMounted(async () => {
           </dl>
         </div>
         <footer class="modal-actions">
-          <button :class="reviewTarget.status === 'pending' ? 'secondary-button' : 'primary-button'" type="button" @click="reviewTarget = null">{{ reviewTarget.status === 'pending' ? '取消' : '关闭' }}</button>
+          <button :class="reviewTarget.status === 'pending' ? 'secondary-button' : 'primary-button'" type="button" :disabled="reviewing" @click="closeReview">{{ reviewTarget.status === 'pending' ? '取消' : '关闭' }}</button>
           <button
-            v-if="reviewTarget.status !== 'pending' && reviewTarget.course"
+            v-if="reviewTarget.status !== 'pending' && reviewTarget.course && reviewTarget.decision_kind === 'content_band' && reviewTarget.target_states.length"
             class="secondary-button"
             type="button"
             @click="openManualAdjustment(reviewTarget)"
-          >再次调整层级</button>
+          >依据现有材料再次调整</button>
           <button v-if="reviewTarget.status === 'pending'" class="primary-button" type="button" :disabled="reviewing" @click="submitReview">{{ reviewing ? '保存中' : '确认处理' }}</button>
         </footer>
       </section>
     </div>
 
-    <div v-if="manualTarget" class="modal-backdrop" role="presentation" @click.self="manualTarget = null">
-      <form class="entity-modal suggestion-review-modal" role="dialog" aria-modal="true" aria-labelledby="manual-layer-title" @submit.prevent="submitManualAdjustment">
+    <div v-if="manualTarget" class="modal-backdrop" role="presentation" @click.self="closeManualAdjustment">
+      <form v-modal-focus="closeManualAdjustment" class="entity-modal suggestion-review-modal" role="dialog" aria-modal="true" aria-labelledby="manual-layer-title" @submit.prevent="submitManualAdjustment">
         <header class="modal-header">
-          <div><h2 id="manual-layer-title">调整学生层级</h2><p>{{ manualTarget.student.display_name }} · {{ manualTarget.course?.title }} · {{ manualTarget.class_group.name }}</p></div>
-          <button class="icon-button" type="button" aria-label="关闭" @click="manualTarget = null">×</button>
+          <div><h2 id="manual-layer-title">调整学习内容安排</h2><p>{{ manualTarget.student.display_name }} · {{ manualTarget.course?.title }} · {{ manualTarget.class_group.name }}</p></div>
+          <button class="icon-button" type="button" aria-label="关闭" :disabled="reviewing" @click="closeManualAdjustment">×</button>
         </header>
         <div class="suggestion-review-body manual-layer-form">
           <div class="suggestion-layer-flow">
-            <div><span>当前分层</span><LayerBadge :layer="manualTarget.current_layer" /></div>
+            <div><span>当前内容安排</span><LayerBadge :layer="manualTarget.current_layer" /></div>
             <strong aria-hidden="true">→</strong>
             <div><span>调整为</span><LayerBadge :layer="manualForm.layer" /></div>
           </div>
-          <label class="adjust-layer-field"><span>目标层级 <b>*</b></span><AppSelect v-model="manualForm.layer" class="stratification-select" required><option value="A">A · 拓展挑战层</option><option value="B">B · 核心发展层</option><option value="C">C · 基础提升层</option></AppSelect></label>
+          <label class="adjust-layer-field"><span>学习内容安排 <b>*</b></span><AppSelect v-model="manualForm.layer" class="stratification-select" required><option value="A">A · 拓展挑战内容</option><option value="B">B · 核心发展内容</option><option value="C">C · 基础提升内容</option></AppSelect></label>
           <label class="adjust-layer-field"><span>调整原因 <b>*</b></span><AppSelect v-model="manualForm.reason_code" class="stratification-select" required><option value="" disabled>请选择调整原因</option><option v-for="item in manualReasonOptions" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
           <label class="review-note-field"><span>补充说明 <b v-if="manualForm.reason_code === 'other'">*</b></span><textarea v-model.trim="manualForm.note" rows="4" maxlength="1000" :required="manualForm.reason_code === 'other'" placeholder="记录教学依据、支持安排或后续观察重点" /></label>
-          <p class="manual-layer-note">本次调整会形成新的有效层级记录；模型原建议和历史处理记录不会被覆盖。</p>
+          <p class="manual-layer-note">本次调整沿用所选记录中的目标级学习依据，并形成新的有效安排；原建议和历史处理记录不会被覆盖。</p>
         </div>
         <footer class="modal-actions">
-          <button class="secondary-button" type="button" @click="manualTarget = null">取消</button>
+          <button class="secondary-button" type="button" :disabled="reviewing" @click="closeManualAdjustment">取消</button>
           <button class="primary-button" type="submit" :disabled="reviewing || manualForm.layer === manualTarget.current_layer">{{ reviewing ? '保存中' : '确认调整' }}</button>
         </footer>
       </form>
@@ -831,14 +906,54 @@ onMounted(async () => {
 .stratification-select { color-scheme: light; }
 .stratification-select:hover :deep(.app-select-trigger),
 .roster-search input:hover,
-.review-note-field textarea:hover { border-color: #aebed0; }
+.review-note-field textarea:hover { border-color: #9bafa6; }
 .stratification-select:focus-within :deep(.app-select-trigger),
 .roster-search input:focus,
 .review-note-field textarea:focus {
   border-color: var(--primary);
-  outline: 3px solid rgba(37, 99, 235, 0.14);
+  outline: 3px solid rgba(23, 72, 63, 0.14);
 }
 .review-note-field textarea { min-height: 96px; line-height: 1.55; resize: vertical; }
+.target-evidence-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #c5d6cc;
+  border-radius: 8px;
+  background: #f4f7f4;
+  padding: 14px;
+}
+.target-evidence-card > h3 { margin: 0; font-size: 14px; }
+.target-evidence-item {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #d8e4dc;
+  padding-top: 12px;
+}
+.target-evidence-item > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.target-evidence-item > header div { display: grid; gap: 4px; }
+.target-evidence-item > header div span,
+.target-evidence-card dt { color: var(--muted); font-size: 12px; }
+.target-evidence-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.target-evidence-card dl div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  padding: 9px;
+}
+.target-evidence-card dd { margin: 0; font-weight: 700; }
+.target-evidence-card p { margin: 0; color: #92400e; line-height: 1.55; }
 .scope-result { margin-left: auto; text-align: right; }
 .scope-result span, .scope-result strong { display: block; }
 .scope-result span { color: var(--muted); font-size: 12px; }
@@ -848,7 +963,7 @@ onMounted(async () => {
   display: flex;
   gap: 2px;
   margin: 14px 0;
-  border-bottom: 1px solid #cfd9e6;
+  border-bottom: 1px solid #d6ded8;
 }
 .stratification-tabs button {
   display: inline-flex;
@@ -860,11 +975,11 @@ onMounted(async () => {
   border-bottom: 3px solid transparent;
   background: transparent;
   padding: 0 18px;
-  color: #526174;
+  color: #526a61;
   font-weight: 700;
   cursor: pointer;
 }
-.stratification-tabs button.active { border-bottom-color: #1f6feb; color: #1557a6; }
+.stratification-tabs button.active { border-bottom-color: #b94f3d; color: #0d352e; }
 .stratification-tabs button span { min-width: 22px; border-radius: 10px; background: #b42318; padding: 2px 6px; color: #fff; font-size: 11px; }
 
 .layer-overview-panel { margin-bottom: 14px; padding: 0; overflow: hidden; }
@@ -882,27 +997,29 @@ onMounted(async () => {
   cursor: pointer;
 }
 .layer-stat-grid button:last-child { border-right: 0; }
-.layer-stat-grid button:hover, .layer-stat-grid button.active { background: #f5f9fd; box-shadow: inset 0 -3px #1f6feb; }
+.layer-stat-grid button:hover, .layer-stat-grid button.active { background: #f1f5f1; box-shadow: inset 0 -3px #b94f3d; }
 .layer-stat-grid span, .layer-stat-grid strong, .layer-stat-grid small { display: block; }
 .layer-stat-grid span, .layer-stat-grid small { color: var(--muted); }
 .layer-stat-grid span { font-size: 12px; font-weight: 700; }
 .layer-stat-grid strong { margin: 5px 0 2px; font-size: 25px; font-variant-numeric: tabular-nums; }
 .layer-stat-grid small { font-size: 12px; overflow-wrap: anywhere; }
-.layer-distribution { display: flex; width: 100%; height: 8px; background: #e2e8f0; }
+.layer-distribution { display: flex; width: 100%; height: 8px; background: #dce4df; }
 .layer-distribution span { display: block; min-width: 0; transition: width 180ms ease-out; }
 .segment-A { background: #0f766e; }
-.segment-B { background: #2563a9; }
+.segment-B { background: #6f9186; }
 .segment-C { background: #b7791f; }
-.segment-unassigned { background: #94a3b8; }
+.segment-unassigned { background: #a5b1ac; }
 
 .stratification-roster-panel, .suggestion-panel, .learning-summary-table-panel { min-width: 0; padding: 0; overflow: hidden; }
 .roster-panel-head, .suggestion-panel-head { border-bottom: 1px solid var(--line); padding: 14px 16px; }
 .roster-search { display: grid; gap: 5px; width: min(300px, 100%); min-width: 0; }
 .suggestion-panel-head > strong { font-size: 24px; font-variant-numeric: tabular-nums; }
-.suggestion-bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; border-bottom: 1px solid var(--line); background: #f8fbff; padding: 9px 16px; }
-.suggestion-bulk-toolbar > .primary-button { min-height: 40px; white-space: nowrap; }
+.suggestion-bulk-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; border-bottom: 1px solid var(--line); background: #f5f7f3; padding: 9px 16px; }
+.suggestion-bulk-actions { display: flex; align-items: center; gap: 8px; }
+.suggestion-bulk-actions button { min-height: 40px; white-space: nowrap; }
 .suggestion-bulk-toolbar :deep(.multi-select-actions) { justify-content: flex-start; }
 .suggestion-bulk-toolbar :deep(.multi-select-actions button) { min-height: 40px; }
+.batch-review-scope { margin: 0; border: 1px solid #c5d6cc; border-radius: 8px; background: #eef5f1; color: #315f50; padding: 10px 12px; line-height: 1.6; }
 .assessment-table-wrap { width: 100%; min-width: 0; overflow-x: hidden; }
 .stratification-roster-table, .suggestion-table, .history-table, .learning-summary-table { width: 100%; min-width: 0; table-layout: fixed; }
 .stratification-roster-table th,
@@ -954,8 +1071,8 @@ onMounted(async () => {
 .decision-inline { display: block; font-weight: 700; }
 .muted-text { color: var(--muted); }
 .primary-table-action, .assessment-row-review { max-width: 100%; min-height: 36px; border-radius: 4px; padding: 0 11px; font-weight: 700; white-space: nowrap; cursor: pointer; }
-.primary-table-action { border: 1px solid #1f6feb; background: #1f6feb; color: #fff; }
-.assessment-row-review { border: 1px solid #b9c8da; background: #fff; color: #24527d; }
+.primary-table-action { border: 1px solid #17483f; background: #17483f; color: #fff; }
+.assessment-row-review { border: 1px solid #b9cbc2; background: #fff; color: #315f50; }
 .stratification-roster-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .assessment-row-review.secondary { color: #475569; font-weight: 600; }
 .reason-text, .support-text { display: block; max-width: 100%; line-height: 1.5; overflow-wrap: anywhere; word-break: break-word; }
@@ -966,15 +1083,15 @@ onMounted(async () => {
 .support-high { border-color: #e5b5af; background: #fff1ef; color: #9b2c24; }
 .summary-status-available { background: #e8f7ef; color: #17633a; }
 .summary-status-insufficient { background: #fff4dd; color: #8a4b08; }
-.summary-status-no_opportunity { background: #eef2f7; color: #475569; }
+.summary-status-no_opportunity { background: #eef2ef; color: #526a61; }
 .summary-status-quality_blocked { background: #fdeaea; color: #9f2626; }
 .stratification-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; border-top: 1px solid var(--line); padding: 11px 14px; }
 .stratification-pagination span { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 
 .evidence-toolbar { margin-bottom: 12px; }
 .learning-window-tabs, .evidence-actions { display: flex; gap: 6px; }
-.learning-window-tabs button { min-height: 40px; border: 1px solid #d6e0ec; background: #fff; padding: 0 15px; color: #475569; font-weight: 700; cursor: pointer; }
-.learning-window-tabs button.active { border-color: #79aee8; background: #eaf3ff; color: #1557a6; }
+.learning-window-tabs button { min-height: 40px; border: 1px solid #d6ded8; background: #fff; padding: 0 15px; color: #526a61; font-weight: 700; cursor: pointer; }
+.learning-window-tabs button.active { border-color: #78978c; background: #edf4f0; color: #0d352e; }
 .evidence-summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 12px; border: 1px solid var(--line); border-radius: 6px; background: #fff; overflow: hidden; }
 .evidence-summary-strip div { border-right: 1px solid var(--line); padding: 13px 16px; }
 .evidence-summary-strip div:last-child { border-right: 0; }
@@ -995,14 +1112,14 @@ onMounted(async () => {
 .summary-evaluation-grid strong { margin: 5px 0; }
 .summary-evaluation-grid small { color: var(--muted); line-height: 1.5; }
 .summary-missing-list { margin-top: 14px; border-left: 3px solid #b7791f; background: #fff8e9; padding: 12px 14px; }
-.suggestion-layer-flow { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px; border: 1px solid var(--line); background: #f8fafc; padding: 14px; }
+.suggestion-layer-flow { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px; border: 1px solid var(--line); background: #f7f8f4; padding: 14px; }
 .suggestion-layer-flow > div { display: grid; gap: 7px; }
 .suggestion-layer-flow > div > span { color: var(--muted); font-size: 12px; font-weight: 700; }
-.suggestion-layer-flow > strong { color: #64748b; font-size: 22px; }
+.suggestion-layer-flow > strong { color: #687a73; font-size: 22px; }
 .suggestion-evidence-block, .suggestion-support-block { margin-top: 14px; border: 1px solid var(--line); padding: 13px 14px; }
 .suggestion-evidence-block h3, .suggestion-support-block h3 { margin: 0; font-size: 14px; }
 .suggestion-evidence-block ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.65; }
-.suggestion-support-block { border-left: 3px solid #1f6feb; background: #f7fbff; }
+.suggestion-support-block { border-left: 3px solid #17483f; background: #f1f5f1; }
 .suggestion-support-block p { margin: 7px 0 0; line-height: 1.65; }
 .suggestion-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0 0; border: 0; padding: 0; }
 .suggestion-actions legend { grid-column: 1 / -1; margin-bottom: 2px; padding: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
@@ -1016,21 +1133,21 @@ onMounted(async () => {
   border-radius: 6px;
   background: #fff;
   padding: 9px 12px;
-  color: #334155;
+  color: #334a43;
   font-weight: 700;
   cursor: pointer;
   transition: border-color 160ms ease-out, background-color 160ms ease-out, box-shadow 160ms ease-out;
 }
-.suggestion-actions label:hover { border-color: #8db4df; background: #f7fbff; }
-.suggestion-actions label:has(input:checked) { border-color: #5696da; background: #eaf3ff; color: #1557a6; box-shadow: inset 0 0 0 1px #9bc0e9; }
-.suggestion-actions label:has(input:focus-visible) { outline: 3px solid rgba(37, 99, 235, 0.14); outline-offset: 1px; }
-.suggestion-actions label:has(input:disabled) { background: #f3f5f8; color: #94a3b8; cursor: not-allowed; }
+.suggestion-actions label:hover { border-color: #8ba59b; background: #f3f6f3; }
+.suggestion-actions label:has(input:checked) { border-color: #78978c; background: #edf4f0; color: #0d352e; box-shadow: inset 0 0 0 1px #b8cdc4; }
+.suggestion-actions label:has(input:focus-visible) { outline: 3px solid rgba(23, 72, 63, 0.15); outline-offset: 1px; }
+.suggestion-actions label:has(input:disabled) { background: #f3f5f3; color: #8b9994; cursor: not-allowed; }
 .suggestion-actions input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); flex: 0 0 auto; }
 .adjust-layer-field, .review-note-field { display: grid; gap: 6px; margin-top: 12px; }
 .adjust-layer-field b, .review-note-field b { color: var(--danger); }
 .manual-layer-form { display: grid; }
-.manual-layer-note { margin: 14px 0 0; border-left: 3px solid #2563eb; background: #f4f8fd; padding: 10px 12px; color: #475569; line-height: 1.55; }
-.batch-review-note { margin: 0; border-left: 3px solid #2563eb; background: #f4f8fd; padding: 11px 13px; color: #475569; line-height: 1.55; }
+.manual-layer-note { margin: 14px 0 0; border-left: 3px solid #b94f3d; background: #fbefec; padding: 10px 12px; color: #526a61; line-height: 1.55; }
+.batch-review-note { margin: 0; border-left: 3px solid #b94f3d; background: #fbefec; padding: 11px 13px; color: #526a61; line-height: 1.55; }
 .suggestion-history-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
 .suggestion-history-detail .wide { grid-column: 1 / -1; }
 
@@ -1081,7 +1198,8 @@ onMounted(async () => {
 
 @media (max-width: 620px) {
   .suggestion-bulk-toolbar { align-items: stretch; flex-direction: column; }
-  .suggestion-bulk-toolbar > .primary-button { width: 100%; min-height: 44px; }
+  .suggestion-bulk-actions { display: grid; grid-template-columns: 1fr; }
+  .suggestion-bulk-actions button { width: 100%; min-height: 44px; }
   .suggestion-bulk-toolbar :deep(.multi-select-actions) { justify-content: space-between; flex-wrap: wrap; }
   .layer-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .layer-stat-grid button, .layer-stat-grid button:first-child { grid-column: auto; min-height: 76px; padding: 9px; }

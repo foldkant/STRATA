@@ -7,6 +7,7 @@ import {
   type EvaluationTrialPayload,
   type EvaluationTrialRow
 } from '@/api/evaluation'
+import { vModalFocus } from '@/directives/modalFocus'
 
 const props = defineProps<{
   draft: EvaluationTrialRow | null
@@ -21,6 +22,10 @@ const emit = defineEmits<{
 const saving = ref(false)
 const notice = ref('')
 const errors = ref<FieldErrors>({})
+
+function requestClose() {
+  if (!saving.value) emit('close')
+}
 
 function dateText(value: Date) {
   const year = value.getFullYear()
@@ -79,7 +84,7 @@ function validate() {
 }
 
 async function save() {
-  if (locked.value) return
+  if (locked.value || saving.value) return
   if (!validate()) return
   saving.value = true
   notice.value = ''
@@ -107,14 +112,14 @@ async function save() {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="emit('close')">
-    <section class="entity-modal compact-modal trial-editor" role="dialog" aria-modal="true" :aria-labelledby="`trial-editor-${draft?.id || 'new'}`">
+  <div class="modal-backdrop" @click.self="requestClose">
+    <section v-modal-focus="requestClose" class="entity-modal compact-modal trial-editor" role="dialog" aria-modal="true" :aria-labelledby="`trial-editor-${draft?.id || 'new'}`">
       <header class="modal-header">
         <div>
           <h2 :id="`trial-editor-${draft?.id || 'new'}`">{{ modalTitle }}</h2>
           <p>记录审核、课堂试用和评分检查结果</p>
         </div>
-        <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">×</button>
+        <button class="icon-button" type="button" aria-label="关闭" :disabled="saving" @click="requestClose">×</button>
       </header>
 
       <div class="trial-editor-body">
@@ -146,7 +151,7 @@ async function save() {
 
           <label class="span-2">
             <span>记录名称<b>*</b></span>
-            <input v-model.trim="form.title" maxlength="160" placeholder="例如 高一数据表达课堂试用" :disabled="locked" />
+            <input v-model.trim="form.title" data-modal-initial-focus maxlength="160" placeholder="例如 高一数据表达课堂试用" :disabled="locked" />
             <small v-if="errors.title" class="field-error">{{ errors.title[0] }}</small>
           </label>
 
@@ -195,10 +200,16 @@ async function save() {
             <small v-if="errors.action_items" class="field-error">{{ errors.action_items[0] }}</small>
           </label>
         </div>
+
+        <section v-if="locked && draft?.completed_at" class="trial-completion-audit" aria-label="完成记录追溯信息">
+          <strong>完成记录追溯</strong>
+          <span>{{ draft.completed_by || '确认人未记录' }} · {{ new Date(draft.completed_at).toLocaleString('zh-CN') }}</span>
+          <details><summary>查看技术校验记录</summary><code>{{ draft.completion_hash }}</code></details>
+        </section>
       </div>
 
       <footer class="modal-actions trial-editor-actions">
-        <button class="secondary-button" type="button" :disabled="saving" @click="emit('close')">{{ locked ? '关闭' : '取消' }}</button>
+        <button class="secondary-button" type="button" :disabled="saving" @click="requestClose">{{ locked ? '关闭' : '取消' }}</button>
         <button v-if="!locked" class="primary-button" type="button" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存记录' }}</button>
       </footer>
     </section>
@@ -271,7 +282,7 @@ async function save() {
 }
 
 .trial-form-grid select:disabled {
-  background: #f1f5f9;
+  background: #f1f4f1;
   color: var(--muted);
 }
 
@@ -283,6 +294,27 @@ async function save() {
 .trial-form-grid .field-error,
 .trial-inline-error {
   color: #b42318;
+}
+
+.trial-completion-audit {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 12px;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.trial-completion-audit span,
+.trial-completion-audit small {
+  line-height: 1.5;
+}
+
+.trial-completion-audit code {
+  overflow-wrap: anywhere;
+  font-size: 12px;
 }
 
 .trial-inline-error {

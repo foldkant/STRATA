@@ -62,6 +62,7 @@ function resizeChart() {
 
 onMounted(() => {
   renderChart()
+  void document.fonts?.ready.then(renderChart)
   if (chartEl.value) {
     const rect = chartEl.value.getBoundingClientRect()
     lastWidth = rect.width

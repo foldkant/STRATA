@@ -66,7 +66,6 @@ class LearningOpportunityApiTests(TestCase):
         StudentProfile.objects.create(
             user=user,
             class_group=self.class_group,
-            current_layer=layer,
             is_first_use=False,
             onboarding_status=StudentProfile.OnboardingStatus.ACTIVE,
         )

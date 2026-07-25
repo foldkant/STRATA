@@ -24,6 +24,11 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.cache import never_cache
 
 from .onlyoffice import sign_editor_config
+from .login_security import (
+    clear_login_account_failures,
+    login_block_status,
+    record_login_failure,
+)
 
 
 def role_redirect(user):
@@ -38,16 +43,33 @@ def role_redirect(user):
     return redirect("/app/login")
 
 
+@never_cache
 def home(request):
     return render(request, "home.html")
 
 
 @never_cache
 def login_view(request):
-    next_url = request.POST.get("next") or request.GET.get("next") or ""
+    if request.user.is_authenticated:
+        return role_redirect(request.user)
 
+    next_url = request.POST.get("next") or request.GET.get("next") or ""
+    username = str(request.POST.get("username") or "").strip()
+    password = str(request.POST.get("password") or "")
+    login_error = ""
     form = AuthenticationForm(request, data=request.POST or None)
-    if request.method == "POST" and form.is_valid():
+    login_block = (
+        login_block_status(request, username)
+        if request.method == "POST" and username
+        else None
+    )
+    if login_block and login_block.blocked:
+        login_error = (
+            "登录尝试次数过多，请稍后再试；如忘记密码，请联系学校管理员。"
+        )
+        form.add_error(None, login_error)
+    elif request.method == "POST" and form.is_valid():
+        clear_login_account_failures(request, username)
         auth_login(request, form.get_user())
         if next_url and url_has_allowed_host_and_scheme(
             next_url,
@@ -56,8 +78,22 @@ def login_view(request):
         ):
             return redirect(next_url)
         return role_redirect(form.get_user())
+    elif request.method == "POST":
+        if not username or not password:
+            login_error = "请输入账号和密码。"
+        else:
+            login_error = "账号或密码不正确，请重新输入。"
+            record_login_failure(request, username)
 
-    return render(request, "login.html", {"form": form, "next": next_url})
+    return render(
+        request,
+        "login.html",
+        {
+            "form": form,
+            "next": next_url,
+            "login_error": login_error,
+        },
+    )
 
 
 def logout_view(request):

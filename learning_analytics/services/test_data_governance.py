@@ -24,6 +24,8 @@ SAFE_TEST_DATA_TARGET_MODELS = frozenset(
         "courses.lesson",
         "courses.resource",
         "courses.subject",
+        "learning.diagnosticadministration",
+        "learning.pretestpaper",
         "learning_analytics.evaluationplan",
         "learning_analytics.evaluationstandard",
         "learning_analytics.evaluationtrialrecord",

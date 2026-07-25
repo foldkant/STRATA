@@ -303,7 +303,6 @@ def _create_student_states(
                 user=user,
                 class_group=class_group,
                 student_no=f"SIM{class_index:02d}{student_index:03d}",
-                current_layer=None,
                 score=0,
                 is_first_use=False,
                 onboarding_status=StudentProfile.OnboardingStatus.ACTIVE,

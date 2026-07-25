@@ -69,7 +69,7 @@ onMounted(loadRows)
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="student-resource-center-head">
-      <div class="resource-scope-tabs student-resource-tabs">
+      <div class="resource-scope-tabs student-resource-scope-tabs">
         <button
           v-for="tab in scopeTabs"
           :key="tab.value"

@@ -10,6 +10,8 @@ from django.contrib import admin as django_admin
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory, TestCase, override_settings
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework.test import APIClient
 from pypdf import PdfWriter
@@ -17,7 +19,7 @@ from pypdf import PdfWriter
 from accounts.models import User
 from courses.models import Course, Subject
 from learning_analytics.evaluation_models import EvaluationPlan
-from learning_analytics.services.evaluation import publish_plan
+from learning_analytics.services.evaluation import confirm_plan_review, publish_plan
 from school.models import School
 
 from curriculum_standards.models import (
@@ -205,6 +207,40 @@ class CurriculumStandardApiTests(TestCase):
 
         page = version.pages.get()
         self.assertEqual(page.mean_confidence, Decimal("0.9123"))
+
+    def test_standard_directory_is_server_paginated_summary(self):
+        for index in range(12):
+            CurriculumStandard.objects.create(
+                title=f"信息科技课程标准目录测试 {index + 1}",
+                document_type=CurriculumDocumentType.SUBJECT_STANDARD,
+                school_stage="k1_k9",
+                subject_code=f"it-budget-{index + 1}",
+                subject_name=f"信息科技 {index + 1}",
+                created_by=self.admin,
+                updated_by=self.admin,
+            )
+
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get(
+                reverse("api_super_admin_curriculum_standards"),
+                {"page": 1, "page_size": 8},
+            )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        payload = response.data["data"]
+        self.assertEqual(len(payload["standards"]), 8)
+        self.assertEqual(payload["pagination"]["total"], 13)
+        self.assertEqual(payload["pagination"]["page_count"], 2)
+        self.assertNotIn(
+            "nodes",
+            payload["standards"][0].get("current_version") or {},
+        )
+        self.assertLess(len(response.content), 20_000)
+        self.assertLessEqual(
+            len(captured),
+            6,
+            f"课程标准目录查询数超出预算：{len(captured)}",
+        )
 
     def _publish(self, version_id):
         response = self.client.post(
@@ -765,6 +801,14 @@ class EvaluationCurriculumReferenceTests(TestCase):
                     "source_types": ["学生作品"],
                 }
             ],
+            learning_activities=[
+                {
+                    "code": "A1",
+                    "title": "完成项目探究",
+                    "goal_codes": ["G1"],
+                    "description": "学生围绕真实问题完成项目作品并说明问题解决过程。",
+                }
+            ],
             learning_tasks=[
                 {
                     "code": "T1",
@@ -773,6 +817,20 @@ class EvaluationCurriculumReferenceTests(TestCase):
                     "description": "完成项目作品并说明问题解决过程和改进依据。",
                 }
             ],
+            evaluation_tasks=[
+                {
+                    "code": "ET1",
+                    "title": "项目作品评价",
+                    "goal_codes": ["G1"],
+                    "activity_codes": ["A1"],
+                    "mode": "project",
+                    "evidence_ownership": "individual",
+                    "material_types": ["artifact"],
+                    "weight": 100,
+                    "description": "依据个人项目作品和过程说明判断学习目标达成情况。",
+                }
+            ],
+            assessment_modes=["project"],
             content_scope=["数据与计算"],
             thinking_requirements=["apply"],
             support_options=[],
@@ -788,11 +846,21 @@ class EvaluationCurriculumReferenceTests(TestCase):
     def test_reference_change_creates_new_plan_version_without_rewriting_history(self):
         first = self._published_version("2017-2020", "a")
         plan = self._plan()
+        first_node_ids = list(first.nodes.values_list("id", flat=True))
         replace_plan_curriculum_references(
             plan=plan,
-            node_ids=list(first.nodes.values_list("id", flat=True)),
+            node_ids=first_node_ids,
             actor=self.teacher,
         )
+        plan.learning_goals = [
+            {
+                **goal,
+                "curriculum_node_ids": first_node_ids,
+            }
+            for goal in plan.learning_goals
+        ]
+        plan.save(update_fields=["learning_goals", "updated_at"])
+        confirm_plan_review(plan=plan, reviewed_by=self.teacher)
         first_plan_version = publish_plan(plan, published_by=self.teacher).version
         first_reference_hashes = list(
             first_plan_version.curriculum_references.values_list(
@@ -802,11 +870,21 @@ class EvaluationCurriculumReferenceTests(TestCase):
         first.status = CurriculumVersionStatus.ARCHIVED
         first.save(update_fields=["status"])
         second = self._published_version("2017-2025", "b")
+        second_node_ids = list(second.nodes.values_list("id", flat=True))
         replace_plan_curriculum_references(
             plan=plan,
-            node_ids=list(second.nodes.values_list("id", flat=True)),
+            node_ids=second_node_ids,
             actor=self.teacher,
         )
+        plan.learning_goals = [
+            {
+                **goal,
+                "curriculum_node_ids": second_node_ids,
+            }
+            for goal in plan.learning_goals
+        ]
+        plan.save(update_fields=["learning_goals", "updated_at"])
+        confirm_plan_review(plan=plan, reviewed_by=self.teacher)
         second_plan_version = publish_plan(plan, published_by=self.teacher).version
         self.assertNotEqual(first_plan_version.id, second_plan_version.id)
         self.assertNotEqual(

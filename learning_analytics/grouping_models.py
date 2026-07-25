@@ -9,6 +9,38 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 
+class FrozenGroupingRecordQuerySet(models.QuerySet):
+    """Block ordinary bulk writes that would erase grouping audit history."""
+
+    def update(self, **kwargs):
+        raise ValidationError("已形成的分组审计记录不可批量修改。")
+
+    def delete(self):
+        raise ValidationError("已形成的分组审计记录不可批量删除。")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError("已形成的分组审计记录不可批量修改。")
+
+    def bulk_create(self, objs, batch_size=None, ignore_conflicts=False, **kwargs):
+        raise ValidationError("分组审计记录必须逐项校验后保存。")
+
+
+class ImmutableGroupingRecord(models.Model):
+    objects = FrozenGroupingRecordQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("已形成的分组审计记录不可修改。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("已形成的分组审计记录不可删除。")
+
+
 class GroupingPolicyVersion(models.Model):
     class Strategy(models.TextChoices):
         RANDOM_BASELINE = "random_baseline", "随机分组"
@@ -176,6 +208,23 @@ class GroupingPolicyVersion(models.Model):
 
 
 class GroupingDecisionPoint(models.Model):
+    ALLOWED_ROLES = {
+        "coordinator",
+        "recorder",
+        "resource",
+        "presenter",
+        "verifier",
+        "leader",
+        "member",
+    }
+
+    class TaskPurpose(models.TextChoices):
+        TARGETED_SUPPORT = "targeted_support", "聚焦补缺与教师指导"
+        PEER_EXPLANATION = "peer_explanation", "同伴解释与互助讨论"
+        OPEN_PROBLEM = "open_problem", "开放问题解决"
+        PROJECT_LEARNING = "project_learning", "项目式学习"
+        LOW_RISK_BASELINE = "low_risk_baseline", "低风险课堂活动"
+
     class Trigger(models.TextChoices):
         LESSON_STEP = "lesson_step", "课堂环节"
         PROJECT_STAGE = "project_stage", "项目阶段"
@@ -184,7 +233,10 @@ class GroupingDecisionPoint(models.Model):
     class Status(models.TextChoices):
         OPEN = "open", "准备中"
         CANDIDATE_READY = "candidate_ready", "候选已生成"
-        CONFIRMED = "confirmed", "已确认"
+        REVIEWED = "reviewed", "教师已复核"
+        ACTIVE = "active", "已启用"
+        NOTIFIED = "notified", "已通知学生"
+        CONFIRMED = "confirmed", "已确认（兼容）"
         CLOSED = "closed", "已结束"
 
     point_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -221,6 +273,17 @@ class GroupingDecisionPoint(models.Model):
         related_name="decision_points",
     )
     trigger = models.CharField(max_length=24, choices=Trigger.choices)
+    task_purpose = models.CharField(
+        max_length=32,
+        choices=TaskPurpose.choices,
+        default=TaskPurpose.LOW_RISK_BASELINE,
+    )
+    task_stage = models.CharField(max_length=128, default="课堂活动")
+    role_requirements = models.JSONField(default=list)
+    resource_requirements = models.JSONField(default=list)
+    safety_constraints = models.JSONField(default=dict, blank=True)
+    opportunity_requirements = models.JSONField(default=dict, blank=True)
+    stability_until = models.DateTimeField(null=True, blank=True)
     task_context = models.JSONField(default=dict, blank=True)
     scheduled_for = models.DateTimeField()
     status = models.CharField(max_length=24, choices=Status.choices)
@@ -237,6 +300,77 @@ class GroupingDecisionPoint(models.Model):
             models.Index(fields=["school", "class_group", "created_at"]),
         ]
         ordering = ["-scheduled_for", "-id"]
+
+    def clean(self):
+        errors = {}
+        if self.class_group_id and self.class_group.school_id != self.school_id:
+            errors["class_group"] = "班级与学校不一致。"
+        if self.course_id and self.course.subject.school_id != self.school_id:
+            errors["course"] = "课程与学校不一致。"
+        if self.classroom_session_id:
+            session = self.classroom_session
+            if session.school_id != self.school_id:
+                errors["classroom_session"] = "课堂与学校不一致。"
+            elif session.class_group_id != self.class_group_id:
+                errors["classroom_session"] = "课堂与班级不一致。"
+            elif session.course_id != self.course_id:
+                errors["classroom_session"] = "课堂与课程不一致。"
+        if (
+            self.lesson_step_id
+            and self.lesson_step.lesson_id != self.classroom_session.lesson_id
+        ):
+            errors["lesson_step"] = "课堂环节不属于当前课时。"
+        if not str(self.task_stage or "").strip():
+            errors["task_stage"] = "请填写本次分组所处的学习阶段。"
+        if not isinstance(self.role_requirements, list) or not self.role_requirements:
+            errors["role_requirements"] = "请至少确定一种小组角色。"
+        elif len(set(self.role_requirements)) != len(self.role_requirements):
+            errors["role_requirements"] = "小组角色不能重复。"
+        elif any(role not in self.ALLOWED_ROLES for role in self.role_requirements):
+            errors["role_requirements"] = "小组角色设置不正确。"
+        if not isinstance(self.resource_requirements, list):
+            errors["resource_requirements"] = "学习资源设置必须是列表。"
+        if not isinstance(self.safety_constraints, dict):
+            errors["safety_constraints"] = "安全约束设置必须是对象。"
+        if not isinstance(self.opportunity_requirements, dict):
+            errors["opportunity_requirements"] = "学习机会设置必须是对象。"
+        if (
+            self.stability_until
+            and self.scheduled_for
+            and self.stability_until < self.scheduled_for
+        ):
+            errors["stability_until"] = "稳定期结束时间不能早于分组计划时间。"
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        previous = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        immutable_fields = (
+            "task_purpose",
+            "task_stage",
+            "role_requirements",
+            "resource_requirements",
+            "safety_constraints",
+            "opportunity_requirements",
+            "stability_until",
+            "task_context",
+        )
+        if previous and previous.candidate_runs.exists():
+            if any(
+                getattr(previous, field) != getattr(self, field)
+                for field in immutable_fields
+            ):
+                raise ValidationError(
+                    "已生成候选的分组任务定义不能原地修改，请新建一次分组决策。"
+                )
+        update_fields = set(kwargs.get("update_fields") or [])
+        if (
+            not previous
+            or not update_fields
+            or update_fields.intersection(immutable_fields)
+        ):
+            self.full_clean()
+        return super().save(*args, **kwargs)
 
 
 class GroupingCandidateRun(models.Model):
@@ -273,6 +407,7 @@ class GroupingCandidateRun(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    objects = FrozenGroupingRecordQuerySet.as_manager()
 
     class Meta:
         constraints = [
@@ -283,10 +418,67 @@ class GroupingCandidateRun(models.Model):
         ]
         ordering = ["-created_at", "-id"]
 
+    IMMUTABLE_INPUT_FIELDS = (
+        "decision_point_id",
+        "policy_id",
+        "algorithm_version",
+        "seed",
+        "input_snapshot",
+        "input_hash",
+        "created_by_id",
+    )
+
+    def save(self, *args, **kwargs):
+        previous = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        if previous:
+            if any(
+                getattr(previous, field) != getattr(self, field)
+                for field in self.IMMUTABLE_INPUT_FIELDS
+            ):
+                raise ValidationError("分组候选运行的输入快照不可改写。")
+            if previous.status == self.Status.BUILDING:
+                if self.status not in {
+                    self.Status.READY,
+                    self.Status.BLOCKED,
+                    self.Status.FAILED,
+                }:
+                    raise ValidationError("分组候选运行状态迁移不正确。")
+                if self.finished_at is None:
+                    raise ValidationError("分组候选运行结束时必须记录完成时间。")
+            else:
+                output_fields = (
+                    "status",
+                    "candidates",
+                    "conflict_explanations",
+                    "candidate_count",
+                    "finished_at",
+                )
+                if any(
+                    getattr(previous, field) != getattr(self, field)
+                    for field in output_fields
+                ):
+                    raise ValidationError("已经完成的分组候选内容不可改写。")
+                if previous.selected_candidate_key:
+                    if self.selected_candidate_key != previous.selected_candidate_key:
+                        raise ValidationError("分组候选只能由教师选择一次。")
+                elif self.selected_candidate_key:
+                    if self.selected_candidate_key not in {
+                        str(item.get("key") or "") for item in self.candidates
+                    }:
+                        raise ValidationError("教师选择的分组候选不存在。")
+        if previous or self.status != self.Status.BUILDING:
+            self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("分组候选运行不可删除。")
+
 
 class GroupingPlanVersion(models.Model):
     class Status(models.TextChoices):
-        CONFIRMED = "confirmed", "已确认"
+        REVIEWED = "reviewed", "教师已复核"
+        ACTIVE = "active", "已启用"
+        CONFIRMED = "confirmed", "已确认（兼容）"
         ARCHIVED = "archived", "已归档"
 
     plan_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -323,8 +515,25 @@ class GroupingPlanVersion(models.Model):
         related_name="confirmed_grouping_plans",
     )
     confirmed_at = models.DateTimeField()
+    activated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="activated_grouping_plans",
+    )
+    activated_at = models.DateTimeField(null=True, blank=True)
+    notified_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="notified_grouping_plans",
+    )
+    notified_at = models.DateTimeField(null=True, blank=True)
     archived_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    objects = FrozenGroupingRecordQuerySet.as_manager()
 
     class Meta:
         constraints = [
@@ -337,11 +546,65 @@ class GroupingPlanVersion(models.Model):
                 condition=models.Q(status="confirmed"),
                 name="uniq_confirmed_grouping_plan",
             ),
+            models.UniqueConstraint(
+                fields=["collaboration"],
+                condition=models.Q(status="active"),
+                name="uniq_active_grouping_plan",
+            ),
         ]
         ordering = ["-plan_version", "-id"]
 
+    IMMUTABLE_PLAN_FIELDS = (
+        "decision_point_id",
+        "collaboration_id",
+        "candidate_run_id",
+        "supersedes_id",
+        "plan_version",
+        "candidate_key",
+        "assignments",
+        "adjustment_note",
+        "confirmed_by_id",
+        "confirmed_at",
+    )
 
-class GroupingTeacherDecision(models.Model):
+    def save(self, *args, **kwargs):
+        previous = type(self).objects.filter(pk=self.pk).first() if self.pk else None
+        if previous:
+            if any(
+                getattr(previous, field) != getattr(self, field)
+                for field in self.IMMUTABLE_PLAN_FIELDS
+            ):
+                raise ValidationError("教师已复核的分组方案不可改写，请生成新版本。")
+            allowed_status_transitions = {
+                (self.Status.REVIEWED, self.Status.ACTIVE),
+                (self.Status.ACTIVE, self.Status.ARCHIVED),
+                (self.Status.CONFIRMED, self.Status.ARCHIVED),
+            }
+            if previous.status != self.status and (
+                previous.status,
+                self.status,
+            ) not in allowed_status_transitions:
+                raise ValidationError("分组方案状态迁移不正确。")
+            if previous.activated_at and (
+                self.activated_at != previous.activated_at
+                or self.activated_by_id != previous.activated_by_id
+            ):
+                raise ValidationError("分组方案启用记录不可改写。")
+            if previous.notified_at and (
+                self.notified_at != previous.notified_at
+                or self.notified_by_id != previous.notified_by_id
+            ):
+                raise ValidationError("学生通知记录不可改写。")
+            if previous.archived_at and self.archived_at != previous.archived_at:
+                raise ValidationError("分组方案归档记录不可改写。")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("教师已复核的分组方案不可删除。")
+
+
+class GroupingTeacherDecision(ImmutableGroupingRecord):
     class Action(models.TextChoices):
         ACCEPT = "accept", "采用"
         ADJUST = "adjust", "调整后采用"
@@ -414,7 +677,7 @@ class GroupingPairHistory(models.Model):
         ]
 
 
-class GroupingFairnessAudit(models.Model):
+class GroupingFairnessAudit(ImmutableGroupingRecord):
     class Status(models.TextChoices):
         PASSED = "passed", "通过"
         REVIEW = "review", "需要检查"
@@ -440,7 +703,7 @@ class GroupingFairnessAudit(models.Model):
         ]
 
 
-class GroupingOpportunityAudit(models.Model):
+class GroupingOpportunityAudit(ImmutableGroupingRecord):
     plan = models.ForeignKey(
         GroupingPlanVersion,
         on_delete=models.PROTECT,
@@ -465,7 +728,7 @@ class GroupingOpportunityAudit(models.Model):
         ]
 
 
-class GroupingOutcomeSnapshot(models.Model):
+class GroupingOutcomeSnapshot(ImmutableGroupingRecord):
     plan = models.ForeignKey(
         GroupingPlanVersion,
         on_delete=models.PROTECT,

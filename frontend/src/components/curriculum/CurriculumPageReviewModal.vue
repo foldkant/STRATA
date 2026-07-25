@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { IconChecklist, IconEdit, IconLockCheck } from '@tabler/icons-vue'
 import { computed, onMounted, ref } from 'vue'
 import { ApiError } from '@/api/client'
 import {
@@ -154,14 +155,26 @@ onMounted(load)
           <article :class="{ attention: metrics.attention }"><span>需关注</span><strong>{{ metrics.attention }}</strong></article>
         </section>
 
-        <aside v-if="version.status === 'draft'" class="curriculum-page-guidance">
-          草稿阶段可修订逐页文本。若已经建立课程标准内容条目，应先处理相关条目，再修改其依据的原文。
+        <aside v-if="version.status === 'draft'" class="curriculum-page-guidance draft">
+          <IconEdit aria-hidden="true" />
+          <div>
+            <strong>当前为草稿版本</strong>
+            <p>请逐页对照 PDF 原文核对文字和页码。若已依据该页建立课程标准内容条目，请先核对条目与原文的一致性，再修订页级文本。</p>
+          </div>
         </aside>
         <aside v-else-if="version.status === 'review_pending'" class="curriculum-page-guidance review">
-          请逐页对照 PDF 原文核对文字、页码和处理提示。处理失败页不能确认，应退回草稿修复；全部页面确认后方可登记版本复核结果。
+          <IconChecklist aria-hidden="true" />
+          <div>
+            <strong>当前版本正在复核</strong>
+            <p>请逐页对照 PDF 原文核对文字、页码和处理提示。处理失败页不能确认，应退回草稿修订；全部页面确认后方可登记版本复核结果。</p>
+          </div>
         </aside>
         <aside v-else class="curriculum-page-guidance">
-          当前版本内容已冻结，可查看页级复核记录，但不能修改文本或重新确认。
+          <IconLockCheck aria-hidden="true" />
+          <div>
+            <strong>当前版本已发布</strong>
+            <p>原文与逐页核对记录保持不变。您可以查看各页复核情况；如需调整，请新增版本并重新完成核对与复核。</p>
+          </div>
         </aside>
 
         <form class="curriculum-page-toolbar" @submit.prevent="load">
@@ -221,7 +234,7 @@ onMounted(load)
             <p v-if="page.quality_message" class="curriculum-page-quality-message">{{ page.quality_message }}</p>
             <pre>{{ page.text || '本页未识别到文字。请对照 PDF 原文核对。' }}</pre>
             <footer>
-              <span>{{ page.char_count.toLocaleString('zh-CN') }} 字符 · 校验值 {{ page.content_hash.slice(0, 12) }}</span>
+              <span>{{ page.char_count.toLocaleString('zh-CN') }} 字符 · 文本校验信息 {{ page.content_hash.slice(0, 12) }}</span>
               <span v-if="page.reviewed_at">{{ page.reviewed_by || '复核人未记录' }} · {{ new Date(page.reviewed_at).toLocaleString('zh-CN') }}</span>
             </footer>
           </article>
@@ -289,15 +302,68 @@ onMounted(load)
   padding: 18px 20px;
 }
 
-.curriculum-page-notice,
-.curriculum-page-guidance {
+.curriculum-page-notice {
   margin: 0 0 12px;
-  border: 1px solid #bfdbfe;
-  border-radius: 6px;
+  border: 1px solid var(--governance-line, var(--line));
+  border-left: 3px solid var(--governance-success, var(--primary));
+  border-radius: 3px;
   padding: 10px 12px;
-  background: #eff6ff;
-  color: #1e40af;
+  background: var(--success-bg);
+  color: var(--success-text);
   line-height: 1.55;
+}
+
+.curriculum-page-guidance {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  margin: 0 0 14px;
+  border: 1px solid var(--governance-line, var(--line));
+  border-left: 3px solid var(--governance-ink-soft, var(--primary));
+  border-radius: 3px;
+  padding: 12px 14px;
+  background: var(--governance-fog, color-mix(in srgb, var(--primary) 7%, #fff));
+  color: var(--text);
+}
+
+.curriculum-page-guidance.review {
+  border-color: var(--governance-warning-line, #dbc79b);
+  border-left-color: var(--governance-warning, #9a6328);
+  background: var(--governance-warning-soft, #faf4e8);
+}
+
+.curriculum-page-guidance.draft {
+  border-left-color: var(--governance-cinnabar, var(--primary));
+}
+
+.curriculum-page-guidance > svg {
+  width: 19px;
+  height: 19px;
+  margin-top: 1px;
+  color: var(--governance-ink-soft, var(--primary));
+  stroke-width: 1.8;
+}
+
+.curriculum-page-guidance.review > svg {
+  color: var(--governance-warning, #9a6328);
+}
+
+.curriculum-page-guidance.draft > svg {
+  color: var(--governance-cinnabar, var(--primary));
+}
+
+.curriculum-page-guidance strong {
+  display: block;
+  color: var(--primary-dark);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.curriculum-page-guidance p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .curriculum-page-summary {
@@ -305,7 +371,7 @@ onMounted(load)
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 3px;
   overflow: hidden;
 }
 
@@ -354,7 +420,7 @@ onMounted(load)
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 3px;
   padding: 8px 10px;
   background: #fff;
   color: var(--text);
@@ -367,9 +433,9 @@ onMounted(load)
   gap: 12px;
   margin-top: 12px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 3px;
   padding: 9px 12px;
-  background: #f8fafc;
+  background: color-mix(in srgb, var(--primary) 3%, #fff);
   color: var(--muted);
 }
 
@@ -387,8 +453,8 @@ onMounted(load)
 
 .curriculum-page-list > article {
   border: 1px solid var(--line);
-  border-left: 4px solid #94a3b8;
-  border-radius: 6px;
+  border-left: 4px solid color-mix(in srgb, var(--primary) 42%, var(--line));
+  border-radius: 3px;
   background: #fff;
 }
 
@@ -402,7 +468,8 @@ onMounted(load)
 }
 
 .curriculum-page-list > article.selected {
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, .12);
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
 .curriculum-page-list article > header {
@@ -443,8 +510,8 @@ onMounted(load)
 .curriculum-page-statuses em {
   border-radius: 999px;
   padding: 3px 8px;
-  background: #f1f5f9;
-  color: #475569;
+  background: color-mix(in srgb, var(--primary) 5%, #fff);
+  color: var(--muted);
   font-size: 11px;
   font-style: normal;
 }
@@ -479,7 +546,7 @@ onMounted(load)
   margin: 0;
   border-top: 1px solid var(--line);
   padding: 13px;
-  background: #fbfdff;
+  background: color-mix(in srgb, var(--primary) 2%, #fff);
   color: var(--text);
   font-family: inherit;
   font-size: 14px;
@@ -503,7 +570,7 @@ onMounted(load)
   place-items: center;
   margin: 0;
   border: 1px dashed var(--line);
-  border-radius: 6px;
+  border-radius: 3px;
   color: var(--muted);
 }
 
@@ -520,7 +587,7 @@ onMounted(load)
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(15, 23, 42, .55);
+  background: rgba(18, 42, 37, .58);
 }
 
 .curriculum-page-edit-layer > section {
@@ -528,9 +595,9 @@ onMounted(load)
   max-height: 90%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  border-radius: 8px;
+  border-radius: 4px;
   background: #fff;
-  box-shadow: 0 24px 60px rgba(15, 23, 42, .28);
+  box-shadow: 0 24px 60px rgba(12, 36, 31, .28);
 }
 
 .curriculum-page-edit-layer header,
@@ -575,7 +642,7 @@ onMounted(load)
 .curriculum-page-edit-layer textarea {
   min-height: 0;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 3px;
   padding: 12px;
   resize: none;
 }

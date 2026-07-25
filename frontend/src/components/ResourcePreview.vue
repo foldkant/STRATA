@@ -26,10 +26,13 @@ const props = defineProps<{
   closable?: boolean
   contentOnly?: boolean
   learningPageInteractive?: boolean
+  expandable?: boolean
+  expanded?: boolean
 }>()
 
 const emit = defineEmits<{
   close: []
+  'toggle-expand': []
   'resource-opened': [payload: {
     resourceId: number | string
     presentation: 'embedded' | 'popout' | 'external' | 'download' | 'unknown'
@@ -259,6 +262,21 @@ onBeforeUnmount(() => reportVideoProgress(true))
         <p>{{ resource?.attachment_name || resource?.content || '网页内预览' }}</p>
       </div>
       <div class="resource-preview-actions">
+        <button
+          v-if="expandable && resource"
+          class="resource-preview-expand-button"
+          type="button"
+          :aria-pressed="Boolean(expanded)"
+          :title="expanded ? '返回课堂页面' : '在当前页面放大查看'"
+          data-test="resource-preview-expand"
+          @click="emit('toggle-expand')"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path v-if="!expanded" d="M7 3H3v4M13 3h4v4M7 17H3v-4M13 17h4v-4" />
+            <path v-else d="M3 7h4V3M17 7h-4V3M3 13h4v4M17 13h-4v4" />
+          </svg>
+          {{ expanded ? '返回课堂' : '放大查看' }}
+        </button>
         <a v-if="url" :href="url" download>下载</a>
         <a v-if="externalUrl" :href="externalUrl" target="_blank" rel="noopener noreferrer">打开链接</a>
         <button v-if="closable" type="button" @click="emit('close')">关闭</button>
@@ -305,6 +323,8 @@ onBeforeUnmount(() => reportVideoProgress(true))
         v-else-if="canUseOnlyOffice"
         :resource-id="resource!.id!"
         :mode="officeMode || 'view'"
+        :fallback-url="url"
+        :fallback-title="resource?.attachment_name || title"
       />
       <div v-else-if="kind === 'link'" class="resource-preview-empty resource-preview-link-card">
         <strong>{{ title }}</strong>

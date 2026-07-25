@@ -3,8 +3,6 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import timedelta
-from decimal import Decimal
-
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, OperationalError, close_old_connections, transaction
@@ -65,11 +63,17 @@ class ProcessingJobError(Exception):
         self.message = message
 
 
-def _audit(job: CurriculumProcessingJob, action: str, detail: dict | None = None) -> None:
+def _audit(
+    job: CurriculumProcessingJob,
+    action: str,
+    detail: dict | None = None,
+    *,
+    actor=None,
+) -> None:
     CurriculumStandardAuditLog.objects.create(
         version=job.version,
         action=action,
-        actor=job.requested_by,
+        actor=actor or job.requested_by,
         detail={"processing_job_id": job.id, **(detail or {})},
     )
 
@@ -214,6 +218,7 @@ def dispatch_processing_job(
     job: CurriculumProcessingJob,
     *,
     force: bool = False,
+    actor=None,
 ) -> CurriculumProcessingJob:
     from .tasks import process_version_pdf
 
@@ -243,6 +248,7 @@ def dispatch_processing_job(
             job,
             "processing_job_redispatch_attempted" if force else "processing_job_dispatch_attempted",
             {"celery_task_id": task_id, "dispatch_count": job.dispatch_count},
+            actor=actor,
         )
     try:
         process_version_pdf.apply_async(
@@ -256,6 +262,27 @@ def dispatch_processing_job(
         return mark_dispatch_failed(job, exc)
     job.refresh_from_db()
     return job
+
+
+def resume_processing_job(
+    job: CurriculumProcessingJob,
+    *,
+    actor,
+) -> CurriculumProcessingJob:
+    """Re-send an existing queued job without losing its progress or audit trail."""
+
+    job = (
+        CurriculumProcessingJob.objects.select_related("version", "requested_by")
+        .filter(pk=job.pk)
+        .first()
+    )
+    if not job:
+        raise ValidationError("课程标准后台任务不存在。")
+    if job.version.status != CurriculumVersionStatus.DRAFT:
+        raise ValidationError("只有草稿版本的等待任务可以继续处理。")
+    if job.status != CurriculumProcessingJobStatus.QUEUED:
+        raise ValidationError("只有处于等待状态的任务可以继续处理。")
+    return dispatch_processing_job(job, force=True, actor=actor)
 
 
 def redispatch_stale_queued_jobs(*, stale_seconds: int = 300) -> dict:

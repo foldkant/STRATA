@@ -162,9 +162,9 @@ function chooseFiles(event: Event) {
   justify-content: space-between;
   gap: 16px;
   padding: 14px;
-  border: 1px dashed #b8c7d9;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px dashed color-mix(in srgb, var(--primary, #2563eb) 30%, var(--line, #d8e1ec));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary, #2563eb) 3%, #fff);
   transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -174,8 +174,8 @@ function chooseFiles(event: Event) {
 }
 
 .app-file-picker.has-selection .app-file-picker-control {
-  border-color: #7db1ef;
-  background: #f3f8ff;
+  border-color: color-mix(in srgb, var(--primary, #2563eb) 55%, var(--line, #d8e1ec));
+  background: color-mix(in srgb, var(--primary, #2563eb) 7%, #fff);
 }
 
 .app-file-picker.has-error .app-file-picker-control {
@@ -196,7 +196,7 @@ function chooseFiles(event: Event) {
 }
 
 .app-file-picker-label {
-  color: #334155;
+  color: var(--text, #334155);
   font-size: 14px;
   font-weight: 700;
   line-height: 1.45;
@@ -216,7 +216,7 @@ function chooseFiles(event: Event) {
   border: 1px solid #d8e1ec;
   border-radius: 4px;
   background: #fff;
-  color: #64748b;
+  color: var(--muted, #64748b);
   font-size: 12px;
   font-style: normal;
   font-weight: 600;
@@ -239,8 +239,8 @@ function chooseFiles(event: Event) {
   align-items: center;
   justify-content: center;
   padding: 0 14px;
-  border: 1px solid #91a8c2;
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--primary, #2563eb) 42%, var(--line, #d8e1ec));
+  border-radius: 3px;
   background: #fff;
   color: var(--primary-dark, #1d4f91);
   font-size: 14px;
@@ -253,17 +253,17 @@ function chooseFiles(event: Event) {
 @media (hover: hover) {
   .app-file-picker-button:hover {
     border-color: var(--primary, #2563eb);
-    background: #eaf3ff;
+    background: color-mix(in srgb, var(--primary, #2563eb) 8%, #fff);
   }
 }
 
 .app-file-picker-button:active {
-  background: #dbeafe;
+  background: color-mix(in srgb, var(--primary, #2563eb) 14%, #fff);
 }
 
 .app-file-picker-button:focus-within {
   border-color: var(--primary, #2563eb);
-  box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.16);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #2563eb) 16%, transparent);
 }
 
 .app-file-picker-button[aria-disabled="true"] {
@@ -291,9 +291,9 @@ function chooseFiles(event: Event) {
   align-items: start;
   gap: 9px;
   padding: 9px 11px;
-  border: 1px solid #d8e8fb;
-  border-radius: 6px;
-  background: #f8fbff;
+  border: 1px solid color-mix(in srgb, var(--primary, #2563eb) 22%, var(--line, #d8e1ec));
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary, #2563eb) 4%, #fff);
 }
 
 .app-file-picker-selection > span {
@@ -302,8 +302,8 @@ function chooseFiles(event: Event) {
   align-items: center;
   padding: 0 7px;
   border-radius: 4px;
-  background: #dbeafe;
-  color: #1d4f91;
+  background: color-mix(in srgb, var(--primary, #2563eb) 12%, #fff);
+  color: var(--primary-dark, #1d4f91);
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
@@ -321,13 +321,13 @@ function chooseFiles(event: Event) {
 }
 
 .app-file-picker-selection strong {
-  color: #334155;
+  color: var(--text, #334155);
   font-size: 13px;
   line-height: 1.45;
 }
 
 .app-file-picker-selection small {
-  color: #64748b;
+  color: var(--muted, #64748b);
   font-size: 12px;
   line-height: 1.45;
 }

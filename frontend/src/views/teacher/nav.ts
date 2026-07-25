@@ -1,17 +1,33 @@
+import {
+  IconAdjustmentsHorizontal,
+  IconBooks,
+  IconChecklist,
+  IconClipboardCheck,
+  IconFiles,
+  IconLayoutDashboard,
+  IconLibrary,
+  IconListDetails,
+  IconMessage,
+  IconPresentation,
+  IconRobot,
+  IconSpeakerphone,
+  IconUsers
+} from '@tabler/icons-vue'
+
 export const teacherNavItems = [
-  { label: '教师首页', path: '/teacher' },
-  { label: '课程备课', path: '/teacher/courses' },
-  { label: '课堂教学', path: '/teacher/classroom' },
-  { label: '学生管理', path: '/teacher/students' },
-  { label: '测试管理', path: '/teacher/assessments' },
-  { label: '题库管理', path: '/teacher/question-bank' },
-  { label: '评价标准', path: '/teacher/evaluations' },
-  { label: '资源中心', path: '/teacher/resources' },
-  { label: '协作文档', path: '/teacher/documents' },
-  { label: 'AI接入', path: '/teacher/ai' },
-  { label: '分层建议', path: '/teacher/stratification' },
-  { label: '公告通知', path: '/teacher/notices' },
-  { label: '留言反馈', path: '/teacher/feedback' }
+  { label: '首页', path: '/teacher', group: '', icon: IconLayoutDashboard },
+  { label: '课程与课时', path: '/teacher/courses', group: '备课', icon: IconBooks },
+  { label: '评价方案库', path: '/teacher/evaluations', group: '备课', icon: IconClipboardCheck },
+  { label: '课堂实施', path: '/teacher/classroom', group: '上课', icon: IconPresentation },
+  { label: '作业与测试', path: '/teacher/assessments', group: '评价任务', icon: IconChecklist },
+  { label: '题库', path: '/teacher/question-bank', group: '评价任务', icon: IconListDetails },
+  { label: '学生学习情况', path: '/teacher/students', group: '学习支持', icon: IconUsers },
+  { label: '内容与支持建议', path: '/teacher/stratification', group: '学习支持', icon: IconAdjustmentsHorizontal },
+  { label: '教学资源', path: '/teacher/resources', group: '资源', icon: IconLibrary },
+  { label: '协作文档', path: '/teacher/documents', group: '资源', icon: IconFiles },
+  { label: '公告', path: '/teacher/notices', group: '沟通与设置', icon: IconSpeakerphone },
+  { label: '学生留言', path: '/teacher/feedback', group: '沟通与设置', icon: IconMessage },
+  { label: '个人 AI 设置', path: '/teacher/ai', group: '沟通与设置', icon: IconRobot }
 ]
 
 export function teacherNav(activePath: string) {

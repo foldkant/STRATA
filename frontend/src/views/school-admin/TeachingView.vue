@@ -150,7 +150,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <AppShell title="任课关系" eyebrow="学校管理员" :nav-items="navItems">
+  <AppShell title="任课关系" eyebrow="学校教学管理" :nav-items="navItems" shell-variant="school-admin">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <div class="extra-filter">
@@ -178,7 +178,7 @@ onMounted(async () => {
       v-model:query="query"
       v-model:status="status"
       title="任课关系"
-      description="维护教师与任教班级的对应关系。课程归属后续由课程模块处理。"
+      description="确认教师所任教的班级。具体课程由教师在课程管理中建立，并与相应班级关联。"
       :total="total"
       :page="page"
       :page-size="pageSize"

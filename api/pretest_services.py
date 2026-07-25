@@ -37,6 +37,7 @@ from learning.models import (
     LearningEvent,
     Notice,
     PretestPaper,
+    PretestPaperVersion,
     PretestQuestion,
 )
 from learning_analytics.services.classroom_events import (
@@ -44,6 +45,7 @@ from learning_analytics.services.classroom_events import (
     release_classroom_step_opportunities,
     withdraw_classroom_step_opportunities,
 )
+from learning_analytics.models import LearningTargetVersion
 from learning_analytics.services.attendance_events import (
     AttendanceEventError,
     release_attendance_opportunities,
@@ -535,7 +537,7 @@ def generate_lesson_step_questions_with_ai(request, data) -> dict:
         "score_defaults": {
             "base_score": base_score,
             "groups": score_defaults,
-            "note": "系统按 A、B、C、A/B、B/C 同时给题目和分值建议；后续接入分层模型后，只作为建议，必须由教师确认。",
+            "note": "系统同时生成面向不同学习内容与支持需要的题目和分值建议；系统结果不直接决定学生安排，必须由教师结合学习材料确认。",
         },
     }
 
@@ -751,17 +753,29 @@ def _school_subject(request, subject_id, errors: dict) -> Subject | None:
         return None
 
 
+@transaction.atomic
 def save_pretest_paper(
     request, data, *, paper: PretestPaper | None = None
 ) -> PretestPaper:
     errors: dict[str, list[str]] = {}
+    if paper is not None:
+        paper = (
+            PretestPaper.objects.select_for_update()
+            .select_related("subject")
+            .filter(pk=paper.pk, school=request.user.school)
+            .first()
+        )
+        if paper is None:
+            raise ServiceError("学习起点诊断不存在或不属于当前学校。", status=404)
+        if paper.status != PretestPaper.Status.DRAFT:
+            raise ServiceError(
+                "已发布或已归档的学习起点诊断不可修改，请复制为新版本后调整。",
+                status=409,
+            )
     subject = _school_subject(request, data.get("subject"), errors)
     title = str(data.get("title", "")).strip()
     kind = str(data.get("kind", "")).strip()
-    status = (
-        str(data.get("status", PretestPaper.Status.DRAFT)).strip()
-        or PretestPaper.Status.DRAFT
-    )
+    status = PretestPaper.Status.DRAFT
     introduction = str(data.get("introduction", "")).strip()
     version = _clean_optional_int(
         data.get("version"), "version", errors, min_value=1, max_value=999
@@ -769,32 +783,35 @@ def save_pretest_paper(
     if not _fullmatch(r"^[\u4e00-\u9fa5A-Za-z0-9（）()·\-\s]{2,128}$", title):
         errors["title"] = ["套卷名称需为 2-128 位，可包含中文、字母和数字。"]
     if kind not in {item.value for item in PretestPaper.Kind}:
-        errors["kind"] = ["前测类型只能为素养测试或学习态度问卷。"]
-    if status not in {item.value for item in PretestPaper.Status}:
-        errors["status"] = ["状态只能为草稿、已发布或归档。"]
+        errors["kind"] = ["学习起点诊断类型只能为素养测试或学习态度问卷。"]
+
+    scope_papers: list[PretestPaper] = []
+    if subject and kind:
+        scope_papers = list(
+            PretestPaper.objects.select_for_update()
+            .filter(
+                school=request.user.school,
+                subject=subject,
+                kind=kind,
+            )
+            .order_by("id")
+        )
 
     if subject and kind and version is None:
         max_version = (
-            PretestPaper.objects.filter(
-                school=request.user.school, subject=subject, kind=kind
-            )
-            .aggregate(value=Max("version"))
-            .get("value")
-            or 0
+            max((item.version for item in scope_papers), default=0)
         )
         version = max_version + 1
 
     if subject and kind and version:
-        queryset = PretestPaper.objects.filter(
-            school=request.user.school, subject=subject, kind=kind, version=version
-        )
-        if paper is not None:
-            queryset = queryset.exclude(pk=paper.pk)
-        if queryset.exists():
-            errors["version"] = ["该学科和前测类型下已存在相同版本号。"]
+        if any(
+            item.version == version and (paper is None or item.pk != paper.pk)
+            for item in scope_papers
+        ):
+            errors["version"] = ["该学科和学习起点诊断类型下已存在相同版本号。"]
 
     if errors:
-        raise ServiceError("前测套卷信息校验失败。", errors=errors, status=400)
+        raise ServiceError("学习起点诊断版本信息校验失败。", errors=errors, status=400)
 
     is_create = paper is None
     if paper is None:
@@ -805,17 +822,14 @@ def save_pretest_paper(
     paper.version = version or 1
     paper.introduction = introduction
     paper.status = status
-    if status == PretestPaper.Status.PUBLISHED and paper.published_at is None:
-        paper.published_at = timezone.now()
-    paper.save()
-
-    if paper.status == PretestPaper.Status.PUBLISHED:
-        PretestPaper.objects.filter(
-            school=request.user.school,
-            subject=paper.subject,
-            kind=paper.kind,
-            status=PretestPaper.Status.PUBLISHED,
-        ).exclude(pk=paper.pk).update(status=PretestPaper.Status.ARCHIVED)
+    try:
+        paper.save()
+    except IntegrityError as exc:
+        raise ServiceError(
+            "该学科和学习起点诊断类型下已存在相同版本号，请刷新后重试。",
+            errors={"version": ["版本号已被其他操作占用。"]},
+            status=409,
+        ) from exc
 
     _shared_services.write_audit(
         request,
@@ -833,18 +847,114 @@ def save_pretest_paper(
     return paper
 
 
+@transaction.atomic
 def publish_pretest_paper(request, paper: PretestPaper) -> PretestPaper:
-    if not paper.questions.exists():
-        raise ServiceError("套卷至少需要 1 道题目后才能发布。", status=400)
-    paper.status = PretestPaper.Status.PUBLISHED
-    paper.published_at = timezone.now()
-    paper.save(update_fields=["status", "published_at", "updated_at"])
-    PretestPaper.objects.filter(
-        school=paper.school,
-        subject=paper.subject,
-        kind=paper.kind,
+    # Lock the complete publication scope in a stable order. This serializes
+    # both repeated clicks on one draft and concurrent attempts to publish two
+    # versions for the same school/subject/kind.
+    scope = (
+        PretestPaper.objects.filter(pk=paper.pk)
+        .values("school_id", "subject_id", "kind")
+        .first()
+    )
+    if scope is None or (
+        getattr(request.user, "school_id", None)
+        and scope["school_id"] != request.user.school_id
+    ):
+        raise ServiceError("学习起点诊断不存在或不属于当前学校。", status=404)
+    locked_papers = list(
+        PretestPaper.objects.select_for_update()
+        .select_related("subject")
+        .filter(
+            school_id=scope["school_id"],
+            subject_id=scope["subject_id"],
+            kind=scope["kind"],
+        )
+        .order_by("id")
+    )
+    paper = next((item for item in locked_papers if item.pk == paper.pk), None)
+    if paper is None:
+        raise ServiceError("学习起点诊断不存在或已发生变更。", status=409)
+    if paper.status != PretestPaper.Status.DRAFT:
+        raise ServiceError("只能发布草稿状态的学习起点诊断。", status=409)
+    questions = list(
+        PretestQuestion.objects.select_for_update()
+        .filter(paper_id=paper.id)
+        .order_by("sort_order", "id")
+    )
+    if not questions:
+        raise ServiceError("学习起点诊断至少需要 1 个评价任务后才能发布。", status=400)
+    question_snapshot = [
+        {
+            "id": question.id,
+            "stem": question.stem,
+            "question_type": question.question_type,
+            "options": question.options,
+            "answer": question.answer,
+            "score": question.score,
+            "dimension": question.dimension,
+            "learning_target_code": question.learning_target_code,
+            "learning_target_name": question.learning_target_name,
+            "learning_target_version_id": question.learning_target_version_id,
+            "learning_target_version_hash": (
+                question.learning_target_version.content_hash
+                if question.learning_target_version_id
+                else ""
+            ),
+            "legacy_unmapped": question.legacy_unmapped,
+            "material_requirements": question.material_requirements,
+            "sort_order": question.sort_order,
+            "is_required": question.is_required,
+        }
+        for question in questions
+    ]
+    if any(not item["learning_target_code"] for item in question_snapshot):
+        raise ServiceError("每个评价任务都必须关联学习目标后才能发布。", status=400)
+    if PretestPaperVersion.objects.filter(
+        source_id=paper.id,
+        version_no=paper.version,
+    ).exists():
+        raise ServiceError("该诊断版本已经发布，请刷新页面后查看。", status=409)
+    try:
+        # The inner savepoint keeps the outer transaction usable when the
+        # database unique constraint detects a concurrent/stale publication.
+        with transaction.atomic():
+            PretestPaperVersion.objects.create(
+                source=paper,
+                version_no=paper.version,
+                title=paper.title,
+                kind=paper.kind,
+                introduction=paper.introduction,
+                question_snapshot=question_snapshot,
+                published_by=request.user,
+            )
+    except IntegrityError as exc:
+        raise ServiceError(
+            "该诊断版本已被其他操作发布，请刷新页面后查看。",
+            status=409,
+        ) from exc
+
+    published_at = timezone.now()
+    updated = PretestPaper.objects.filter(
+        pk=paper.pk,
+        status=PretestPaper.Status.DRAFT,
+    ).update(
         status=PretestPaper.Status.PUBLISHED,
-    ).exclude(pk=paper.pk).update(status=PretestPaper.Status.ARCHIVED)
+        published_at=published_at,
+        updated_at=published_at,
+    )
+    if updated != 1:
+        raise ServiceError("诊断发布状态已发生变化，请刷新页面后重试。", status=409)
+    PretestPaper.objects.filter(
+        pk__in=[item.pk for item in locked_papers],
+        status=PretestPaper.Status.PUBLISHED,
+    ).exclude(pk=paper.pk).update(
+        status=PretestPaper.Status.ARCHIVED,
+        updated_at=published_at,
+    )
+    paper.status = PretestPaper.Status.PUBLISHED
+    paper.published_at = published_at
+    paper.updated_at = published_at
     _shared_services.write_audit(
         request,
         "pretest_paper.publish",
@@ -880,7 +990,7 @@ def archive_pretest_paper(request, paper: PretestPaper) -> PretestPaper:
 
 def delete_pretest_paper(request, paper: PretestPaper) -> None:
     if paper.status == PretestPaper.Status.PUBLISHED:
-        raise ServiceError("已发布前测不能直接删除，请先归档。", status=400)
+        raise ServiceError("已发布的学习起点诊断不能直接删除，请先归档。", status=400)
     if paper.submissions.exists():
         raise ServiceError(
             "该套卷已有学生作答，不能物理删除；请保持归档状态。", status=400
@@ -930,9 +1040,31 @@ def _clean_answer(raw_answer) -> list[str]:
     return [item.strip() for item in re.split(r"[,，\s]+", text) if item.strip()]
 
 
+@transaction.atomic
 def save_pretest_question(
     request, paper: PretestPaper, data, *, question: PretestQuestion | None = None
 ) -> PretestQuestion:
+    paper = (
+        PretestPaper.objects.select_for_update()
+        .select_related("subject")
+        .filter(pk=paper.pk, school=request.user.school)
+        .first()
+    )
+    if paper is None:
+        raise ServiceError("学习起点诊断不存在或不属于当前学校。", status=404)
+    if paper.status != PretestPaper.Status.DRAFT:
+        raise ServiceError(
+            "已发布或已归档的学习起点诊断任务不可修改，请复制为新版本后调整。",
+            status=409,
+        )
+    if question is not None:
+        question = (
+            PretestQuestion.objects.select_for_update()
+            .filter(pk=question.pk, paper=paper)
+            .first()
+        )
+        if question is None:
+            raise ServiceError("评价任务不存在或已发生变更。", status=404)
     errors: dict[str, list[str]] = {}
     stem = str(data.get("stem", "")).strip()
     question_type = str(
@@ -942,6 +1074,11 @@ def save_pretest_question(
     answer = _clean_answer(data.get("answer", []))
     score = _clean_float(data.get("score"), "score", errors, default=0)
     dimension = str(data.get("dimension", "")).strip()
+    learning_target_code = str(data.get("learning_target_code", "")).strip()
+    learning_target_name = str(data.get("learning_target_name", "")).strip()
+    learning_target_version_id = data.get("learning_target_version_id")
+    learning_target_version = None
+    material_requirements = data.get("material_requirements", [])
     sort_order = _clean_optional_int(
         data.get("sort_order"), "sort_order", errors, min_value=0, max_value=9999
     )
@@ -960,10 +1097,52 @@ def save_pretest_question(
             errors["options"] = ["选择题或量表题至少需要 2 个选项。"]
     if question_type == PretestQuestion.QuestionType.SINGLE and len(answer) > 1:
         errors["answer"] = ["单选题只能设置一个正确答案。"]
+    if question_type in {
+        PretestQuestion.QuestionType.SINGLE,
+        PretestQuestion.QuestionType.MULTIPLE,
+    } and not answer:
+        errors["answer"] = ["客观题必须设置至少一个正确答案。"]
+    if not math.isfinite(score) or score < 0:
+        errors["score"] = ["分值必须是大于或等于 0 的有限数字。"]
+    elif question_type != PretestQuestion.QuestionType.SCALE and score <= 0:
+        errors["score"] = ["可评分评价任务的分值必须大于 0。"]
     if dimension and not _fullmatch(
         r"^[\u4e00-\u9fa5A-Za-z0-9（）()·\-\s]{1,64}$", dimension
     ):
         errors["dimension"] = ["维度名称格式不正确。"]
+    if not _fullmatch(r"^[A-Za-z][A-Za-z0-9_-]{0,95}$", learning_target_code):
+        errors["learning_target_code"] = ["请填写以字母开头的学习目标代码。"]
+    if len(learning_target_name) < 2 or len(learning_target_name) > 300:
+        errors["learning_target_name"] = ["请填写 2-300 字的学习目标名称。"]
+    if learning_target_version_id not in {None, ""}:
+        learning_target_version = (
+            LearningTargetVersion.objects.select_related("target")
+            .filter(
+                pk=learning_target_version_id,
+                target__school=paper.school,
+                target__subject=paper.subject,
+                alignment_status="complete",
+            )
+            .first()
+        )
+        if (
+            learning_target_version is None
+            or not learning_target_version.curriculum_alignments.exists()
+        ):
+            errors["learning_target_version_id"] = [
+                "请选择当前学校、学科下课标依据完整的学习目标版本。"
+            ]
+        elif learning_target_version.code != learning_target_code:
+            errors["learning_target_code"] = ["学习目标代码必须与所选冻结版本一致。"]
+        elif learning_target_version.title != learning_target_name:
+            errors["learning_target_name"] = ["学习目标名称必须与所选冻结版本一致。"]
+    if not isinstance(material_requirements, list):
+        errors["material_requirements"] = ["评价材料要求必须是列表。"]
+        material_requirements = []
+    else:
+        material_requirements = [
+            str(item).strip() for item in material_requirements if str(item).strip()
+        ][:20]
 
     valid_labels = {option["label"].upper() for option in options}
     invalid_answers = [
@@ -973,7 +1152,7 @@ def save_pretest_question(
         errors["answer"] = [f"答案不在选项中：{', '.join(invalid_answers)}。"]
 
     if errors:
-        raise ServiceError("前测题目信息校验失败。", errors=errors, status=400)
+        raise ServiceError("学习起点诊断任务信息校验失败。", errors=errors, status=400)
 
     is_create = question is None
     if question is None:
@@ -984,6 +1163,11 @@ def save_pretest_question(
     question.answer = answer
     question.score = score
     question.dimension = dimension
+    question.learning_target_code = learning_target_code
+    question.learning_target_name = learning_target_name
+    question.learning_target_version = learning_target_version
+    question.legacy_unmapped = learning_target_version is None
+    question.material_requirements = material_requirements
     question.sort_order = sort_order or 0
     question.is_required = is_required
     question.save()
@@ -1002,13 +1186,28 @@ def save_pretest_question(
     return question
 
 
+@transaction.atomic
 def delete_pretest_question(request, question: PretestQuestion) -> None:
-    paper = question.paper
-    if paper.status == PretestPaper.Status.PUBLISHED and paper.submissions.exists():
+    paper = (
+        PretestPaper.objects.select_for_update()
+        .select_related("subject")
+        .filter(pk=question.paper_id, school=request.user.school)
+        .first()
+    )
+    if paper is None:
+        raise ServiceError("学习起点诊断不存在或不属于当前学校。", status=404)
+    if paper.status != PretestPaper.Status.DRAFT:
         raise ServiceError(
-            "已发布且已有作答记录的题目不能物理删除，请复制新版本套卷后调整。",
-            status=400,
+            "已发布或已归档的学习起点诊断任务不能删除，请复制新版本后调整。",
+            status=409,
         )
+    question = (
+        PretestQuestion.objects.select_for_update()
+        .filter(pk=question.pk, paper=paper)
+        .first()
+    )
+    if question is None:
+        raise ServiceError("评价任务不存在或已发生变更。", status=404)
     detail = {"paper": paper.id, "stem": question.stem[:80]}
     target_id = question.id
     question.delete()

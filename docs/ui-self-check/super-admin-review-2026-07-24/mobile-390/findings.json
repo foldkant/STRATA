@@ -1,0 +1,16 @@
+{
+  "viewport": "mobile-390",
+  "reviewedRoutes": [
+    "/app/super-admin",
+    "/app/super-admin/schools",
+    "/app/super-admin/school-admins",
+    "/app/super-admin/curriculum-standards",
+    "/app/super-admin/collection",
+    "/app/super-admin/analysis",
+    "/app/super-admin/health"
+  ],
+  "pageErrors": [],
+  "serverErrors": [],
+  "externalRequests": [],
+  "layoutFindings": []
+}

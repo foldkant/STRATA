@@ -5,6 +5,8 @@ from datetime import timedelta
 from io import BytesIO
 
 from django.test import TestCase
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from openpyxl import load_workbook
 from rest_framework.test import APIClient
@@ -14,6 +16,7 @@ from courses.models import Course, CourseClass, Subject
 from learning.models import StratificationDecision
 from learning_analytics.models import StudentLearningSummary
 from learning_analytics.services.learning_summaries import (
+    _support_priority,
     build_student_learning_summary,
     build_transparent_suggestion,
 )
@@ -22,6 +25,23 @@ from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 
 class LearningSummaryTests(TestCase):
+    def test_uncalibrated_classroom_stars_do_not_change_support_priority(self):
+        base_metrics = {
+            "completion_rate": 0.7,
+            "score": {"score_rate": 0.7},
+            "resources": {"opened_rate": 0.7},
+            "evaluation": {
+                "teacher": {
+                    "average_stars": 1,
+                    "calibration_status": "not_calibrated",
+                    "eligible_for_learning_target_estimate": False,
+                }
+            },
+        }
+        low_rating_result = _support_priority(base_metrics)
+        base_metrics["evaluation"]["teacher"]["average_stars"] = 5
+        self.assertEqual(_support_priority(base_metrics), low_rating_result)
+
     def setUp(self):
         sync_event_schema_definitions()
         self.school = School.objects.create(name="学习汇总测试学校", code="SUMMARY")
@@ -308,6 +328,34 @@ class LearningSummaryTests(TestCase):
         suggestion = build_transparent_suggestion(summary=summary)
         self.assertEqual(suggestion.suggested_layer, "")
         self.assertEqual(suggestion.confidence, 0)
+
+    def test_stratification_overview_query_count_does_not_grow_per_student(self):
+        for index in range(24):
+            student = User.objects.create_user(
+                username=f"summary_budget_student_{index}",
+                password="123456",
+                role=User.Role.STUDENT,
+                school=self.school,
+            )
+            StudentProfile.objects.create(
+                user=student,
+                class_group=self.class_group,
+                is_first_use=False,
+            )
+
+        self.client.force_authenticate(self.teacher)
+        with CaptureQueriesContext(connection) as captured:
+            response = self.client.get(
+                f"/api/v1/teacher/analytics/stratification/overview/?course_id={self.course.id}"
+            )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["counts"]["total"], 25)
+        self.assertLessEqual(
+            len(captured),
+            14,
+            f"学习情况概览查询数超出预算：{len(captured)}",
+        )
 
     def test_model_candidate_prevents_parallel_transparent_pending_suggestion(self):
         summary = build_student_learning_summary(

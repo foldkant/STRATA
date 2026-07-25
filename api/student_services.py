@@ -220,7 +220,6 @@ STUDENT_IMPORT_HEADERS = [
     "班级",
     "联系电话",
     "初始密码",
-    "层级",
     "小组号",
     "积分",
     "状态",
@@ -245,19 +244,6 @@ from .services import (
     set_account_active,
     write_audit,
 )
-
-def _layer_value(value: str) -> str | None:
-    text = normalize_text(value).upper()
-    if not text:
-        return None
-    if text in {"A", "A层", "A 拓展挑战层", "拓展挑战层"}:
-        return StudentProfile.Layer.A
-    if text in {"B", "B层", "B 核心发展层", "核心发展层"}:
-        return StudentProfile.Layer.B
-    if text in {"C", "C层", "C 基础提升层", "基础提升层"}:
-        return StudentProfile.Layer.C
-    return "__invalid__"
-
 
 def _student_brief(profile: StudentProfile, reason: str = "") -> dict:
     return {
@@ -350,7 +336,6 @@ def _student_payload_errors(
     phone = str(data.get("phone", "")).strip()
     password = str(data.get("password", ""))
     student_no = str(data.get("student_no", "")).strip()
-    current_layer = str(data.get("current_layer", "")).strip() or None
     class_group_id = data.get("class_group")
     current_group_no = _clean_optional_int(
         data.get("current_group_no"),
@@ -384,10 +369,6 @@ def _student_payload_errors(
         errors["password"] = ["新增学生必须填写初始密码。"]
     if student_no and not _fullmatch(STUDENT_NO_PATTERN, student_no):
         errors["student_no"] = ["学号只能包含字母、数字、下划线或短横线。"]
-    if current_layer and current_layer not in {
-        item.value for item in StudentProfile.Layer
-    }:
-        errors["current_layer"] = ["层级只能为 A、B 或 C。"]
 
     User = get_user_model()
     user_queryset = User.objects.filter(username=username)
@@ -413,7 +394,6 @@ def _student_payload_errors(
         "phone": phone,
         "password": password,
         "student_no": student_no,
-        "current_layer": current_layer,
         "current_group_no": current_group_no,
         "score": score,
         "is_active": _clean_bool(data.get("is_active", True)),
@@ -434,9 +414,12 @@ def _school_class_by_name(
     return class_group
 
 
-def _validate_student_import(request, rows: list[dict]) -> tuple[list[dict], list[str]]:
+def _validate_student_import(
+    request, rows: list[dict]
+) -> tuple[list[dict], list[str], list[str]]:
     User = get_user_model()
     errors = []
+    warnings = []
     records = []
     seen_usernames = set()
     seen_student_no = set()
@@ -448,7 +431,14 @@ def _validate_student_import(request, rows: list[dict]) -> tuple[list[dict], lis
         class_group = _school_class_by_name(request, row.get("班级"), row, errors)
         phone = normalize_text(row.get("联系电话"))
         password = normalize_text(row.get("初始密码"))
-        current_layer = _layer_value(row.get("层级"))
+        legacy_band = normalize_text(row.get("层级"))
+        if legacy_band:
+            warnings.append(
+                _row_error(
+                    row,
+                    "旧模板中的“层级”已忽略；学习内容层级请在具体学科或课程中确认。",
+                )
+            )
         active = _active_value(row.get("状态"), default=True)
         current_group_no = _clean_optional_int(
             row.get("小组号"), "current_group_no", {}, min_value=1, max_value=999
@@ -497,9 +487,6 @@ def _validate_student_import(request, rows: list[dict]) -> tuple[list[dict], lis
                 )
         if phone and not _matches(PHONE_PATTERN, phone):
             errors.append(_row_error(row, "联系电话格式不正确。"))
-        if current_layer == "__invalid__":
-            errors.append(_row_error(row, "层级只能填写 A、B、C 或留空。"))
-            current_layer = None
         if active is None:
             errors.append(_row_error(row, "状态只能填写启用或停用。"))
         if current_group_no is None and normalize_text(row.get("小组号")):
@@ -539,7 +526,6 @@ def _validate_student_import(request, rows: list[dict]) -> tuple[list[dict], lis
                 "class_group": class_group,
                 "phone": phone,
                 "password": password,
-                "current_layer": current_layer,
                 "current_group_no": current_group_no,
                 "score": score,
                 "is_active": active if active is not None else True,
@@ -548,7 +534,7 @@ def _validate_student_import(request, rows: list[dict]) -> tuple[list[dict], lis
             }
         )
 
-    return records, errors
+    return records, errors, warnings
 
 
 @transaction.atomic
@@ -556,12 +542,12 @@ def import_students_from_xlsx(request, uploaded_file) -> dict:
     rows = read_table_rows(
         uploaded_file,
         required_headers=["登录账号", "姓名"],
-        all_headers=STUDENT_IMPORT_HEADERS,
+        all_headers=[*STUDENT_IMPORT_HEADERS, "层级"],
     )
     if not rows:
         raise ServiceError("Excel 文件没有可导入的数据行。", status=400)
 
-    records, errors = _validate_student_import(request, rows)
+    records, errors, warnings = _validate_student_import(request, rows)
     if errors:
         raise ServiceError(
             "学生批量导入校验失败。", errors={"rows": errors[:100]}, status=400
@@ -583,7 +569,6 @@ def import_students_from_xlsx(request, uploaded_file) -> dict:
             profile = record["existing_profile"]
             profile.class_group = record["class_group"]
             profile.student_no = record["student_no"]
-            profile.current_layer = record["current_layer"]
             profile.current_group_no = record["current_group_no"]
             profile.score = record["score"]
             profile.save()
@@ -604,7 +589,6 @@ def import_students_from_xlsx(request, uploaded_file) -> dict:
                 user=user,
                 class_group=record["class_group"],
                 student_no=record["student_no"],
-                current_layer=record["current_layer"],
                 current_group_no=record["current_group_no"],
                 score=record["score"],
                 is_first_use=True,
@@ -623,6 +607,7 @@ def import_students_from_xlsx(request, uploaded_file) -> dict:
         "created_count": created_count,
         "updated_count": updated_count,
         "total_count": len(records),
+        "warnings": warnings,
     }
 
 
@@ -648,7 +633,6 @@ def create_student(request, data) -> StudentProfile:
         user=user,
         class_group=cleaned["class_group"],
         student_no=cleaned["student_no"],
-        current_layer=cleaned["current_layer"],
         current_group_no=cleaned["current_group_no"],
         score=cleaned["score"],
         is_first_use=True,
@@ -680,7 +664,6 @@ def update_student(request, profile: StudentProfile, data) -> StudentProfile:
 
     profile.class_group = cleaned["class_group"]
     profile.student_no = cleaned["student_no"]
-    profile.current_layer = cleaned["current_layer"]
     profile.current_group_no = cleaned["current_group_no"]
     profile.score = cleaned["score"]
     try:
@@ -707,6 +690,8 @@ def set_student_active(request, profile: StudentProfile, is_active: bool) -> Non
 
 
 def reset_student_password(request, profile: StudentProfile, password: str) -> None:
+    from config.login_security import clear_login_failures_for_username
+
     if not _matches(TEACHING_PASSWORD_PATTERN, password):
         raise ServiceError(
             "学生密码需为 6-32 位，可使用字母、数字和常用符号。",
@@ -715,6 +700,7 @@ def reset_student_password(request, profile: StudentProfile, password: str) -> N
     profile.user.set_password(password)
     profile.user.is_first_login = True
     profile.user.save(update_fields=["password", "is_first_login"])
+    clear_login_failures_for_username(profile.user.username)
     _shared_services.write_audit(
         request,
         "student.reset_password",

@@ -65,7 +65,25 @@ export type StudentLesson = {
 export type StudentPretestStatus = {
   required: boolean
   completed: boolean
-  missing: Array<{ kind: string; kind_label: string; paper_id: number; title: string }>
+  assigned?: boolean
+  status?: 'not_assigned' | 'action_required' | 'scheduled' | 'exempt' | 'completed' | 'no_current_action'
+  course_access?: 'deferred' | 'eligible' | 'exempt'
+  completion_scope?: 'diagnostic_administration'
+  missing: Array<{
+    kind: string
+    kind_label: string
+    paper_id: number
+    administration_id: number
+    batch_code: string
+    title: string
+    availability_status?: 'scheduled' | 'open' | 'closed'
+    completion?: {
+      submission: 'pending' | 'reported' | 'completed' | 'not_required'
+      scoring: 'not_started' | 'pending_review' | 'completed' | 'not_applicable'
+      course_access: 'deferred' | 'eligible' | 'exempt'
+      exception: '' | 'missing' | 'device_issue' | 'not_offered'
+    }
+  }>
 }
 
 export type StudentCourse = {
@@ -530,31 +548,57 @@ export type StudentPretestQuestion = {
   id: number
   paper: number
   stem: string
-  question_type: 'single' | 'multiple' | 'scale' | 'text'
+  question_type: 'single' | 'multiple' | 'scale' | 'text' | 'performance' | 'operation' | 'short_project'
   question_type_label: string
   options: Array<string | { label?: string; text?: string }>
   answer?: string[]
   score: number
   dimension: string
+  learning_target_code: string
+  learning_target_name: string
+  material_requirements: string[]
+  attachment_policy: {
+    enabled: boolean
+    allowed_extensions: string[]
+    max_files: number
+    max_file_mb: number
+  }
   sort_order: number
   is_required: boolean
 }
 
 export type StudentPretestPaper = {
-  id: number
+  id?: number
+  administration_id: number
+  batch_code: string
+  purpose: 'entry_diagnostic' | 'research_pretest' | 'research_posttest' | 'pilot'
+  purpose_label: string
+  opportunity_status: 'offered' | 'not_offered'
+  availability_status?: 'scheduled' | 'open' | 'closed'
+  submission_allowed?: boolean
+  administration_content_hash?: string
+  open_at?: string | null
+  close_at?: string | null
+  completion?: {
+    submission: 'pending' | 'reported' | 'completed' | 'not_required'
+    scoring: 'not_started' | 'pending_review' | 'completed' | 'not_applicable'
+    course_access: 'deferred' | 'eligible' | 'exempt'
+    exception: '' | 'missing' | 'device_issue' | 'not_offered'
+  }
   subject: SubjectRow
   title: string
-  kind: 'literacy' | 'attitude'
-  kind_label: string
-  version: number
-  introduction: string
-  status: string
-  status_label: string
-  question_count: number
-  submission_count: number
-  published_at: string | null
-  created_at: string
-  updated_at: string
+  kind?: 'literacy' | 'attitude'
+  kind_label?: string
+  version?: number
+  introduction?: string
+  status?: string
+  status_label?: string
+  question_count?: number
+  submission_count?: number
+  published_at?: string | null
+  published_version?: { id: number; version_no: number; content_hash: string }
+  created_at?: string
+  updated_at?: string
   questions?: StudentPretestQuestion[]
 }
 
@@ -756,13 +800,55 @@ export function getStudentRequiredPretests() {
   return apiRequest<StudentRequiredPretest[]>('/api/v1/student/pretests/required/')
 }
 
-export function getStudentPretestPaper(paperId: number) {
-  return apiRequest<StudentPretestPaper>(`/api/v1/student/pretests/papers/${paperId}/`)
+export function getStudentPretestPaper(administrationId: number) {
+  return apiRequest<StudentPretestPaper>(`/api/v1/student/diagnostic-administrations/${administrationId}/paper/`)
 }
 
-export function submitStudentPretestPaper(paperId: number, answers: Record<string, unknown>) {
-  return apiRequest<{ id: number; score: number; submitted_at: string }>(`/api/v1/student/pretests/papers/${paperId}/`, {
-    method: 'POST',
-    body: toJsonBody({ answers })
+export function submitStudentPretestPaper(
+  administrationId: number,
+  paperVersion: { id: number; content_hash: string },
+  answers: Record<string, unknown>,
+  opportunityStatus: 'observed' | 'missing' | 'device_issue' = 'observed',
+  taskStatuses: Record<string, 'observed' | 'missing' | 'device_issue'> = {},
+  attachments: Record<string, File[]> = {},
+  idempotencyKey = ''
+) {
+  const payload = {
+    paper_version_id: paperVersion.id,
+    content_hash: paperVersion.content_hash,
+    answers,
+    opportunity_status: opportunityStatus,
+    task_statuses: taskStatuses,
+    idempotency_key: idempotencyKey
+  }
+  const resultType = {} as {
+    id: number
+    score: number | null
+    submitted_at: string
+    opportunity_status: string
+    target_results: Array<Record<string, unknown>>
+    paper_version_id: number
+    content_hash: string
+    attachments: Array<{
+      attachment_id: string
+      question_id: string
+      original_name: string
+      file_size: number
+      file_sha256: string
+      download_url: string
+    }>
+  }
+  const hasAttachments = Object.values(attachments).some((files) => files.length > 0)
+  if (!hasAttachments) {
+    return apiRequest<typeof resultType>(`/api/v1/student/diagnostic-administrations/${administrationId}/paper/`, {
+      method: 'POST',
+      body: toJsonBody(payload)
+    })
+  }
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(payload))
+  Object.entries(attachments).forEach(([questionId, files]) => {
+    files.forEach((file) => formData.append(`attachment_${questionId}`, file))
   })
+  return uploadRequest<typeof resultType>(`/api/v1/student/diagnostic-administrations/${administrationId}/paper/`, formData)
 }

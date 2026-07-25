@@ -56,30 +56,39 @@ def record_resource_center_opened(*, resource, student, profile, occurred_at=Non
 
 def record_pretest_submitted(*, submission, profile, occurred_at=None):
     answers = submission.answers if isinstance(submission.answers, dict) else {}
+    paper_version = (
+        submission.paper_version.version_no
+        if submission.paper_version_id
+        else submission.paper.version
+    )
+    score_raw = float(submission.score) if submission.score is not None else None
     return record_learning_event(
         actor=submission.student,
         target_student=submission.student,
         event_name="pretest.submitted",
         payload={
             "paper_kind": submission.paper.kind,
-            "paper_version": submission.paper.version,
+            "paper_version": paper_version,
             "submission_id": submission.id,
             "answer_count": len(answers),
-            "score_raw": float(submission.score or 0),
+            "opportunity_status": submission.opportunity_status,
+            "score_raw": score_raw,
         },
         legacy_event_type=LearningEvent.EventType.ANSWER_SUBMIT,
         class_group=profile.class_group,
         subject=submission.subject,
         object_type="pretest_paper",
         object_id=submission.paper_id,
-        object_version=f"paper-v{submission.paper.version}",
+        object_version=f"paper-v{paper_version}",
         legacy_score=submission.score,
         legacy_metadata={
             "subject": submission.subject_id,
             "kind": submission.paper.kind,
             "submission": submission.id,
+            "opportunity_status": submission.opportunity_status,
         },
         occurred_at=occurred_at or submission.submitted_at,
+        schema_version="1.1",
     )
 
 

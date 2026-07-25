@@ -28,6 +28,8 @@ from .evaluation_models import (  # noqa: F401
     EvaluationStandard,
     EvaluationStandardVersion,
     EvaluationDimension,
+    EvaluationMode,
+    EvidenceOwnership,
     EvaluationTrialConclusion,
     EvaluationTrialRecord,
     EvaluationTrialStatus,
@@ -35,6 +37,16 @@ from .evaluation_models import (  # noqa: F401
     LessonStepEvaluationBinding,
     ClassroomEvaluationStandardUse,
     EvaluationSubmissionEvidence,
+)
+from .ai_evaluation_models import (  # noqa: F401
+    AIEvaluationDraftSession,
+    AIEvaluationDraftStatus,
+    AIEvaluationGenerationRecord,
+    AIEvaluationGenerationStage,
+    AIEvaluationGenerationStatus,
+    AIEvaluationTaskKind,
+    AIEvaluationTeacherDecision,
+    AIEvaluationTeacherDecisionType,
 )
 from .feature_models import (  # noqa: F401
     DecisionPoint,
@@ -72,6 +84,19 @@ from .grouping_models import (  # noqa: F401
 from .test_data_governance_models import (  # noqa: F401
     TestDataBatch,
     TestDataObjectMarker,
+)
+from .target_models import (  # noqa: F401
+    EvaluationBasisLearningTarget,
+    EvaluationCriterionEvaluationTask,
+    EvaluationCriterionLearningTarget,
+    EvaluationTaskLearningActivity,
+    EvaluationTaskLearningTarget,
+    LearningActivityLearningTarget,
+    LearningTarget,
+    LearningTargetAlignmentStatus,
+    LearningTargetBackfillIssue,
+    LearningTargetCurriculumAlignment,
+    LearningTargetVersion,
 )
 
 EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")

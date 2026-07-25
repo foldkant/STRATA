@@ -41,7 +41,6 @@
             <th>姓名</th>
             <th>学号</th>
             <th>班级</th>
-            <th>层级</th>
             <th>小组</th>
             <th>状态</th>
             <th>最近登录</th>
@@ -55,7 +54,6 @@
               <td>{{ profile.user.display_name|default:"-" }}</td>
               <td>{{ profile.student_no|default:"-" }}</td>
               <td>{{ profile.class_group.name }}</td>
-              <td>{{ profile.current_layer }}</td>
               <td>{{ profile.current_group_no|default:"-" }}</td>
               <td>
                 {% if profile.user.is_active %}
@@ -71,7 +69,7 @@
               </td>
             </tr>
           {% empty %}
-            <tr><td colspan="9" class="empty">暂无学生</td></tr>
+            <tr><td colspan="8" class="empty">暂无学生</td></tr>
           {% endfor %}
         </tbody>
       </table>

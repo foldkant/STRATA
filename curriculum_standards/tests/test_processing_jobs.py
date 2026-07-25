@@ -8,6 +8,7 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.contrib import admin as django_admin
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.db import OperationalError
@@ -28,7 +29,6 @@ from curriculum_standards.models import (
     CurriculumProcessingPage,
     CurriculumProcessingPriority,
     CurriculumStandard,
-    CurriculumStandardPage,
     CurriculumStandardVersion,
     CurriculumTextExtractionMethod,
 )
@@ -38,8 +38,8 @@ from curriculum_standards.processing import (
     finish_job_failed,
     reconcile_stale_processing_jobs,
     redispatch_stale_queued_jobs,
+    resume_processing_job,
     request_job_cancel,
-    retry_processing_job,
     run_processing_job,
     stage_processing_page,
 )
@@ -198,6 +198,7 @@ class CurriculumProcessingJobTests(TestCase):
             "resource_limit",
             "created_by_display",
             "can_retry",
+            "can_resume",
             "can_cancel",
             "result_summary",
         ):
@@ -210,8 +211,13 @@ class CurriculumProcessingJobTests(TestCase):
             "api_super_admin_curriculum_processing_job_create",
             kwargs={"pk": self.version.id},
         )
+        resume_url = reverse(
+            "api_super_admin_curriculum_processing_job_resume",
+            kwargs={"pk": 1},
+        )
         self.assertEqual(self.client.get(list_url).status_code, 403)
         self.assertEqual(self.client.post(create_url, {}, format="json").status_code, 403)
+        self.assertEqual(self.client.post(resume_url, {}, format="json").status_code, 403)
 
     def test_broker_failure_is_durable_and_clear(self):
         url = reverse(
@@ -329,6 +335,38 @@ class CurriculumProcessingJobTests(TestCase):
         self.assertEqual(retry.retry_of_id, failed.id)
         self.assertEqual(retry.retry_count, 1)
         self.assertEqual(retry.status, CurriculumProcessingJobStatus.QUEUED)
+
+    def test_queued_job_can_be_resumed_from_superadmin_api(self):
+        job = self._job()
+        CurriculumProcessingJob.objects.filter(pk=job.id).update(
+            celery_task_id="stable-task-id",
+            dispatch_count=1,
+            dispatch_attempted_at=timezone.now() - timedelta(hours=1),
+        )
+        with patch("curriculum_standards.tasks.process_version_pdf.apply_async") as dispatch:
+            response = self.client.post(
+                reverse(
+                    "api_super_admin_curriculum_processing_job_resume",
+                    kwargs={"pk": job.id},
+                ),
+                {},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 202, response.data)
+        self.assertTrue(response.data["data"]["can_resume"])
+        dispatch.assert_called_once()
+        self.assertEqual(dispatch.call_args.kwargs["task_id"], "stable-task-id")
+        job.refresh_from_db()
+        self.assertEqual(job.status, CurriculumProcessingJobStatus.QUEUED)
+        self.assertEqual(job.dispatch_count, 2)
+        audit = self.version.audit_logs.get(action="processing_job_redispatch_attempted")
+        self.assertEqual(audit.actor_id, self.admin.id)
+
+    def test_only_queued_job_can_resume(self):
+        job = self._job()
+        finish_job_failed(job, "test_failure", "测试失败")
+        with self.assertRaisesMessage(ValidationError, "只有处于等待状态"):
+            resume_processing_job(job, actor=self.admin)
 
     def test_active_job_blocks_submission_for_human_review(self):
         self._job()

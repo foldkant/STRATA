@@ -6,14 +6,22 @@ import {
   saveEvaluationPlan,
   type EvaluationPlanPayload,
   type EvaluationPlanRow,
+  type EvaluationTask,
   type EvaluationOptions
 } from '@/api/evaluation'
 import CurriculumReferencePickerModal from '@/components/curriculum/CurriculumReferencePickerModal.vue'
 import CurriculumReferenceTraceModal from '@/components/curriculum/CurriculumReferenceTraceModal.vue'
+import { vModalFocus } from '@/directives/modalFocus'
 
 const props = defineProps<{
   draft: EvaluationPlanRow | null
   options: EvaluationOptions
+  initialCourseId?: number | null
+  initialTitle?: string
+  initialTargetStudents?: string
+  initialContentScope?: string[]
+  contextLabel?: string
+  lockCourse?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -29,20 +37,40 @@ const referencePicker = ref(false)
 const traceReferenceId = ref<number | null>(null)
 const curriculumReferences = ref<CurriculumNode[]>(cloneJson(props.draft?.curriculum_references || []))
 
+function requestClose() {
+  if (!saving.value) emit('close')
+}
+
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+const draftEvaluationTasks = cloneJson(props.draft?.evaluation_tasks || [])
+const defaultTaskWeight = draftEvaluationTasks.length ? 100 / draftEvaluationTasks.length : 100
+
 const form = reactive<EvaluationPlanPayload>({
-  course: props.draft?.course?.id || props.options.courses[0]?.id || '',
-  title: props.draft?.title || '',
+  course: props.draft?.course?.id
+    || props.options.courses.find((item) => item.id === Number(props.initialCourseId))?.id
+    || props.options.courses[0]?.id
+    || '',
+  title: props.draft?.title || props.initialTitle?.trim() || '',
   content_version: props.draft?.content_version || '1.0',
-  target_students: props.draft?.target_students || '',
+  target_students: props.draft?.target_students || props.initialTargetStudents?.trim() || '',
   learning_goal: props.draft?.learning_goal || '',
-  learning_goals: cloneJson(props.draft?.learning_goals || []),
+  learning_goals: cloneJson(props.draft?.learning_goals || []).map((item) => ({
+    ...item,
+    curriculum_node_ids: item.curriculum_node_ids || props.draft?.curriculum_node_ids || props.draft?.curriculum_references?.map((reference) => reference.id) || []
+  })),
   evaluation_basis: cloneJson(props.draft?.evaluation_basis || []),
+  learning_activities: cloneJson(props.draft?.learning_activities || []),
   learning_tasks: cloneJson(props.draft?.learning_tasks || []),
-  content_scope: [...(props.draft?.content_scope || [])],
+  evaluation_tasks: draftEvaluationTasks.map((item) => ({
+    ...item,
+    component_modes: [...(item.component_modes || [])],
+    weight: Number(item.weight || defaultTaskWeight)
+  })),
+  assessment_modes: Array.from(new Set(draftEvaluationTasks.map((item) => item.mode))),
+  content_scope: [...(props.draft?.content_scope || props.initialContentScope || [])],
   thinking_requirements: [...(props.draft?.thinking_requirements || [])],
   support_options: [...(props.draft?.support_options || [])],
   scoring_rules: {
@@ -54,10 +82,15 @@ const form = reactive<EvaluationPlanPayload>({
 })
 
 const modalTitle = computed(() => props.draft ? '编辑评价方案' : '新建评价方案')
-const courseLocked = computed(() => Boolean(props.draft?.latest_version))
+const courseLocked = computed(() => Boolean(props.draft?.latest_version) || Boolean(props.lockCourse))
 const selectedCourse = computed(() => props.options.courses.find((item) => item.id === Number(form.course)) || null)
 const selectedReferenceTypes = computed(() => new Set(curriculumReferences.value.map((item) => item.node_type)))
 const curriculumTypeOrder: CurriculumNodeType[] = ['core_competency', 'course_objective', 'course_content', 'academic_quality']
+const atomicAssessmentOptions = computed(() => props.options.assessment_modes.filter((item) => item.value !== 'mixed'))
+const derivedAssessmentModes = computed(() => Array.from(new Set(form.evaluation_tasks.map((item) => item.mode))))
+const derivedAssessmentModeLabels = computed(() => derivedAssessmentModes.value.map((mode) => (
+  props.options.assessment_modes.find((item) => item.value === mode)?.label || mode
+)))
 
 function curriculumTypeLabel(type: CurriculumNodeType) {
   return {
@@ -77,18 +110,26 @@ function curriculumPageLabel(reference: CurriculumNode) {
 function applyCurriculumReferences(references: CurriculumNode[]) {
   curriculumReferences.value = references
   form.curriculum_node_ids = references.map((item) => item.id)
+  const available = new Set(form.curriculum_node_ids)
+  for (const goal of form.learning_goals) {
+    goal.curriculum_node_ids = goal.curriculum_node_ids.filter((id) => available.has(id))
+  }
   referencePicker.value = false
 }
 
 function removeCurriculumReference(id: number) {
   curriculumReferences.value = curriculumReferences.value.filter((item) => item.id !== id)
   form.curriculum_node_ids = curriculumReferences.value.map((item) => item.id)
+  for (const goal of form.learning_goals) {
+    goal.curriculum_node_ids = goal.curriculum_node_ids.filter((item) => item !== id)
+  }
 }
 
 watch(() => form.course, (next, previous) => {
-  if (previous && next !== previous && curriculumReferences.value.length) {
+  if (previous && next !== previous) {
     curriculumReferences.value = []
     form.curriculum_node_ids = []
+    for (const goal of form.learning_goals) goal.curriculum_node_ids = []
   }
 })
 
@@ -100,19 +141,150 @@ function inputValue(event: Event) {
   return (event.target as HTMLInputElement | HTMLTextAreaElement).value
 }
 
+function nextCode(prefix: string, rows: Array<{ code: string }>) {
+  const maximum = rows.reduce((current, row) => {
+    const match = row.code.match(new RegExp(`^${prefix}(\\d+)$`, 'i'))
+    return match ? Math.max(current, Number(match[1])) : current
+  }, 0)
+  return `${prefix}${maximum + 1}`
+}
+
 function addGoal() {
-  form.learning_goals.push({ code: `G${form.learning_goals.length + 1}`, title: '', description: '' })
+  form.learning_goals.push({
+    code: nextCode('G', form.learning_goals),
+    title: '',
+    description: '',
+    curriculum_node_ids: [...form.curriculum_node_ids]
+  })
 }
 
 function addBasis() {
-  form.evaluation_basis.push({ code: `B${form.evaluation_basis.length + 1}`, goal_codes: [], description: '', source_types: [] })
+  form.evaluation_basis.push({ code: nextCode('B', form.evaluation_basis), goal_codes: [], description: '', source_types: [] })
 }
 
-function addTask() {
-  form.learning_tasks.push({ code: `T${form.learning_tasks.length + 1}`, title: '', basis_codes: [], description: '' })
+function addActivity() {
+  form.learning_activities.push({
+    code: nextCode('A', form.learning_activities),
+    title: '',
+    goal_codes: [],
+    description: ''
+  })
 }
 
-function toggleReference(values: string[], code: string, checked: boolean) {
+function addEvaluationTask() {
+  const mode: EvaluationTask['mode'] = 'project'
+  form.evaluation_tasks.push({
+    code: nextCode('E', form.evaluation_tasks),
+    title: '',
+    goal_codes: [],
+    activity_codes: [],
+    mode,
+    component_modes: [],
+    evidence_ownership: 'individual',
+    material_types: ['artifact'],
+    weight: 100,
+    description: ''
+  })
+  rebalanceTaskWeights()
+}
+
+function prepareSimpleLessonDraft() {
+  if (!form.learning_goals.length) {
+    form.learning_goals.push({
+      code: 'G1',
+      title: form.learning_goal.replace(/[，。；\n].*$/, '').slice(0, 80) || '完成本环节学习任务',
+      description: form.learning_goal,
+      curriculum_node_ids: [...form.curriculum_node_ids]
+    })
+  }
+  const goalCodes = form.learning_goals.map((item) => item.code)
+  if (!form.learning_activities.length) {
+    form.learning_activities.push({
+      code: 'A1',
+      title: `${props.contextLabel || form.title}学习活动`.slice(0, 160),
+      goal_codes: [...goalCodes],
+      description: form.content_scope[0]
+        || '学生围绕本环节学习任务开展实践、交流方法并修改学习成果。'
+    })
+  }
+  if (!form.evaluation_basis.length) {
+    form.evaluation_basis.push({
+      code: 'B1',
+      goal_codes: [...goalCodes],
+      description: '依据学生在本环节形成的作品、操作记录和个人说明，判断与学习目标对应的具体表现。',
+      source_types: ['学生作品', '操作记录', '学生说明']
+    })
+  }
+  if (!form.evaluation_tasks.length) {
+    const isInformationTechnology = `${selectedCourse.value?.subject.name || ''}${selectedCourse.value?.subject.code || ''}`.includes('信息')
+    const mode: EvaluationTask['mode'] = isInformationTechnology ? 'operation' : 'project'
+    form.evaluation_tasks.push({
+      code: 'E1',
+      title: `${props.contextLabel || form.title}学习成果`.slice(0, 160),
+      goal_codes: [...goalCodes],
+      activity_codes: form.learning_activities.map((item) => item.code),
+      mode,
+      component_modes: [],
+      evidence_ownership: 'individual',
+      material_types: [mode === 'operation' ? 'operation' : 'artifact'],
+      weight: 100,
+      description: '学生完成本环节学习任务，并提交可检查的个人作品、操作记录或说明。'
+    })
+  }
+  if (!form.content_scope.length) form.content_scope = [props.contextLabel || form.title]
+  if (!form.thinking_requirements.length) form.thinking_requirements = ['understand', 'apply']
+  if (form.scoring_rules.decision_rule.trim().length < 8) {
+    form.scoring_rules.decision_rule = '依据学生实际形成的作品、操作记录和说明对照表现水平判断；材料不足、设备故障或未获得表现机会时暂不评价。'
+  }
+  if (form.follow_up_suggestion.trim().length < 8) {
+    form.follow_up_suggestion = '根据学生具体表现提供针对性反馈，并安排补充说明、修改作品或迁移实践的学习机会。'
+  }
+}
+
+function removeGoal(index: number) {
+  const code = form.learning_goals[index]?.code
+  if (!code) return
+  form.evaluation_basis.forEach((item) => {
+    item.goal_codes = item.goal_codes.filter((value) => value !== code)
+  })
+  form.learning_activities.forEach((item) => {
+    item.goal_codes = item.goal_codes.filter((value) => value !== code)
+  })
+  form.evaluation_tasks.forEach((item) => {
+    item.goal_codes = item.goal_codes.filter((value) => value !== code)
+  })
+  form.learning_goals.splice(index, 1)
+}
+
+function removeActivity(index: number) {
+  const code = form.learning_activities[index]?.code
+  if (!code) return
+  form.evaluation_tasks.forEach((item) => {
+    item.activity_codes = item.activity_codes.filter((value) => value !== code)
+  })
+  form.learning_activities.splice(index, 1)
+}
+
+function taskModeChanged(task: EvaluationTask) {
+  if (task.mode !== 'mixed') task.component_modes = []
+}
+
+function rebalanceTaskWeights() {
+  if (!form.evaluation_tasks.length) return
+  const weight = Number((100 / form.evaluation_tasks.length).toFixed(2))
+  form.evaluation_tasks.forEach((item, index) => {
+    item.weight = index === form.evaluation_tasks.length - 1
+      ? Number((100 - weight * (form.evaluation_tasks.length - 1)).toFixed(2))
+      : weight
+  })
+}
+
+function removeEvaluationTask(index: number) {
+  form.evaluation_tasks.splice(index, 1)
+  rebalanceTaskWeights()
+}
+
+function toggleReference<T extends string | number>(values: T[], code: T, checked: boolean) {
   const next = checked ? Array.from(new Set([...values, code])) : values.filter((item) => item !== code)
   values.splice(0, values.length, ...next)
 }
@@ -125,13 +297,24 @@ function validateStep() {
     if (!form.content_version.trim()) next.content_version = ['请填写适用内容版本。']
     if (!form.target_students.trim()) next.target_students = ['请描述适用学生。']
     if (form.learning_goal.trim().length < 8) next.learning_goal = ['学习目标至少 8 个字符。']
+    if (!form.curriculum_node_ids.length) next.curriculum_node_ids = ['至少选择一条课程标准依据。']
   }
   if (step.value === 2) {
     if (!form.learning_goals.length) next.learning_goals = ['至少添加一条学习目标。']
+    if (form.learning_goals.some((item) => !item.curriculum_node_ids.length)) next.learning_goals = ['每条学习目标都要关联课程标准依据。']
+    if (!form.learning_activities.length) next.learning_activities = ['至少添加一个学习活动。']
+    if (!form.evaluation_tasks.length) next.evaluation_tasks = ['至少添加一个评价任务。']
+    if (form.evaluation_tasks.some((item) => item.mode === 'mixed' && new Set(item.component_modes).size < 2)) {
+      next.evaluation_tasks = ['混合评价任务至少选择两种具体评价方式。']
+    }
+    const taskWeightTotal = form.evaluation_tasks.reduce((total, item) => total + Number(item.weight || 0), 0)
+    if (form.evaluation_tasks.length && Math.abs(taskWeightTotal - 100) > 0.01) {
+      next.evaluation_tasks = [`全部评价任务权重之和必须为 100%，当前为 ${taskWeightTotal.toFixed(2)}%。`]
+    }
     if (!form.evaluation_basis.length) next.evaluation_basis = ['至少添加一条评价依据。']
-    if (!form.learning_tasks.length) next.learning_tasks = ['至少添加一个学习任务。']
   }
   if (step.value === 3) {
+    if (!derivedAssessmentModes.value.length) next.assessment_modes = ['至少添加一个评价任务。']
     if (!form.content_scope.length) next.content_scope = ['至少填写一项评价内容。']
     if (!form.thinking_requirements.length) next.thinking_requirements = ['至少选择一种思维要求。']
     if (form.scoring_rules.decision_rule.trim().length < 8) next.scoring_rules = ['请填写评分判定说明。']
@@ -143,11 +326,20 @@ function validateStep() {
 
 function nextStep() {
   if (!validateStep()) return
+  if (step.value === 1) prepareSimpleLessonDraft()
   step.value = Math.min(3, step.value + 1)
 }
 
 async function save() {
-  if (!validateStep()) return
+  if (saving.value) return
+  const next: FieldErrors = {}
+  if (!form.course) next.course = ['请选择课程。']
+  if (form.title.trim().length < 2) next.title = ['方案名称至少 2 个字符。']
+  errors.value = next
+  if (Object.keys(next).length) {
+    step.value = 1
+    return
+  }
   saving.value = true
   notice.value = ''
   errors.value = {}
@@ -161,7 +353,8 @@ async function save() {
       learning_goals: form.learning_goals.map((item) => ({
         code: item.code.trim(),
         title: item.title.trim(),
-        description: item.description.trim()
+        description: item.description.trim(),
+        curriculum_node_ids: item.curriculum_node_ids
       })),
       evaluation_basis: form.evaluation_basis.map((item) => ({
         code: item.code.trim(),
@@ -169,12 +362,23 @@ async function save() {
         description: item.description.trim(),
         source_types: item.source_types
       })),
-      learning_tasks: form.learning_tasks.map((item) => ({
+      learning_activities: form.learning_activities.map((item) => ({
         code: item.code.trim(),
         title: item.title.trim(),
-        basis_codes: item.basis_codes,
+        goal_codes: item.goal_codes,
         description: item.description.trim()
       })),
+      learning_tasks: [],
+      evaluation_tasks: form.evaluation_tasks.map((item) => ({
+        ...item,
+        code: item.code.trim(),
+        title: item.title.trim(),
+        component_modes: item.mode === 'mixed'
+          ? Array.from(new Set(item.component_modes))
+          : [],
+        description: item.description.trim()
+      })),
+      assessment_modes: derivedAssessmentModes.value,
       scoring_rules: {
         approach: form.scoring_rules.approach.trim(),
         decision_rule: form.scoring_rules.decision_rule.trim()
@@ -194,20 +398,21 @@ async function save() {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="emit('close')">
-    <section class="entity-modal compact-modal evaluation-editor" role="dialog" aria-modal="true" :aria-labelledby="`plan-editor-${draft?.id || 'new'}`">
+  <div class="modal-backdrop evaluation-editor-backdrop" @click.self="requestClose">
+    <section v-modal-focus="requestClose" class="entity-modal compact-modal evaluation-editor" role="dialog" aria-modal="true" :aria-labelledby="`plan-editor-${draft?.id || 'new'}`">
       <header class="modal-header">
         <div>
           <h2 :id="`plan-editor-${draft?.id || 'new'}`">{{ modalTitle }}</h2>
-          <p>课程标准依据、学习目标、评价依据、学习任务和评分规则</p>
+          <p v-if="contextLabel">当前课时：{{ contextLabel }}</p>
+          <p>建立课程标准依据、学习目标、学习活动与评价任务的对应关系，并设置评分规则</p>
         </div>
-        <button class="icon-button" type="button" aria-label="关闭" @click="emit('close')">×</button>
+        <button class="icon-button" type="button" aria-label="关闭" :disabled="saving" @click="requestClose">×</button>
       </header>
 
       <nav class="evaluation-stepper" aria-label="评价方案编辑步骤">
-        <button type="button" :class="{ active: step === 1 }" @click="step = 1"><span>1</span>课程标准与范围</button>
-        <button type="button" :class="{ active: step === 2 }" @click="step = 2"><span>2</span>依据与任务</button>
-        <button type="button" :class="{ active: step === 3 }" @click="step = 3"><span>3</span>评分设置</button>
+        <button type="button" :class="{ active: step === 1 }" @click="step = 1"><span>1</span>课程内容与目标</button>
+        <button type="button" :class="{ active: step === 2 }" @click="step = 2"><span>2</span>活动与评价任务</button>
+        <button type="button" :class="{ active: step === 3 }" @click="step = 3"><span>3</span>材料与评分安排</button>
       </nav>
 
       <div class="evaluation-editor-body">
@@ -271,10 +476,11 @@ async function save() {
             <p v-else class="curriculum-reference-empty">
               尚未选择课程标准依据。草案可以先保存，但发布前应完成原文引用和适用范围复核。
             </p>
+            <p v-if="errors.curriculum_node_ids" class="field-error" role="alert">{{ errors.curriculum_node_ids[0] }}</p>
           </section>
           <label class="span-2">
             <span>方案名称<b>*</b></span>
-            <input v-model.trim="form.title" maxlength="160" placeholder="例如 数据表达与解释评价方案" />
+            <input v-model.trim="form.title" data-modal-initial-focus maxlength="160" placeholder="例如 数据表达与解释评价方案" />
             <small v-if="errors.title" class="field-error">{{ errors.title[0] }}</small>
           </label>
           <label class="span-2">
@@ -293,52 +499,100 @@ async function save() {
           <div class="evaluation-chain-section">
             <header><div><strong>学习目标</strong><small>学生应当知道、理解或能够完成什么</small></div><button class="secondary-button mini" type="button" @click="addGoal">新增目标</button></header>
             <p v-if="errors.learning_goals" class="field-error">{{ errors.learning_goals[0] }}</p>
-            <div v-for="(goal, index) in form.learning_goals" :key="index" class="evaluation-chain-row claim-row">
-              <input v-model.trim="goal.code" maxlength="32" aria-label="目标代码" placeholder="G1" />
+            <div v-for="(goal, index) in form.learning_goals" :key="goal.code" class="evaluation-chain-row claim-row">
+              <span class="evaluation-item-number">学习目标 {{ index + 1 }}</span>
               <input v-model.trim="goal.title" maxlength="160" aria-label="目标名称" placeholder="目标名称" />
               <textarea v-model.trim="goal.description" rows="2" aria-label="目标说明" placeholder="写清楚学生应达到的具体表现" />
-              <button type="button" class="evaluation-remove" @click="form.learning_goals.splice(index, 1)">删除</button>
+              <div class="evaluation-reference-list">
+                <span>对应课标依据</span>
+                <label v-for="reference in curriculumReferences" :key="reference.id">
+                  <input type="checkbox" :checked="goal.curriculum_node_ids.includes(reference.id)" @change="toggleReference(goal.curriculum_node_ids, reference.id, ($event.target as HTMLInputElement).checked)" />
+                  {{ reference.code }} · {{ reference.title }}
+                </label>
+              </div>
+              <button type="button" class="evaluation-remove" :aria-label="`删除学习目标 ${index + 1}`" @click="removeGoal(index)">删除</button>
+            </div>
+          </div>
+
+          <div class="evaluation-chain-section">
+            <header><div><strong>学习活动</strong><small>学生经历什么学习过程来达成目标</small></div><button class="secondary-button mini" type="button" @click="addActivity">新增活动</button></header>
+            <p v-if="errors.learning_activities" class="field-error">{{ errors.learning_activities[0] }}</p>
+            <div v-for="(activity, index) in form.learning_activities" :key="activity.code" class="evaluation-chain-row task-row">
+              <span class="evaluation-item-number">学习活动 {{ index + 1 }}</span>
+              <input v-model.trim="activity.title" maxlength="160" aria-label="活动名称" placeholder="学习活动名称" />
+              <div class="evaluation-reference-list">
+                <span>关联学习目标</span>
+                <label v-for="goal in form.learning_goals" :key="goal.code">
+                  <input type="checkbox" :checked="activity.goal_codes.includes(goal.code)" @change="toggleReference(activity.goal_codes, goal.code, ($event.target as HTMLInputElement).checked)" />
+                  {{ goal.title || `学习目标 ${form.learning_goals.indexOf(goal) + 1}` }}
+                </label>
+              </div>
+              <textarea v-model.trim="activity.description" rows="2" aria-label="活动说明" placeholder="说明学习过程、资源和学生参与方式" />
+              <button type="button" class="evaluation-remove" :aria-label="`删除学习活动 ${index + 1}`" @click="removeActivity(index)">删除</button>
             </div>
           </div>
 
           <div class="evaluation-chain-section">
             <header><div><strong>评价依据</strong><small>根据哪些作品、答案或表现进行判断</small></div><button class="secondary-button mini" type="button" @click="addBasis">新增依据</button></header>
             <p v-if="errors.evaluation_basis" class="field-error">{{ errors.evaluation_basis[0] }}</p>
-            <div v-for="(evidence, index) in form.evaluation_basis" :key="index" class="evaluation-chain-row evidence-row">
-              <input v-model.trim="evidence.code" maxlength="32" aria-label="依据代码" placeholder="B1" />
+            <div v-for="(evidence, index) in form.evaluation_basis" :key="evidence.code" class="evaluation-chain-row evidence-row">
+              <span class="evaluation-item-number">评价依据 {{ index + 1 }}</span>
               <div class="evaluation-reference-list">
                 <span>关联目标</span>
                 <label v-for="goal in form.learning_goals" :key="goal.code">
                   <input type="checkbox" :checked="evidence.goal_codes.includes(goal.code)" @change="toggleReference(evidence.goal_codes, goal.code, ($event.target as HTMLInputElement).checked)" />
-                  {{ goal.code || '未命名' }}
+                  {{ goal.title || `学习目标 ${form.learning_goals.indexOf(goal) + 1}` }}
                 </label>
               </div>
               <textarea v-model.trim="evidence.description" rows="2" aria-label="依据说明" placeholder="说明如何据此判断学生表现" />
               <textarea :value="evidence.source_types.join('\n')" rows="2" aria-label="材料来源" placeholder="每行一种材料，例如学生作品" @input="evidence.source_types = lines(inputValue($event))" />
-              <button type="button" class="evaluation-remove" @click="form.evaluation_basis.splice(index, 1)">删除</button>
+              <button type="button" class="evaluation-remove" :aria-label="`删除评价依据 ${index + 1}`" @click="form.evaluation_basis.splice(index, 1)">删除</button>
             </div>
           </div>
 
           <div class="evaluation-chain-section">
-            <header><div><strong>学习任务</strong><small>学生通过什么任务展示学习结果</small></div><button class="secondary-button mini" type="button" @click="addTask">新增任务</button></header>
-            <p v-if="errors.learning_tasks" class="field-error">{{ errors.learning_tasks[0] }}</p>
-            <div v-for="(task, index) in form.learning_tasks" :key="index" class="evaluation-chain-row task-row">
-              <input v-model.trim="task.code" maxlength="32" aria-label="任务代码" placeholder="T1" />
-              <input v-model.trim="task.title" maxlength="160" aria-label="任务名称" placeholder="任务名称" />
+            <header><div><strong>评价任务</strong><small>通过测试、操作、项目、作品或答辩收集评价材料</small></div><button class="secondary-button mini" type="button" @click="addEvaluationTask">新增评价任务</button></header>
+            <p v-if="errors.evaluation_tasks" class="field-error">{{ errors.evaluation_tasks[0] }}</p>
+            <div v-for="(task, index) in form.evaluation_tasks" :key="task.code" class="evaluation-chain-row task-row evaluation-task-row">
+              <span class="evaluation-item-number">评价任务 {{ index + 1 }}</span>
+              <input v-model.trim="task.title" maxlength="160" aria-label="评价任务名称" placeholder="评价任务名称" />
               <div class="evaluation-reference-list">
-                <span>关联依据</span>
-                <label v-for="evidence in form.evaluation_basis" :key="evidence.code">
-                  <input type="checkbox" :checked="task.basis_codes.includes(evidence.code)" @change="toggleReference(task.basis_codes, evidence.code, ($event.target as HTMLInputElement).checked)" />
-                  {{ evidence.code || '未命名' }}
+                <span>关联学习目标</span>
+                <label v-for="goal in form.learning_goals" :key="goal.code">
+                  <input type="checkbox" :checked="task.goal_codes.includes(goal.code)" @change="toggleReference(task.goal_codes, goal.code, ($event.target as HTMLInputElement).checked)" />
+                  {{ goal.title || `学习目标 ${form.learning_goals.indexOf(goal) + 1}` }}
                 </label>
               </div>
-              <textarea v-model.trim="task.description" rows="2" aria-label="任务说明" placeholder="任务条件、产出和边界" />
-              <button type="button" class="evaluation-remove" @click="form.learning_tasks.splice(index, 1)">删除</button>
+              <div class="evaluation-reference-list">
+                <span>关联学习活动</span>
+                <label v-for="activity in form.learning_activities" :key="activity.code">
+                  <input type="checkbox" :checked="task.activity_codes.includes(activity.code)" @change="toggleReference(task.activity_codes, activity.code, ($event.target as HTMLInputElement).checked)" />
+                  {{ activity.title || `学习活动 ${form.learning_activities.indexOf(activity) + 1}` }}
+                </label>
+              </div>
+              <label><span>评价方式</span><AppSelect v-model="task.mode" @change="taskModeChanged(task)"><option v-for="item in options.assessment_modes" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
+              <fieldset v-if="task.mode === 'mixed'" class="evaluation-material-types">
+                <legend>混合评价包含的具体方式<b>*</b></legend>
+                <label v-for="item in atomicAssessmentOptions" :key="item.value"><input v-model="task.component_modes" type="checkbox" :value="item.value" />{{ item.label }}</label>
+                <small>至少选择两种非“混合评价”的具体方式。</small>
+              </fieldset>
+              <label><span>材料归属</span><AppSelect v-model="task.evidence_ownership"><option v-for="item in options.evidence_ownerships" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
+              <label><span>任务权重（%）</span><input v-model.number="task.weight" type="number" min="0.01" max="100" step="0.01" /></label>
+              <fieldset class="evaluation-material-types"><legend>评价材料</legend><label v-for="item in options.material_types" :key="item.value"><input v-model="task.material_types" type="checkbox" :value="item.value" />{{ item.label }}</label></fieldset>
+              <textarea v-model.trim="task.description" rows="2" aria-label="评价任务说明" placeholder="说明情境、产出、操作要求、答辩或测试条件" />
+              <button type="button" class="evaluation-remove" @click="removeEvaluationTask(index)">删除</button>
             </div>
           </div>
         </section>
 
         <section v-else class="evaluation-form-grid">
+          <section class="evaluation-mode-summary span-2" aria-labelledby="evaluation-mode-summary-title">
+            <strong id="evaluation-mode-summary-title">本方案使用的评价方式</strong>
+            <p v-if="derivedAssessmentModeLabels.length">{{ derivedAssessmentModeLabels.join('、') }}</p>
+            <p v-else>尚未添加评价任务。</p>
+            <small>由各评价任务的方式自动汇总，不能在方案层级另行修改。</small>
+            <small v-if="errors.assessment_modes" class="field-error">{{ errors.assessment_modes[0] }}</small>
+          </section>
           <label>
             <span>评价内容<b>*</b></span>
             <textarea :value="form.content_scope.join('\n')" rows="5" placeholder="每行一项评价内容" @input="form.content_scope = lines(inputValue($event))" />
@@ -375,10 +629,10 @@ async function save() {
 
       <footer class="modal-actions evaluation-modal-actions">
         <span>发布后保留历史版本，后续修改会生成新版本。</span>
-        <button class="secondary-button" type="button" @click="emit('close')">取消</button>
+        <button class="secondary-button" type="button" :disabled="saving" @click="requestClose">取消</button>
         <button v-if="step > 1" class="secondary-button" type="button" @click="step -= 1">上一步</button>
-        <button v-if="step < 3" class="primary-button" type="button" @click="nextStep">下一步</button>
-        <button v-else class="primary-button" type="button" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存草案' }}</button>
+        <button v-if="step < 3" class="primary-button" type="button" :disabled="saving" @click="nextStep">下一步</button>
+        <button :class="step < 3 ? 'secondary-button' : 'primary-button'" type="button" :disabled="saving" @click="save">{{ saving ? '保存中' : '保存草案' }}</button>
       </footer>
     </section>
     <CurriculumReferencePickerModal
@@ -399,6 +653,10 @@ async function save() {
 </template>
 
 <style>
+.evaluation-editor-backdrop {
+  z-index: 1300;
+}
+
 .evaluation-editor {
   width: min(1080px, 100%);
   display: grid;
@@ -480,6 +738,24 @@ async function save() {
   font-size: 13px;
 }
 
+.evaluation-mode-summary {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.evaluation-mode-summary p {
+  margin: 0;
+  color: var(--text);
+}
+
+.evaluation-mode-summary small {
+  color: var(--muted);
+}
+
 .evaluation-form-grid .span-2 {
   grid-column: 1 / -1;
 }
@@ -488,6 +764,7 @@ async function save() {
 .evaluation-form-grid select,
 .evaluation-form-grid textarea,
 .evaluation-chain-row input,
+.evaluation-chain-row select,
 .evaluation-chain-row textarea {
   width: 100%;
   min-height: 44px;
@@ -570,9 +847,21 @@ async function save() {
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
-  border-left: 4px solid #3b82f6;
+  border-left: 4px solid #17483f;
   border-radius: 6px;
-  background: #fbfdff;
+  background: #fafbf8;
+}
+
+.evaluation-item-number {
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #e8f1ec;
+  color: #315f50;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .evidence-row {
@@ -583,6 +872,51 @@ async function save() {
 .task-row {
   grid-template-columns: 92px minmax(140px, .55fr) minmax(170px, .65fr) minmax(230px, 1fr) auto;
   border-left-color: #d97706;
+}
+
+.evaluation-task-row {
+  grid-template-columns: 92px minmax(180px, 1fr) minmax(180px, .7fr) minmax(180px, .7fr);
+}
+
+.evaluation-task-row > .evaluation-reference-list,
+.evaluation-task-row > textarea {
+  grid-column: span 2;
+}
+
+.evaluation-task-row > label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evaluation-material-types {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  background: #fff;
+}
+
+.evaluation-material-types legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evaluation-material-types label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.evaluation-material-types input {
+  width: 18px;
+  min-height: 18px;
 }
 
 .evaluation-reference-list {
@@ -632,10 +966,10 @@ async function save() {
   min-width: 0;
   display: grid;
   gap: 12px;
-  border: 1px solid #bfdbfe;
+  border: 1px solid #c5d6cc;
   border-radius: 7px;
   padding: 14px;
-  background: #f8fbff;
+  background: #f4f7f4;
 }
 
 .curriculum-reference-field > header {
@@ -688,7 +1022,7 @@ async function save() {
 }
 
 .curriculum-reference-empty {
-  border: 1px dashed #b8c6d8;
+  border: 1px dashed #b8c9bf;
   border-radius: 6px;
   padding: 12px;
   text-align: center;
@@ -721,7 +1055,7 @@ async function save() {
   width: fit-content;
   border-radius: 999px;
   padding: 2px 7px;
-  background: #e8f1ff;
+  background: #e4ede8;
   color: var(--primary-dark);
   font-size: 11px;
   font-style: normal;
@@ -763,6 +1097,11 @@ async function save() {
     grid-template-columns: 90px minmax(0, 1fr);
   }
 
+  .evaluation-task-row > .evaluation-reference-list,
+  .evaluation-task-row > textarea {
+    grid-column: 1 / -1;
+  }
+
   .evaluation-chain-row textarea,
   .evaluation-reference-list {
     grid-column: 1 / -1;
@@ -794,6 +1133,11 @@ async function save() {
   .evidence-row,
   .task-row {
     grid-template-columns: 1fr;
+  }
+
+  .evaluation-task-row > .evaluation-reference-list,
+  .evaluation-task-row > textarea {
+    grid-column: auto;
   }
 
   .evaluation-form-grid .span-2,

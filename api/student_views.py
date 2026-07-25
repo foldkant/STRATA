@@ -293,9 +293,9 @@ from .services import (
     update_school_admin,
     update_teacher,
     write_audit,
-    STUDENT_IMPORT_HEADERS,
     TEACHER_IMPORT_HEADERS,
 )
+from .student_services import STUDENT_IMPORT_HEADERS
 
 # Students domain endpoints extracted from api.views.
 from .views import (
@@ -337,7 +337,6 @@ def school_admin_students(request):
     query = request.GET.get("q", "").strip()
     class_id = request.GET.get("class", "").strip()
     status = request.GET.get("status", "").strip()
-    layer = request.GET.get("layer", "").strip()
     students = StudentProfile.objects.filter(
         user__school=_school(request)
     ).select_related("user", "class_group")
@@ -353,10 +352,6 @@ def school_admin_students(request):
         students = students.filter(user__is_active=True)
     elif status == "disabled":
         students = students.filter(user__is_active=False)
-    if layer in {"A", "B", "C"}:
-        students = students.filter(current_layer=layer)
-    elif layer == "unassigned":
-        students = students.filter(current_layer__isnull=True)
     page = _paginate(
         request,
         students.order_by("class_group__grade", "class_group__name", "student_no"),
@@ -371,7 +366,6 @@ def school_admin_students_export(request):
     query = request.GET.get("q", "").strip()
     class_id = request.GET.get("class", "").strip()
     status = request.GET.get("status", "").strip()
-    layer = request.GET.get("layer", "").strip()
     students = StudentProfile.objects.filter(
         user__school=_school(request)
     ).select_related("user", "class_group")
@@ -387,10 +381,6 @@ def school_admin_students_export(request):
         students = students.filter(user__is_active=True)
     elif status == "disabled":
         students = students.filter(user__is_active=False)
-    if layer in {"A", "B", "C"}:
-        students = students.filter(current_layer=layer)
-    elif layer == "unassigned":
-        students = students.filter(current_layer__isnull=True)
     rows = [
         [
             profile.user.username,
@@ -398,7 +388,6 @@ def school_admin_students_export(request):
             profile.student_no,
             profile.class_group.name if profile.class_group_id else "",
             profile.user.phone,
-            profile.current_layer or "",
             profile.current_group_no or "",
             profile.score,
             profile.get_onboarding_status_display(),
@@ -419,7 +408,6 @@ def school_admin_students_export(request):
             "学号",
             "班级",
             "联系电话",
-            "层级",
             "小组号",
             "积分",
             "首次使用状态",
@@ -438,14 +426,14 @@ def school_admin_students_template(request):
         "学生批量导入模板.xlsx",
         "学生导入模板",
         STUDENT_IMPORT_HEADERS,
-        [["student1", "李同学", "", "高一1班", "", "123456", "", "", "0", "启用"]],
+        [["student1", "李同学", "", "高一1班", "", "123456", "", "0", "启用"]],
         instructions=[
             "登录账号和姓名必填；新增学生必须填写初始密码。",
-            "班级、学号、层级都可以留空；新生没有学号时可先不填。",
-            "再次导入相同登录账号时，系统会按账号更新学号、班级、联系电话、层级、小组号、积分和状态。",
+            "班级和学号都可以留空；新生没有学号时可先不填。",
+            "再次导入相同登录账号时，系统会按账号更新学号、班级、联系电话、小组号、积分和状态。",
             "班级按班级名称匹配，例如：高一1班。",
         ],
-        dropdowns={"状态": ["启用", "停用"], "层级": ["", "A", "B", "C"]},
+        dropdowns={"状态": ["启用", "停用"]},
     )
 
 
@@ -567,7 +555,6 @@ def teacher_students(request):
     query = request.GET.get("q", "").strip()
     class_id = request.GET.get("class", "").strip()
     status = request.GET.get("status", "").strip()
-    layer = request.GET.get("layer", "").strip()
     students = _teacher_students(request)
     class_ids = set(_teacher_class_ids(request))
 
@@ -595,11 +582,6 @@ def teacher_students(request):
         students = students.filter(user__is_active=True)
     elif status == "disabled":
         students = students.filter(user__is_active=False)
-    if layer in {"A", "B", "C"}:
-        students = students.filter(current_layer=layer)
-    elif layer == "unassigned":
-        students = students.filter(current_layer__isnull=True)
-
     page = _paginate(
         request,
         students.order_by(
@@ -608,6 +590,24 @@ def teacher_students(request):
     )
     page.object_list = [student_row(profile) for profile in page.object_list]
     return ok(page_data(page))
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_student_learning_profile(request, pk):
+    profile = _teacher_students(request).filter(pk=pk).first()
+    if profile is None:
+        return fail("学生不存在或不在你的任教班级中。", status=404)
+    try:
+        return ok(
+            _student_profile_archive_data(
+                request,
+                profile,
+                teacher=request.user,
+            )
+        )
+    except ServiceError as exc:
+        return _service_fail(exc)
 
 
 def _teacher_student_ids_from_payload(request):
@@ -1013,7 +1013,7 @@ def _ensure_student_can_learn_course(user, course: Course) -> None:
     status = _student_required_pretest_status(user, course.subject)
     if status["required"] and not status["completed"]:
         subject_name = course.subject.name if course.subject_id else "该学科"
-        raise ServiceError(f"请先完成{subject_name}前测。", status=403)
+        raise ServiceError(f"请先完成{subject_name}学习起点诊断。", status=403)
 
 
 def _student_course_queryset(profile: StudentProfile):
@@ -1091,7 +1091,7 @@ def _ensure_student_lesson_workspace_allowed(
 ) -> None:
     session = _student_lesson_classroom_session(profile, lesson)
     if session is None:
-        raise ServiceError("该课时尚未启用课堂教学，暂不能进入。", status=403)
+        raise ServiceError("该课时由课堂教学控制，教师启用课堂后才能进入。", status=403)
     if session.status == ClassroomSession.Status.RUNNING:
         raise ServiceError("该课时正在课堂教学中，请从课堂入口进入。", status=403)
     raise ServiceError("该课时属于课堂教学，教师启用课堂后才能进入。", status=403)
@@ -1320,7 +1320,7 @@ def _student_dashboard_data(request, profile: StudentProfile) -> dict:
         todo_rows.append(
             {
                 "label": "首次使用",
-                "detail": "请完成改密、选班和前测。",
+                "detail": "请完成改密、选班和学习起点诊断。",
                 "level": "warn",
                 "path": "/student/onboarding",
             }
@@ -1330,7 +1330,7 @@ def _student_dashboard_data(request, profile: StudentProfile) -> dict:
         if status["required"] and not status["completed"]:
             todo_rows.append(
                 {
-                    "label": f"{course.subject.name if course.subject_id else '学科'}前测",
+                    "label": f"{course.subject.name if course.subject_id else '学科'}学习起点诊断",
                     "detail": "进入课程前需要完成素养测试和学习态度问卷。",
                     "level": "warn",
                     "path": f"/student/pretests/{course.subject_id}",
@@ -1472,7 +1472,22 @@ def _student_archive_event_label(event: LearningEvent) -> str:
     )
 
 
-def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
+def _student_profile_archive_data(
+    request,
+    profile: StudentProfile,
+    *,
+    teacher=None,
+) -> dict:
+    student_user = profile.user
+    course_queryset = _student_course_queryset(profile)
+    if teacher is not None:
+        course_queryset = course_queryset.filter(teacher=teacher)
+    allowed_subject_ids = set(
+        course_queryset.exclude(subject_id__isnull=True).values_list(
+            "subject_id", flat=True
+        )
+    )
+
     raw_subject = request.query_params.get("subject")
     subject_id = None
     if raw_subject not in {None, ""}:
@@ -1483,7 +1498,7 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
                 "学科参数不正确。", errors={"subject": ["请选择有效学科。"]}, status=400
             )
         selected_subject = Subject.objects.filter(
-            pk=subject_id, school=request.user.school, is_active=True
+            pk=subject_id, school=student_user.school, is_active=True
         ).first()
         if selected_subject is None:
             raise ServiceError(
@@ -1491,12 +1506,18 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
                 errors={"subject": ["请选择有效学科。"]},
                 status=404,
             )
+        if teacher is not None and subject_id not in allowed_subject_ids:
+            raise ServiceError(
+                "该学科不在你的任教范围内。",
+                errors={"subject": ["请选择本人任教学科。"]},
+                status=403,
+            )
     else:
         selected_subject = None
 
-    courses = list(_student_course_queryset(profile))
-    attempts = list(
-        TestAttempt.objects.filter(student=request.user)
+    courses = list(course_queryset)
+    attempts_queryset = (
+        TestAttempt.objects.filter(student=student_user)
         .select_related(
             "assessment",
             "assessment__subject",
@@ -1506,23 +1527,40 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
         .annotate(total_possible=Sum("assessment__questions__score"))
         .order_by("-submitted_at", "-started_at")
     )
-    pretests = list(
-        PretestSubmission.objects.filter(student=request.user)
+    if teacher is not None:
+        attempts_queryset = attempts_queryset.filter(assessment__teacher=teacher)
+    attempts = list(attempts_queryset)
+
+    pretests_queryset = (
+        PretestSubmission.objects.filter(student=student_user)
         .select_related("subject", "paper")
         .order_by("-submitted_at")
     )
-    works = list(
-        StudentWorkAttachment.objects.filter(student=request.user)
+    if teacher is not None:
+        pretests_queryset = pretests_queryset.filter(
+            subject_id__in=allowed_subject_ids
+        )
+    pretests = list(pretests_queryset)
+
+    works_queryset = (
+        StudentWorkAttachment.objects.filter(student=student_user)
         .select_related(
             "course", "course__subject", "lesson", "lesson_step", "evaluated_by"
         )
         .order_by("-updated_at")
     )
-    evaluations = list(
-        ClassroomEvaluationSubmission.objects.filter(target=request.user)
+    if teacher is not None:
+        works_queryset = works_queryset.filter(course__teacher=teacher)
+    works = list(works_queryset)
+
+    evaluations_queryset = (
+        ClassroomEvaluationSubmission.objects.filter(target=student_user)
         .select_related("course", "course__subject", "evaluator", "session")
         .order_by("-updated_at")
     )
+    if teacher is not None:
+        evaluations_queryset = evaluations_queryset.filter(course__teacher=teacher)
+    evaluations = list(evaluations_queryset)
 
     relevant_subjects = {}
     for course in courses:
@@ -1549,7 +1587,9 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
             item for item in evaluations if item.course.subject_id == subject_id
         ]
 
-    events = LearningEvent.objects.filter(actor=request.user)
+    events = LearningEvent.objects.filter(actor=student_user)
+    if teacher is not None:
+        events = events.filter(course__teacher=teacher)
     if subject_id:
         events = events.filter(course__subject_id=subject_id)
 
@@ -1740,17 +1780,20 @@ def _student_profile_archive_data(request, profile: StudentProfile) -> dict:
     active_days = (
         events.annotate(day=TruncDate("occurred_at")).values("day").distinct().count()
     )
-    completed_tests = sum(item.status == TestAttempt.Status.GRADED for item in attempts)
+    completed_tests = sum(
+        item.status == TestAttempt.Status.GRADED and item.graded_at is not None
+        for item in attempts
+    )
     latest_event = events.order_by("-occurred_at").first()
     return {
         "student": {
-            "id": request.user.id,
-            "username": request.user.username,
-            "display_name": request.user.display_name or request.user.username,
+            "id": student_user.id,
+            "username": student_user.username,
+            "display_name": student_user.display_name or student_user.username,
             "student_no": profile.student_no,
             "school": (
-                {"id": request.user.school_id, "name": request.user.school.name}
-                if request.user.school_id
+                {"id": student_user.school_id, "name": student_user.school.name}
+                if student_user.school_id
                 else None
             ),
             "class_group": (
@@ -2616,7 +2659,10 @@ def student_classroom_activity_response(request, pk, activity_id):
         existing_query = existing_query.filter(metadata__source="student")
     existing = existing_query.first()
     if existing is not None and command != "quick_answer":
-        return ok(classroom_activity_row(activity), "已记录过本次响应。")
+        return ok(
+            classroom_activity_row(activity, student_user=request.user),
+            "已记录过本次响应。",
+        )
 
     if command == "sign_in":
         try:
@@ -2629,7 +2675,10 @@ def student_classroom_activity_response(request, pk, activity_id):
             )
         except AttendanceEventError as exc:
             return fail(exc.message, status=400)
-        return ok(classroom_activity_row(activity), "课堂响应已记录。")
+        return ok(
+            classroom_activity_row(activity, student_user=request.user),
+            "课堂响应已记录。",
+        )
 
     if command == "quick_answer":
         try:
@@ -2640,7 +2689,10 @@ def student_classroom_activity_response(request, pk, activity_id):
             )
         except ClassroomInteractionEventError as exc:
             return fail(exc.message, status=400)
-        return ok(classroom_activity_row(activity), "课堂响应已记录。")
+        return ok(
+            classroom_activity_row(activity, student_user=request.user),
+            "课堂响应已记录。",
+        )
 
     try:
         record_classroom_interaction_response(
@@ -2654,7 +2706,10 @@ def student_classroom_activity_response(request, pk, activity_id):
         )
     except EventWriteError as exc:
         return fail(exc.message, status=500)
-    return ok(classroom_activity_row(activity), "课堂响应已记录。")
+    return ok(
+        classroom_activity_row(activity, student_user=request.user),
+        "课堂响应已记录。",
+    )
 
 
 @api_view(["POST"])

@@ -44,7 +44,6 @@ export type SchoolAdminDashboard = {
     account_status: CountSlice[]
     student_onboarding: CountSlice[]
     student_class_status: CountSlice[]
-    student_layers: CountSlice[]
     class_status: CountSlice[]
     class_students: SeriesPoint[]
     class_teachers: SeriesPoint[]

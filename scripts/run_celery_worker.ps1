@@ -7,4 +7,6 @@ Set-Location $Root
 # The role variable is ignored by Redis and makes this worker a consumer when a
 # developer has explicitly selected the single-host filesystem fallback.
 $env:CURRICULUM_CELERY_FILESYSTEM_ROLE = "worker"
-& $Celery -A config worker -l info --pool=solo --queues=celery
+$AiQueue = if ($env:AI_GENERATION_QUEUE) { $env:AI_GENERATION_QUEUE.Trim() } else { "ai_generation" }
+if (-not $AiQueue) { $AiQueue = "ai_generation" }
+& $Celery -A config worker -l info --pool=solo --concurrency=1 --prefetch-multiplier=1 --queues="celery,$AiQueue" --hostname="app-worker@%h"

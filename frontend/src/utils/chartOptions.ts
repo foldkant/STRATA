@@ -6,18 +6,60 @@ export type ChartRow = {
   value?: string
 }
 
-const palette = ['#1f6feb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#64748b', '#f97316']
+export type ChartTheme = {
+  palette: string[]
+  axisText: string
+  axisLine: string
+  splitLine: string
+  labelText: string
+  fontFamily: string
+  fontSize: number
+}
 
-const axisText = {
-  color: '#64748b',
+const defaultTheme: ChartTheme = {
+  palette: ['#1f6feb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#64748b', '#f97316'],
+  axisText: '#64748b',
+  axisLine: '#d8e1ec',
+  splitLine: '#e2e8f0',
+  labelText: '#162033',
+  fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
   fontSize: 12
+}
+
+export const governanceChartTheme: ChartTheme = {
+  palette: ['#183d37', '#52786f', '#8fa89f', '#b54a3a', '#c99b78', '#6e827b', '#aebbb5', '#d2dad5'],
+  axisText: '#687872',
+  axisLine: '#cbd5ce',
+  splitLine: '#e1e7e2',
+  labelText: '#253530',
+  fontFamily: '"STRATA WenKai UI", "STKaiti", "KaiTi", serif',
+  fontSize: 13
+}
+
+export const teacherChartTheme: ChartTheme = {
+  ...governanceChartTheme,
+  palette: ['#17483f', '#bd5543', '#6f9186', '#d0a36f', '#406f66', '#9e7762', '#8a9e96', '#c87967']
+}
+
+export const governanceChartTextStyle = {
+  color: governanceChartTheme.axisText,
+  fontFamily: governanceChartTheme.fontFamily,
+  fontSize: governanceChartTheme.fontSize
+}
+
+function axisText(theme: ChartTheme) {
+  return {
+    color: theme.axisText,
+    fontFamily: theme.fontFamily,
+    fontSize: theme.fontSize
+  }
 }
 
 export function total(rows: ChartRow[]) {
   return rows.reduce((sum, item) => sum + Number(item.count || 0), 0)
 }
 
-function emptyGraphic(rows: ChartRow[]) {
+function emptyGraphic(rows: ChartRow[], theme: ChartTheme) {
   return rows.some((item) => Number(item.count || 0) > 0)
     ? undefined
     : {
@@ -26,17 +68,19 @@ function emptyGraphic(rows: ChartRow[]) {
         top: 'middle',
         style: {
           text: '暂无数据',
-          fill: '#64748b',
-          fontSize: 13
+          fill: theme.axisText,
+          fontFamily: theme.fontFamily,
+          fontSize: theme.fontSize + 1
         }
       }
 }
 
-export function pieOption(rows: ChartRow[]): EChartsCoreOption {
+export function pieOption(rows: ChartRow[], theme: ChartTheme = defaultTheme): EChartsCoreOption {
   const visibleRows = rows.filter((item) => Number(item.count || 0) > 0)
   return {
-    color: palette,
-    graphic: emptyGraphic(rows),
+    color: theme.palette,
+    textStyle: axisText(theme),
+    graphic: emptyGraphic(rows, theme),
     tooltip: {
       trigger: 'item',
       formatter: '{b}<br/>{c} ({d}%)'
@@ -46,7 +90,7 @@ export function pieOption(rows: ChartRow[]): EChartsCoreOption {
       left: 'center',
       itemWidth: 10,
       itemHeight: 10,
-      textStyle: axisText
+      textStyle: axisText(theme)
     },
     series: [
       {
@@ -56,7 +100,9 @@ export function pieOption(rows: ChartRow[]): EChartsCoreOption {
         center: ['50%', '44%'],
         avoidLabelOverlap: true,
         label: {
-          color: '#162033',
+          color: theme.labelText,
+          fontFamily: theme.fontFamily,
+          fontSize: theme.fontSize,
           formatter: '{b}\n{c}'
         },
         labelLine: {
@@ -69,12 +115,13 @@ export function pieOption(rows: ChartRow[]): EChartsCoreOption {
   }
 }
 
-export function barOption(rows: ChartRow[], horizontal = false): EChartsCoreOption {
+export function barOption(rows: ChartRow[], horizontal = false, theme: ChartTheme = defaultTheme): EChartsCoreOption {
   const labels = rows.map((item) => item.label)
   const values = rows.map((item) => item.count)
   return {
-    color: ['#1f6feb'],
-    graphic: emptyGraphic(rows),
+    color: [theme.palette[0]],
+    textStyle: axisText(theme),
+    graphic: emptyGraphic(rows, theme),
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'shadow' }
@@ -90,28 +137,28 @@ export function barOption(rows: ChartRow[], horizontal = false): EChartsCoreOpti
       ? {
           type: 'value',
           splitNumber: 4,
-          axisLabel: axisText,
-          splitLine: { lineStyle: { color: '#e2e8f0' } }
+          axisLabel: axisText(theme),
+          splitLine: { lineStyle: { color: theme.splitLine } }
         }
       : {
           type: 'category',
           data: labels,
-          axisLabel: { ...axisText, interval: 0, rotate: labels.length > 6 ? 30 : 0 },
+          axisLabel: { ...axisText(theme), interval: 0, rotate: labels.length > 6 ? 30 : 0 },
           axisTick: { show: false },
-          axisLine: { lineStyle: { color: '#d8e1ec' } }
+          axisLine: { lineStyle: { color: theme.axisLine } }
         },
     yAxis: horizontal
       ? {
           type: 'category',
           data: labels,
-          axisLabel: { ...axisText, width: 84, overflow: 'truncate' },
+          axisLabel: { ...axisText(theme), width: 84, overflow: 'truncate' },
           axisTick: { show: false },
-          axisLine: { lineStyle: { color: '#d8e1ec' } }
+          axisLine: { lineStyle: { color: theme.axisLine } }
         }
       : {
           type: 'value',
-          axisLabel: axisText,
-          splitLine: { lineStyle: { color: '#e2e8f0' } }
+          axisLabel: axisText(theme),
+          splitLine: { lineStyle: { color: theme.splitLine } }
         },
     series: [
       {
@@ -126,11 +173,15 @@ export function barOption(rows: ChartRow[], horizontal = false): EChartsCoreOpti
   }
 }
 
-export function lineOption(series: Array<{ name: string; rows: ChartRow[] }>): EChartsCoreOption {
+export function lineOption(
+  series: Array<{ name: string; rows: ChartRow[] }>,
+  theme: ChartTheme = defaultTheme
+): EChartsCoreOption {
   const labels = series[0]?.rows.map((item) => item.label) || []
   const hasValue = series.some((item) => item.rows.some((point) => Number(point.count || 0) > 0))
   return {
-    color: palette,
+    color: theme.palette,
+    textStyle: axisText(theme),
     graphic: hasValue
       ? undefined
       : {
@@ -139,8 +190,9 @@ export function lineOption(series: Array<{ name: string; rows: ChartRow[] }>): E
           top: 'middle',
           style: {
             text: '暂无数据',
-            fill: '#64748b',
-            fontSize: 13
+            fill: theme.axisText,
+            fontFamily: theme.fontFamily,
+            fontSize: theme.fontSize + 1
           }
         },
     tooltip: {
@@ -151,7 +203,7 @@ export function lineOption(series: Array<{ name: string; rows: ChartRow[] }>): E
       right: 0,
       itemWidth: 10,
       itemHeight: 10,
-      textStyle: axisText
+      textStyle: axisText(theme)
     },
     grid: {
       top: 34,
@@ -164,14 +216,14 @@ export function lineOption(series: Array<{ name: string; rows: ChartRow[] }>): E
       type: 'category',
       boundaryGap: false,
       data: labels,
-      axisLabel: axisText,
+      axisLabel: axisText(theme),
       axisTick: { show: false },
-      axisLine: { lineStyle: { color: '#d8e1ec' } }
+      axisLine: { lineStyle: { color: theme.axisLine } }
     },
     yAxis: {
       type: 'value',
-      axisLabel: axisText,
-      splitLine: { lineStyle: { color: '#e2e8f0' } }
+      axisLabel: axisText(theme),
+      splitLine: { lineStyle: { color: theme.splitLine } }
     },
     series: series.map((item) => ({
       name: item.name,
@@ -184,11 +236,15 @@ export function lineOption(series: Array<{ name: string; rows: ChartRow[] }>): E
   }
 }
 
-export function stackedBarOption(series: Array<{ name: string; rows: ChartRow[] }>): EChartsCoreOption {
+export function stackedBarOption(
+  series: Array<{ name: string; rows: ChartRow[] }>,
+  theme: ChartTheme = defaultTheme
+): EChartsCoreOption {
   const labels = series[0]?.rows.map((item) => item.label) || []
   const hasValue = series.some((item) => item.rows.some((point) => Number(point.count || 0) > 0))
   return {
-    color: palette,
+    color: theme.palette,
+    textStyle: axisText(theme),
     graphic: hasValue
       ? undefined
       : {
@@ -197,8 +253,9 @@ export function stackedBarOption(series: Array<{ name: string; rows: ChartRow[] 
           top: 'middle',
           style: {
             text: '暂无数据',
-            fill: '#64748b',
-            fontSize: 13
+            fill: theme.axisText,
+            fontFamily: theme.fontFamily,
+            fontSize: theme.fontSize + 1
           }
         },
     tooltip: {
@@ -210,7 +267,7 @@ export function stackedBarOption(series: Array<{ name: string; rows: ChartRow[] 
       right: 0,
       itemWidth: 10,
       itemHeight: 10,
-      textStyle: axisText
+      textStyle: axisText(theme)
     },
     grid: {
       top: 34,
@@ -222,14 +279,14 @@ export function stackedBarOption(series: Array<{ name: string; rows: ChartRow[] 
     xAxis: {
       type: 'category',
       data: labels,
-      axisLabel: axisText,
+      axisLabel: axisText(theme),
       axisTick: { show: false },
-      axisLine: { lineStyle: { color: '#d8e1ec' } }
+      axisLine: { lineStyle: { color: theme.axisLine } }
     },
     yAxis: {
       type: 'value',
-      axisLabel: axisText,
-      splitLine: { lineStyle: { color: '#e2e8f0' } }
+      axisLabel: axisText(theme),
+      splitLine: { lineStyle: { color: theme.splitLine } }
     },
     series: series.map((item) => ({
       name: item.name,

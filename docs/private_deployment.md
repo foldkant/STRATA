@@ -220,11 +220,11 @@ Windows worker 使用 `--pool=solo`。Redis 数据库建议保持隔离：Channe
 Windows 学校服务器使用 Redis 时启动：
 
 ```powershell
-.\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Redis -CpuCount 2
+.\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Redis -CpuCount 1
 .\scripts\get_curriculum_ocr_worker_status.ps1
 ```
 
-启动脚本将进程优先级设为 `BelowNormal`，把处理进程限制在前两个逻辑处理器，并把常见数值计算库的线程数限制为 1。任一 Windows 资源限制设置失败时，脚本默认立即停止尚未开始工作的 worker；只有已经由操作系统服务施加等效限制时，运维人员才可显式使用 `-AllowUnboundedResources`。这里的 CPU 亲和性是本机资源保护措施，不是性能结论；部署方可在实际硬件监测后把 `-CpuCount` 调整为 1—8，但不能提高任务并发数。日志写入 `logs/curriculum_ocr_worker/`。
+启动脚本将进程优先级设为 `BelowNormal`，本机默认把处理进程限制在第一个逻辑处理器，并把常见数值计算库的线程数限制为 1。任一 Windows 资源限制设置失败时，脚本默认立即停止尚未开始工作的 worker；只有已经由操作系统服务施加等效限制时，运维人员才可显式使用 `-AllowUnboundedResources`。这里的 CPU 亲和性是本机资源保护措施，不是性能结论；部署方可在实际硬件监测后把 `-CpuCount` 调整为 1—8，但不能提高任务并发数。日志写入 `logs/curriculum_ocr_worker/`。
 
 任务使用延迟确认，状态和进度只写入平台数据库，不依赖 Celery result backend。默认软/硬时限分别为 10,800/11,100 秒；Redis `visibility_timeout` 默认至少为 14,400 秒，必须长于硬时限，避免任务仍在执行时被重复投递。数据库唯一约束、PDF/内容哈希和任务状态共同保证重复投递不会产生两份正式结果。处理结果先逐页写入暂存区，整份成功后才在一个事务内替换草稿版本的正式逐页文本；失败、取消或 worker 丢失都不能留下部分正式文本。
 
@@ -269,7 +269,7 @@ storage/celery/curriculum_ocr/
 
 ```powershell
 .\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Filesystem -ValidateOnly
-.\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Filesystem -CpuCount 2
+.\scripts\start_curriculum_ocr_worker.ps1 -BrokerMode Filesystem -CpuCount 1
 .\scripts\get_curriculum_ocr_worker_status.ps1
 ```
 

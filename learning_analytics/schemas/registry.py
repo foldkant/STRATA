@@ -130,6 +130,28 @@ class PretestSubmittedPayload(StrictPayloadModel):
     score_raw: Annotated[float, Field(ge=0)]
 
 
+class PretestSubmittedPayloadV11(StrictPayloadModel):
+    paper_kind: Literal["literacy", "attitude"]
+    paper_version: Annotated[int, Field(ge=1, le=100_000)]
+    submission_id: Annotated[int, Field(gt=0)]
+    answer_count: Annotated[int, Field(ge=0, le=1000)]
+    opportunity_status: Literal[
+        "observed",
+        "missing",
+        "device_issue",
+        "not_offered",
+    ]
+    # Nullable and optional are distinct in Pydantic v2. A missing value is
+    # valid when no scorable material has formed or teacher review is pending.
+    score_raw: Annotated[float, Field(ge=0)] | None = None
+
+    @model_validator(mode="after")
+    def validate_opportunity_score(self):
+        if self.opportunity_status != "observed" and self.score_raw is not None:
+            raise ValueError("未形成评价机会时不能记录原始分数")
+        return self
+
+
 class LessonEnteredPayload(StrictPayloadModel):
     entrypoint: Literal["student_workspace", "classroom", "migration"]
 
@@ -531,6 +553,16 @@ _EVENT_SPECS = (
         "1.0",
         "学生提交学科前测；答案正文保留在前测业务表。",
         PretestSubmittedPayload,
+        "assessment",
+        "student",
+        ("class_group", "subject", "object_id"),
+        STUDENT_SOURCES,
+    ),
+    EventSchemaSpec(
+        "pretest.submitted",
+        "1.1",
+        "学生提交学习起点诊断；明确评价机会状态，未形成可用材料时不写入零分。",
+        PretestSubmittedPayloadV11,
         "assessment",
         "student",
         ("class_group", "subject", "object_id"),

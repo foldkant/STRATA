@@ -1,7 +1,8 @@
 import { apiRequest, queryString, toJsonBody, uploadRequest } from './client'
 import type { CountSlice, Metric, SeriesPoint } from './dashboards'
 import type { AccountRow, ClassGroupRow, PageQuery, PageResult, StudentRow, SubjectRow } from './management'
-import type { EvaluationNotAssessedEntry } from '@/domain/evaluation'
+import type { EvaluationCurriculumAlignment, EvaluationNotAssessedEntry } from '@/domain/evaluation'
+import type { StudentArchive } from './student'
 
 export type TeacherDashboard = {
   school: { id: number; name: string; code: string }
@@ -12,7 +13,6 @@ export type TeacherDashboard = {
     active_students_7d: SeriesPoint[]
     class_students: SeriesPoint[]
     class_activity: SeriesPoint[]
-    student_layers: CountSlice[]
     event_types: CountSlice[]
     decision_status: CountSlice[]
     training_status: CountSlice[]
@@ -38,6 +38,12 @@ export function getTeacherClasses() {
 
 export function getTeacherStudents(params: PageQuery = {}) {
   return apiRequest<PageResult<StudentRow>>(`/api/v1/teacher/students/${queryString(params)}`)
+}
+
+export function getTeacherStudentLearningProfile(id: number, subject?: number | string) {
+  return apiRequest<StudentArchive>(
+    `/api/v1/teacher/students/${id}/learning-profile/${queryString({ subject })}`
+  )
 }
 
 export function resetTeacherStudentPassword(id: number) {
@@ -585,6 +591,68 @@ export type ClassroomGroupCollaborationPayload = {
   regenerate?: boolean
 }
 
+export type GroupingTaskPurpose =
+  | 'targeted_support'
+  | 'peer_explanation'
+  | 'open_problem'
+  | 'project_learning'
+  | 'low_risk_baseline'
+
+export type GroupingRole =
+  | 'coordinator'
+  | 'recorder'
+  | 'resource'
+  | 'presenter'
+  | 'verifier'
+  | 'leader'
+  | 'member'
+
+export type GroupingDecisionPoint = {
+  id: number
+  point_id: string
+  status: 'open' | 'candidate_ready' | 'reviewed' | 'active' | 'notified' | 'confirmed' | 'closed'
+  status_label: string
+  trigger: 'lesson_step' | 'project_stage' | 'teacher_request'
+  task_purpose: GroupingTaskPurpose
+  task_purpose_label: string
+  task_stage: string
+  role_requirements: GroupingRole[]
+  resource_requirements: string[]
+  safety_constraints: {
+    prohibited_pairs?: number[][]
+    [key: string]: unknown
+  }
+  opportunity_requirements: {
+    required_group_roles?: GroupingRole[]
+    required_for_every_student?: string[]
+    [key: string]: unknown
+  }
+  stability_until: string | null
+  scheduled_for: string
+  created_at: string
+}
+
+export type GroupingDecisionPayload = {
+  task_purpose: GroupingTaskPurpose
+  task_stage: string
+  role_requirements: GroupingRole[]
+  resource_requirements: string[]
+  safety_constraints: {
+    prohibited_pairs: number[][]
+  }
+  opportunity_requirements: {
+    required_group_roles: GroupingRole[]
+    required_for_every_student: string[]
+  }
+  stability_until: string | null
+  task_context?: Record<string, unknown>
+}
+
+export type GroupingCandidateGenerationPayload = Partial<ClassroomGroupCollaborationPayload> & {
+  decision_point_id: number
+  locked_assignments?: Record<string, number>
+}
+
 export type GroupingCandidateMember = {
   student_id: number
   username: string
@@ -613,6 +681,8 @@ export type GroupingCandidate = {
     readiness_mean_gap: number
     role_counts: Record<string, number>
   }
+  constraint_status: 'passed' | 'blocked'
+  constraint_blockers: string[]
 }
 
 export type GroupingCandidateRun = {
@@ -630,13 +700,47 @@ export type GroupingCandidateRun = {
     max_group_size: number
     roles: string[]
   }
+  decision_point: GroupingDecisionPoint
   students: Array<Pick<GroupingCandidateMember, 'student_id' | 'username' | 'display_name' | 'student_no'>>
   locked_assignments: Record<string, number>
   candidates: GroupingCandidate[]
+  candidate_count: number
   conflicts: Array<{ code?: string }>
   selected_candidate_key: string
   created_at: string
   finished_at: string | null
+}
+
+export type GroupingPlanAssignment = {
+  group_no: number
+  members: Array<{
+    student_id: number
+    role: string
+    locked: boolean
+    username?: string
+    display_name?: string
+    student_no?: string
+  }>
+}
+
+export type GroupingPlanVersion = {
+  id: number
+  plan_id: string
+  plan_version: number
+  status: 'reviewed' | 'active' | 'confirmed' | 'archived'
+  status_label: string
+  candidate_key: string
+  assignments: GroupingPlanAssignment[]
+  adjustment_note: string
+  confirmed_at: string | null
+  activated_at: string | null
+  notified_at: string | null
+  decision_point: GroupingDecisionPoint
+}
+
+export type GroupingPlanActivationResult = {
+  plan: GroupingPlanVersion
+  collaboration: ClassroomGroupCollaborationRow
 }
 
 export type ClassroomEvaluationType = 'self' | 'peer' | 'teacher'
@@ -648,6 +752,15 @@ export type ClassroomEvaluationCriterion = {
   sort_order: number
   level_descriptions?: string[]
   skip_condition?: string
+  learning_goal_codes?: string[]
+  evaluation_task_codes?: string[]
+  learning_target_links?: Array<{
+    target_version_id: number
+    logical_key: string
+    content_hash: string
+    alignment_status: 'complete' | 'legacy_incomplete'
+  }>
+  curriculum_alignment?: EvaluationCurriculumAlignment
 }
 
 export type ClassroomEvaluationConfig = {
@@ -727,6 +840,26 @@ export type ClassroomEvaluationPayload = {
   students: ClassroomEvaluationStudentRow[]
   recent_submissions: ClassroomEvaluationSubmission[]
   peer_available: boolean
+  availability?: {
+    can_enable: boolean
+    reason_code: 'ready' | 'classroom_not_running' | 'no_current_step' | 'current_step_unbound' | 'frozen_for_other_step'
+    reason: string
+    recovery: string
+    current_step: { id: number; title: string } | null
+    current_binding: {
+      id: number
+      standard_version: number
+      standard_title: string
+      version_no: number
+    } | null
+    bound_steps: Array<{
+      id: number
+      title: string
+      standard_version: number
+      standard_title: string
+      version_no: number
+    }>
+  }
 }
 
 export type ClassroomEvaluationConfigPayload = Pick<
@@ -1105,13 +1238,24 @@ export function setupClassroomGroupCollaboration(sessionId: number, payload: Cla
   })
 }
 
+export function getClassroomGroupingDecision(sessionId: number) {
+  return apiRequest<GroupingDecisionPoint | null>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/decision/`)
+}
+
+export function saveClassroomGroupingDecision(sessionId: number, payload: GroupingDecisionPayload) {
+  return apiRequest<GroupingDecisionPoint>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/decision/`, {
+    method: 'POST',
+    body: toJsonBody(payload)
+  })
+}
+
 export function getClassroomGroupingCandidates(sessionId: number) {
   return apiRequest<GroupingCandidateRun | null>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/candidates/`)
 }
 
 export function generateClassroomGroupingCandidates(
   sessionId: number,
-  payload: ClassroomGroupCollaborationPayload & { locked_assignments?: Record<string, number> }
+  payload: GroupingCandidateGenerationPayload
 ) {
   return apiRequest<GroupingCandidateRun>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/candidates/`, {
     method: 'POST',
@@ -1128,9 +1272,21 @@ export function confirmClassroomGroupingCandidate(
     note?: string
   }
 ) {
-  return apiRequest<ClassroomGroupCollaborationRow>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/candidates/${runId}/confirm/`, {
+  return apiRequest<GroupingPlanVersion>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/candidates/${runId}/confirm/`, {
     method: 'POST',
     body: toJsonBody(payload)
+  })
+}
+
+export function activateClassroomGroupingPlan(sessionId: number, planId: number) {
+  return apiRequest<GroupingPlanActivationResult>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/plans/${planId}/activate/`, {
+    method: 'POST'
+  })
+}
+
+export function notifyClassroomGroupingPlan(sessionId: number, planId: number) {
+  return apiRequest<GroupingPlanVersion>(`/api/v1/teacher/classroom/sessions/${sessionId}/group-collaboration/plans/${planId}/notify/`, {
+    method: 'POST'
   })
 }
 

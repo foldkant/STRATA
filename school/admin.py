@@ -30,13 +30,13 @@ class StudentProfileAdmin(admin.ModelAdmin):
     list_display = (
         "user",
         "class_group",
-        "current_layer",
         "onboarding_status",
         "is_first_use",
         "score",
     )
-    list_filter = ("class_group", "current_layer", "onboarding_status", "is_first_use")
+    list_filter = ("class_group", "onboarding_status", "is_first_use")
     search_fields = ("user__username", "user__display_name", "student_no")
+    exclude = ("current_layer",)
 
 
 @admin.register(TeachingAssignment)

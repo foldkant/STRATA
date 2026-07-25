@@ -11,12 +11,39 @@ export type EvaluationNotAssessedEntry = {
   note: string
 }
 
+export type EvaluationCurriculumAlignment = {
+  learning_goals: Array<{
+    code: string
+    title: string
+    description: string
+  }>
+  core_competencies: Array<{
+    node_id: number
+    title: string
+    elements: string[]
+    page_start: number
+    page_end: number
+    source_paragraph?: string
+  }>
+  academic_quality: Array<{
+    node_id: number
+    title: string
+    level_labels: string[]
+    page_start: number
+    page_end: number
+    source_paragraph?: string
+  }>
+  quality_mapping_status: 'reference_only' | 'mapped'
+  quality_mapping_note: string
+}
+
 export type EvaluationCriterionDisplay = {
   id: string
   title: string
   description: string
   level_descriptions?: string[]
   skip_condition?: string
+  curriculum_alignment?: EvaluationCurriculumAlignment
 }
 
 export const evaluationNotAssessedOptions: Array<{

@@ -57,6 +57,7 @@ from courses.models import (
     Lesson,
     LessonStep,
     Resource,
+    ResourceDocumentVersion,
     ResourceFile,
     Subject,
 )
@@ -300,15 +301,100 @@ from .services import (
 # Resources domain endpoints extracted from api.views.
 from .views import (
     OFFICE_FILE_TYPES,
+    _download_onlyoffice_callback_file,
     _office_document_type,
+    _onlyoffice_callback_token,
     _student_classroom_resource_context,
+    _verified_onlyoffice_editor_ids,
 )
+from .resource_access import student_has_active_classroom_resource_access
 
 def _resource_file_ext(resource: Resource) -> str:
     if not resource.attachment:
         return ""
     name = resource.attachment.name.rsplit("/", 1)[-1]
     return clean_resource_ext(name, resource.attachment.url)
+
+
+def _resource_document_key(resource: Resource) -> str:
+    latest_version = (
+        resource.document_versions.order_by("-version_no")
+        .values_list("version_no", flat=True)
+        .first()
+        or 1
+    )
+    return (
+        f"resource-{resource.id}-{latest_version}-"
+        f"{int(resource.updated_at.timestamp())}"
+    )
+
+
+def _resource_document_bytes(resource: Resource) -> bytes:
+    if not resource.attachment:
+        return b""
+    with resource.attachment.storage.open(resource.attachment.name, "rb") as source:
+        return source.read()
+
+
+def _save_resource_document_version(
+    resource: Resource,
+    *,
+    data: bytes,
+    version_no: int,
+    source: str,
+    callback_status: int | None = None,
+    callback_key: str = "",
+    verified_editor_ids: list[str] | None = None,
+    deduplicate: bool = True,
+) -> tuple[ResourceDocumentVersion, bool]:
+    file_sha256 = hashlib.sha256(data).hexdigest()
+    existing = (
+        resource.document_versions.filter(file_sha256=file_sha256).first()
+        if deduplicate
+        else None
+    )
+    if existing:
+        return existing, False
+    version = ResourceDocumentVersion(
+        resource=resource,
+        version_no=version_no,
+        file_sha256=file_sha256,
+        file_size=len(data),
+        source=source,
+        callback_status=callback_status,
+        callback_key=callback_key[:255],
+        verified_editor_ids=list(verified_editor_ids or []),
+    )
+    extension = _resource_file_ext(resource) or "bin"
+    version.file.save(
+        f"version_{version_no}.{extension}",
+        ContentFile(data),
+        save=False,
+    )
+    try:
+        version.save()
+    except Exception:
+        if version.file:
+            version.file.delete(save=False)
+        raise
+    return version, True
+
+
+def _ensure_resource_document_version(resource: Resource) -> ResourceDocumentVersion:
+    latest = resource.document_versions.order_by("-version_no").first()
+    if latest:
+        return latest
+    data = _resource_document_bytes(resource)
+    if not data:
+        raise ValueError("资源文件为空。")
+    version, _created = _save_resource_document_version(
+        resource,
+        data=data,
+        version_no=1,
+        source=ResourceDocumentVersion.Source.INITIAL,
+        deduplicate=False,
+    )
+    return version
 
 
 def _resource_rows_queryset():
@@ -361,6 +447,8 @@ def _resource_can_open(request, resource: Resource) -> bool:
             return False
         if not profile.class_group_id:
             return False
+        if student_has_active_classroom_resource_access(profile, resource.id):
+            return True
         return (
             _resource_rows_queryset()
             .filter(pk=resource.pk)
@@ -383,6 +471,10 @@ def resource_office_config(request, pk):
         return fail("该资源不是 Office 文档。", status=400)
     if not resource.attachment:
         return fail("该资源没有附件。", status=400)
+    try:
+        _ensure_resource_document_version(resource)
+    except (OSError, ValueError):
+        return fail("资源文件暂时无法读取，请重新上传或联系资源创建者。", status=409)
 
     requested_mode = request.GET.get("mode", "view").strip().lower()
     can_edit = request.user.role == "teacher" and resource.owner_id == request.user.id
@@ -399,7 +491,7 @@ def resource_office_config(request, pk):
     config = {
         "document": {
             "fileType": file_ext,
-            "key": f"resource-{resource.id}-{int(resource.updated_at.timestamp())}",
+            "key": _resource_document_key(resource),
             "title": attachment_name or resource.title,
             "url": attachment_url,
             "permissions": {
@@ -441,25 +533,70 @@ def resource_office_config(request, pk):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def resource_office_callback(request, pk):
-    resource = Resource.objects.filter(pk=pk).first()
+    resource = Resource.objects.select_related("owner", "owner__school").filter(pk=pk).first()
     if resource is None or not resource.attachment:
         return JsonResponse({"error": 1}, status=404)
+    payload = request.data if isinstance(request.data, dict) else {}
+    if not payload:
+        return JsonResponse({"error": 1}, status=400)
+    token = _onlyoffice_callback_token(request, payload)
+    unsigned_payload = {key: value for key, value in payload.items() if key != "token"}
     try:
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"error": 1})
+        verified_payload = verify_callback_payload(token, unsigned_payload)
+    except OnlyOfficeJWTError:
+        return JsonResponse({"error": 1}, status=403)
 
-    status = payload.get("status")
-    if status in {2, 6} and payload.get("url"):
+    callback_key = str(unsigned_payload.get("key") or "")
+    valid_keys = {_resource_document_key(resource)}
+    valid_keys.update(
+        value
+        for value in resource.document_versions.order_by("-version_no").values_list(
+            "callback_key", flat=True
+        )[:5]
+        if value
+    )
+    if callback_key not in valid_keys:
+        return JsonResponse({"error": 1}, status=409)
+
+    status = unsigned_payload.get("status")
+    if status in {2, 6} and unsigned_payload.get("url"):
         try:
-            with urllib.request.urlopen(payload["url"], timeout=30) as response:
-                data = response.read()
-            with resource.attachment.storage.open(
-                resource.attachment.name, "wb"
-            ) as target:
-                target.write(data)
-            resource.save(update_fields=["updated_at"])
-        except Exception:
+            data = _download_onlyoffice_callback_file(
+                str(unsigned_payload["url"]),
+                max_bytes=getattr(
+                    settings,
+                    "ONLYOFFICE_RESOURCE_MAX_BYTES",
+                    512 * 1024 * 1024,
+                ),
+            )
+            file_sha256 = hashlib.sha256(data).hexdigest()
+            with transaction.atomic():
+                resource = (
+                    Resource.objects.select_for_update(of=("self",))
+                    .select_related("owner", "owner__school")
+                    .get(pk=resource.pk)
+                )
+                _ensure_resource_document_version(resource)
+                latest = resource.document_versions.order_by("-version_no").first()
+                if latest and latest.file_sha256 == file_sha256:
+                    return JsonResponse({"error": 0})
+                next_version = (latest.version_no if latest else 0) + 1
+                version, created = _save_resource_document_version(
+                    resource,
+                    data=data,
+                    version_no=next_version,
+                    source=ResourceDocumentVersion.Source.ONLYOFFICE_CALLBACK,
+                    callback_status=int(status),
+                    callback_key=callback_key,
+                    verified_editor_ids=_verified_onlyoffice_editor_ids(
+                        verified_payload
+                    ),
+                )
+                if not created:
+                    return JsonResponse({"error": 0})
+                resource.attachment.name = version.file.name
+                resource.save(update_fields=["attachment", "updated_at"])
+        except (ValueError, OSError):
             return JsonResponse({"error": 1})
     return JsonResponse({"error": 0})
 

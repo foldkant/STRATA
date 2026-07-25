@@ -1095,12 +1095,6 @@ def cross_school_analysis(request):
         collection_count=Count("import_batches", distinct=True),
     ).order_by("name", "code")
 
-    layer_rows = []
-    layer_total = StudentProfile.objects.count() or 1
-    for value, label in StudentProfile.Layer.choices:
-        count = StudentProfile.objects.filter(current_layer=value).count()
-        layer_rows.append({"label": label, "value": value, "count": count, "percent": round(count * 100 / layer_total)})
-
     event_rows = []
     event_total = LearningEvent.objects.count() or 1
     for row in LearningEvent.objects.values("event_type").annotate(count=Count("id")).order_by("-count")[:8]:
@@ -1146,7 +1140,6 @@ def cross_school_analysis(request):
             ImportBatch.Status.choices,
             dict(ImportBatch.objects.values_list("status").annotate(total=Count("id"))),
         ),
-        "layer_rows": layer_rows,
         "event_rows": event_rows,
         "school_rows": school_rows,
         "recent_collections": ImportBatch.objects.select_related("source_school", "uploaded_by")[:8],
@@ -1168,11 +1161,6 @@ def cross_school_analysis_export(request):
         ImportBatch.Status.choices,
         dict(ImportBatch.objects.values_list("status").annotate(total=Count("id"))),
     )
-    layer_total = StudentProfile.objects.count() or 1
-    layer_rows = []
-    for value, label in StudentProfile.Layer.choices:
-        count = StudentProfile.objects.filter(current_layer=value).count()
-        layer_rows.append([value, label, count, f"{round(count * 100 / layer_total)}%"])
     event_total = LearningEvent.objects.count() or 1
     event_rows = []
     for row in LearningEvent.objects.values("event_type").annotate(count=Count("id")).order_by("-count"):
@@ -1209,7 +1197,6 @@ def cross_school_analysis_export(request):
                 "headers": ["状态", "数量", "占比"],
                 "rows": [[row["label"], row["count"], f'{row["percent"]}%'] for row in collection_status_rows],
             },
-            {"title": "当前分层", "headers": ["层级", "名称", "数量", "占比"], "rows": layer_rows},
             {"title": "行为类型", "headers": ["类型", "编码", "数量", "占比"], "rows": event_rows},
         ]
     )

@@ -25,9 +25,19 @@ export default defineConfig({
   },
   build: {
     outDir: '../static/frontend',
-    // The post-build cleanup retains the current and previous manifests so open tabs
-    // can still finish lazy-loading while older hashed assets are removed.
+    // Build output is a deployment artifact and is intentionally ignored by Git.
+    // Cleanup retains at most the current and previous manifests so open tabs can
+    // finish lazy-loading while stale hashes are removed automatically.
     emptyOutDir: false,
-    manifest: true
+    manifest: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('/node_modules/zrender/')) return 'charts-renderer'
+          if (id.includes('/node_modules/echarts/')) return 'charts'
+          return undefined
+        }
+      }
+    }
   }
 })

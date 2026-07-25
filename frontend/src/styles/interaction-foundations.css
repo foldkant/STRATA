@@ -1,0 +1,519 @@
+/* Cross-role interaction and accessibility foundations. */
+
+.primary-button,
+.secondary-button,
+.student-primary-action,
+.student-ghost-button {
+  min-height: 44px;
+}
+
+.row-action-reason {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: help;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.lesson-evaluation-inline-workspace {
+  min-width: 0;
+}
+
+.student-recovery-panel {
+  max-width: 760px;
+  display: grid;
+  gap: 10px;
+  margin-inline: auto;
+  padding: 28px;
+}
+
+.student-recovery-panel > span {
+  color: var(--primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.student-recovery-panel h2,
+.student-recovery-panel p {
+  margin: 0;
+}
+
+.student-recovery-panel p {
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.student-recovery-actions,
+.onlyoffice-fallback > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.student-recovery-actions a {
+  text-decoration: none;
+}
+
+.onlyoffice-fallback button,
+.onlyoffice-fallback a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 16px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.onlyoffice-fallback button {
+  background: #fff;
+  color: var(--text);
+}
+
+.onlyoffice-loading-recovery {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: 24px;
+  width: min(460px, calc(100% - 32px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--text);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.12);
+}
+
+.onlyoffice-loading-recovery a {
+  min-height: 44px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  padding: 0 14px;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+@media (max-width: 820px), (pointer: coarse) {
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  summary {
+    touch-action: manipulation;
+  }
+
+  .row-actions button,
+  .composition-item-actions button,
+  .resource-card-actions button,
+  .step-tree-actions button,
+  .designer-tabs button,
+  .student-resource-tabs button {
+    min-height: 44px;
+  }
+
+  .student-recovery-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .student-recovery-actions > * {
+    width: 100%;
+  }
+
+  .onlyoffice-loading-recovery {
+    align-items: stretch;
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .teacher-classroom-fullscreen .classroom-command-strip-top {
+    min-height: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    overflow: visible;
+  }
+
+  .teacher-classroom-fullscreen .classroom-command-strip-top button {
+    min-width: 0;
+    width: 100%;
+    min-height: 44px;
+    white-space: normal;
+  }
+
+  .teacher-classroom-fullscreen .current-step-console > .console-pane-header {
+    grid-template-columns: 1fr;
+  }
+
+  .teacher-classroom-fullscreen .current-step-console > .console-pane-header > .compact-classroom-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
+    overflow: visible;
+  }
+
+  .teacher-classroom-fullscreen .current-step-console > .console-pane-header > .compact-classroom-controls button {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .teacher-classroom-fullscreen .classroom-stage-grid {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: visible;
+    padding: 12px;
+  }
+
+  .teacher-classroom-fullscreen .classroom-step-task-panel {
+    order: -1;
+    overflow: visible;
+  }
+
+  .teacher-classroom-fullscreen .classroom-resource-preview,
+  .teacher-classroom-fullscreen .classroom-resource-preview .resource-preview-panel {
+    min-height: 320px;
+    max-height: 65dvh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.student-archive-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 4px;
+}
+
+.student-archive-tabs button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.student-archive-tabs button.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.analysis-technical-details {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.analysis-technical-details > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: #334155;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+@media (max-width: 1100px) {
+  .metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metric-grid.metric-grid-four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chart-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-chart-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  }
+
+  .dashboard-distribution-grid,
+  .dashboard-trend-grid,
+  .school-dashboard-hero-grid,
+  .school-dashboard-main-grid,
+  .school-dashboard-grid,
+  .school-dashboard-work-grid,
+  .school-dashboard-detail-grid,
+  .teacher-dashboard-hero-grid,
+  .teacher-dashboard-grid,
+  .teacher-work-grid,
+  .super-dashboard-trend-grid,
+  .super-dashboard-week-grid,
+  .school-dashboard-four-grid,
+  .cross-analysis-main-grid,
+  .cross-analysis-comparison-grid,
+  .cross-analysis-distribution-grid,
+  .dashboard-bottom-grid,
+  .health-check-grid,
+  .pretest-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 81;
+    width: min(300px, calc(100vw - 48px));
+    display: flex;
+    transform: translateX(-102%);
+    transition: transform 180ms ease-out;
+    box-shadow: 18px 0 48px rgba(15, 23, 42, 0.22);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .shell-nav-toggle {
+    display: inline-flex;
+  }
+
+  .shell-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: rgba(15, 23, 42, 0.46);
+    cursor: pointer;
+  }
+
+  .app-shell-natural .sidebar {
+    min-height: 0;
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .echarts-card,
+  .echarts-card.chart-card-tall {
+    grid-template-rows: auto 210px;
+  }
+
+  .echarts-canvas,
+  .chart-card-tall .echarts-canvas {
+    height: 210px;
+  }
+
+  .content {
+    padding: 14px;
+  }
+
+  .topbar {
+    min-height: 68px;
+    padding: 10px 14px;
+  }
+
+  .topbar h1 {
+    font-size: 25px;
+  }
+
+  .user-box > span {
+    display: none;
+  }
+
+  .split,
+  .pager,
+  .collection-upload-panel .panel-heading,
+  .bulk-action-bar,
+  .bulk-action-bar > div:first-child,
+  .class-check-header {
+    display: grid;
+  }
+
+  .heading-actions {
+    justify-content: flex-start;
+  }
+
+  .bulk-action-bar,
+  .bulk-action-bar > div:first-child {
+    justify-content: stretch;
+  }
+
+  .multi-select-actions {
+    justify-content: space-between;
+  }
+
+  .class-checkbox-grid,
+  .form-grid,
+  .notice-editor-body,
+  .student-detail-body dl,
+  .classroom-state-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .toolbar label,
+  .toolbar input,
+  .toolbar select,
+  .toolbar .app-select,
+  .toolbar-actions,
+  .extra-filter,
+  .extra-filter label,
+  .extra-filter select,
+  .extra-filter .app-select {
+    width: 100%;
+  }
+}
+
+@media (max-width: 620px) {
+  .student-archive-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-scope-note,
+  .health-check-row {
+    align-items: start;
+  }
+
+  .analysis-scope-note {
+    display: grid;
+    gap: 4px;
+  }
+
+  .health-check-row {
+    grid-template-columns: 8px minmax(0, 1fr);
+  }
+
+  .health-check-row > span {
+    grid-column: 2;
+  }
+
+  .management-table {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .management-table table,
+  .management-table tbody,
+  .management-table tr,
+  .management-table td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .management-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .management-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .management-table tbody tr {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+
+  .management-table tbody td {
+    display: grid;
+    grid-template-columns: minmax(82px, 0.36fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    border-bottom: 1px solid #edf1f6;
+    padding: 11px 12px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .management-table tbody td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .management-table tbody td:last-child {
+    border-bottom: 0;
+  }
+
+  .management-table tbody td.empty {
+    display: block;
+    text-align: center;
+  }
+
+  .management-table tbody td.empty::before {
+    content: none;
+  }
+
+  .management-table .row-actions,
+  .management-table td > div:last-child {
+    flex-wrap: wrap;
+  }
+}

@@ -2,6 +2,7 @@ import type { Role } from '@/api/auth'
 
 export type RouteAccessMeta = {
   public?: boolean
+  guestOnly?: boolean
   role?: unknown
   roles?: unknown
 }
@@ -16,7 +17,7 @@ export function homePathForRole(role: Role | null | undefined): string {
 
 export function resolveRouteAccess(meta: RouteAccessMeta, role: Role | null): true | string {
   const homePath = homePathForRole(role)
-  if (meta.public) return role ? homePath : true
+  if (meta.public) return meta.guestOnly && role ? homePath : true
   if (!role) return '/login'
   if (typeof meta.role === 'string' && meta.role !== role) return homePath
 

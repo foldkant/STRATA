@@ -194,15 +194,4 @@ class Command(BaseCommand):
             student_id__in=student_ids,
             policy_version=POLICY_VERSION,
         ).delete()
-        for profile in StudentProfile.objects.filter(user_id__in=student_ids):
-            latest = (
-                StudentSubjectBand.objects.filter(
-                    student_id=profile.user_id,
-                    valid_until__isnull=True,
-                )
-                .order_by("-valid_from", "-id")
-                .first()
-            )
-            profile.current_layer = latest.band if latest else None
-            profile.save(update_fields=["current_layer", "updated_at"])
         self.stdout.write(self.style.SUCCESS(f"已清除 {band_count} 条测试层级。"))

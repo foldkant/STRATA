@@ -1,0 +1,19 @@
+{
+  "viewport": "desktop-1440",
+  "reviewedRoutes": [
+    "/app/school-admin",
+    "/app/school-admin/classes",
+    "/app/school-admin/teachers",
+    "/app/school-admin/students",
+    "/app/school-admin/teaching",
+    "/app/school-admin/pretests",
+    "/app/school-admin/resource-reviews",
+    "/app/school-admin/question-reviews",
+    "/app/school-admin/data-quality",
+    "/app/school-admin/models"
+  ],
+  "pageErrors": [],
+  "serverErrors": [],
+  "externalRequests": [],
+  "layoutFindings": []
+}

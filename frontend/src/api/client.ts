@@ -11,11 +11,13 @@ export type ApiEnvelope<T> = {
 export class ApiError extends Error {
   status: number
   errors: FieldErrors
+  requestId: string
 
-  constructor(message: string, status: number, errors: FieldErrors = {}) {
-    super(message)
+  constructor(message: string, status: number, errors: FieldErrors = {}, requestId = '') {
+    super(status >= 500 && requestId ? `${message}（问题编号：${requestId}）` : message)
     this.status = status
     this.errors = errors
+    this.requestId = requestId
   }
 }
 
@@ -103,7 +105,12 @@ export async function apiRequest<T>(url: string, options: RequestInit = {}): Pro
   const payload = contentType.includes('application/json') ? await response.json() : null
 
   if (!response.ok) {
-    throw new ApiError(errorMessage(payload, '请求失败'), response.status, payload?.errors || {})
+    throw new ApiError(
+      errorMessage(payload, '请求失败'),
+      response.status,
+      payload?.errors || {},
+      response.headers.get('X-Request-ID') || ''
+    )
   }
 
   return applyStudentPrivacyBoundary(url, (payload as ApiEnvelope<T>).data)
@@ -138,7 +145,12 @@ export async function uploadRequest<T>(url: string, formData: FormData, method =
   const payload = contentType.includes('application/json') ? await response.json() : null
 
   if (!response.ok) {
-    throw new ApiError(errorMessage(payload, '上传失败'), response.status, payload?.errors || {})
+    throw new ApiError(
+      errorMessage(payload, '上传失败'),
+      response.status,
+      payload?.errors || {},
+      response.headers.get('X-Request-ID') || ''
+    )
   }
 
   return applyStudentPrivacyBoundary(url, (payload as ApiEnvelope<T>).data)

@@ -14,6 +14,8 @@ from courses.models import (
     ClassroomEvaluationSubmission,
     ClassroomGroup,
     ClassroomGroupCollaboration,
+    ClassroomGroupDocumentVersion,
+    ClassroomGroupFile,
     ClassroomGroupMember,
     ClassroomSession,
     Course,
@@ -22,7 +24,22 @@ from courses.models import (
     LessonStep,
     Subject,
 )
-from learning.models import LessonStepAttempt, StudentWorkAttachment
+from curriculum_standards.models import (
+    CurriculumDocumentType,
+    CurriculumNodeType,
+    CurriculumStandard,
+    CurriculumStandardNode,
+    CurriculumStandardVersion,
+    CurriculumVersionStatus,
+    SchoolStage,
+)
+from curriculum_standards.services import replace_plan_curriculum_references
+from learning.models import (
+    LessonStepAttempt,
+    StudentLearningTargetStateVersion,
+    StudentWorkAttachment,
+    UnifiedAssessmentMaterial,
+)
 from learning_analytics.models import (
     ClassroomEvaluationStandardUse,
     EvaluationPlan,
@@ -34,7 +51,16 @@ from learning_analytics.models import (
     LearningOpportunityTransitionFact,
 )
 from learning_analytics.services.dual_write import reconcile_v1_v2_events
-from learning_analytics.services.evaluation import publish_plan, publish_standard
+from learning_analytics.services.evaluation import (
+    confirm_plan_review,
+    confirm_standard_review,
+    publish_plan,
+    publish_standard,
+)
+from learning_analytics.services.evaluation_events import (
+    EvaluationEventError,
+    append_evaluation_submission,
+)
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
 
@@ -53,6 +79,64 @@ class EvaluationFactTests(TestCase):
             role=User.Role.TEACHER,
             school=self.school,
         )
+        curriculum_standard = CurriculumStandard.objects.create(
+            title="普通高中信息技术课程标准",
+            document_type=CurriculumDocumentType.SUBJECT_STANDARD,
+            school_stage=SchoolStage.SENIOR_HIGH,
+            subject_code="information_technology",
+            subject_name="信息科技",
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        curriculum_version = CurriculumStandardVersion.objects.create(
+            source=curriculum_standard,
+            version_label="2025-test",
+            publication_year=2025,
+            effective_year=2025,
+            title_snapshot=curriculum_standard.title,
+            official_title="普通高中信息技术课程标准（测试版本）",
+            document_type_snapshot=curriculum_standard.document_type,
+            school_stage_snapshot=curriculum_standard.school_stage,
+            subject_code_snapshot=curriculum_standard.subject_code,
+            subject_name_snapshot=curriculum_standard.subject_name,
+            pdf_file="curriculum_standards/tests/information-technology.pdf",
+            pdf_sha256="a" * 64,
+            pdf_size_bytes=1024,
+            pdf_page_count=4,
+            content_hash="b" * 64,
+            created_by=self.teacher,
+        )
+        self.curriculum_nodes = [
+            CurriculumStandardNode.objects.create(
+                version=curriculum_version,
+                node_type=node_type,
+                code=code,
+                title=title,
+                content=f"信息科技课程标准原文：{title}，用于评价事实链测试。",
+                source_page_start=index,
+                source_page_end=index,
+                source_paragraph=title,
+                sort_order=index,
+            )
+            for index, (node_type, code, title) in enumerate(
+                (
+                    (CurriculumNodeType.CORE_COMPETENCY, "IT.CORE", "核心素养"),
+                    (CurriculumNodeType.COURSE_OBJECTIVE, "IT.OBJECTIVE", "课程目标"),
+                    (CurriculumNodeType.COURSE_CONTENT, "IT.CONTENT", "课程内容"),
+                    (CurriculumNodeType.ACADEMIC_QUALITY, "IT.QUALITY", "学业质量"),
+                ),
+                start=1,
+            )
+        ]
+        CurriculumStandardVersion.objects.filter(pk=curriculum_version.pk).update(
+            status=CurriculumVersionStatus.PUBLISHED,
+            reviewed_by=self.teacher,
+            published_by=self.teacher,
+        )
+        CurriculumStandard.objects.filter(pk=curriculum_standard.pk).update(
+            current_version=curriculum_version
+        )
+        self.curriculum_node_ids = [node.id for node in self.curriculum_nodes]
         TeachingAssignment.objects.create(
             school=self.school,
             class_group=self.class_group,
@@ -167,6 +251,66 @@ class EvaluationFactTests(TestCase):
             format="json",
         )
 
+    def test_teacher_evaluation_payload_includes_every_student(self):
+        self.client.force_authenticate(self.teacher)
+        response = self.client.get(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/evaluation/"
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = response.data["data"]["students"]
+        self.assertEqual(len(rows), len(self.students))
+        self.assertSetEqual(
+            {row["student"]["id"] for row in rows},
+            {student.id for student in self.students},
+        )
+
+    def test_teacher_evaluation_payload_explains_unbound_current_step(self):
+        other_step = LessonStep.objects.create(
+            lesson=self.lesson,
+            title="已设置评价的导入环节",
+            step_type=LessonStep.StepType.INTRO,
+            sort_order=5,
+            created_by=self.teacher,
+        )
+        _standard, version, _binding = self.create_formal_binding()
+        LessonStepEvaluationBinding.objects.create(
+            lesson_step=other_step,
+            standard_version=version,
+            enable_self=True,
+            enable_peer=False,
+            enable_teacher=True,
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        LessonStepEvaluationBinding.objects.filter(lesson_step=self.lesson_step).delete()
+        self.client.force_authenticate(self.teacher)
+
+        response = self.client.get(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/evaluation/"
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        availability = response.data["data"]["availability"]
+        self.assertFalse(availability["can_enable"])
+        self.assertEqual(availability["reason_code"], "current_step_unbound")
+        self.assertEqual(availability["current_step"]["title"], "展示评价")
+        self.assertEqual(availability["bound_steps"][0]["title"], "已设置评价的导入环节")
+
+    def test_frozen_criteria_include_curriculum_alignment_without_false_level_equivalence(self):
+        _standard, _version, _binding = self.create_formal_binding()
+
+        enabled = self.enable_evaluation()
+
+        self.assertEqual(enabled.status_code, 200, enabled.data)
+        criterion = enabled.data["data"]["config"]["teacher_criteria"][0]
+        alignment = criterion["curriculum_alignment"]
+        self.assertEqual(alignment["learning_goals"][0]["code"], "G1")
+        self.assertEqual(alignment["core_competencies"][0]["title"], "核心素养")
+        self.assertEqual(alignment["academic_quality"][0]["title"], "学业质量")
+        self.assertEqual(alignment["quality_mapping_status"], "reference_only")
+        self.assertIn("不直接等同", alignment["quality_mapping_note"])
+
     def submit_student(
         self, student, evaluation_type, target=None, rating=4, criterion_id=None
     ):
@@ -204,6 +348,7 @@ class EvaluationFactTests(TestCase):
                     "code": "G1",
                     "title": "完成任务",
                     "description": "完成课堂任务并说明关键决策。",
+                    "curriculum_node_ids": self.curriculum_node_ids,
                 }
             ],
             evaluation_basis=[
@@ -222,6 +367,29 @@ class EvaluationFactTests(TestCase):
                     "description": "提交答案与作品。",
                 }
             ],
+            learning_activities=[
+                {
+                    "code": "A1",
+                    "title": "课堂任务实践",
+                    "goal_codes": ["G1"],
+                    "description": "学生完成课堂任务并说明主要解决步骤。",
+                }
+            ],
+            evaluation_tasks=[
+                {
+                    "code": "T1",
+                    "title": "课堂任务评价",
+                    "goal_codes": ["G1"],
+                    "activity_codes": ["A1"],
+                    "mode": "mixed",
+                    "component_modes": ["test", "artifact"],
+                    "evidence_ownership": "individual",
+                    "material_types": ["answer", "artifact", "score"],
+                    "weight": 100,
+                    "description": "综合课堂作答、个人作品与评分记录进行评价。",
+                }
+            ],
+            assessment_modes=["mixed"],
             content_scope=["课堂任务"],
             thinking_requirements=["apply"],
             support_options=[],
@@ -233,7 +401,13 @@ class EvaluationFactTests(TestCase):
             created_by=self.teacher,
             updated_by=self.teacher,
         )
-        publish_plan(plan, published_by=self.teacher)
+        replace_plan_curriculum_references(
+            plan=plan,
+            node_ids=self.curriculum_node_ids,
+            actor=self.teacher,
+        )
+        confirm_plan_review(plan=plan, reviewed_by=self.teacher)
+        plan_version = publish_plan(plan, published_by=self.teacher).version
         criteria = [
             {
                 "code": "D1",
@@ -241,6 +415,10 @@ class EvaluationFactTests(TestCase):
                 "title": "任务达成",
                 "evaluation_target": "学生课堂作答和上传作品",
                 "evaluation_sources": ["课堂作答", "学生作品"],
+                "learning_goal_codes": ["G1"],
+                "evaluation_task_codes": ["T1"],
+                "evidence_ownership": "individual",
+                "material_types": ["answer", "artifact", "score"],
                 "expected_performance": "学生完成任务并能说明关键步骤。",
                 "skip_condition": "没有作答或作品时不评价。",
                 "support_options": [],
@@ -277,6 +455,10 @@ class EvaluationFactTests(TestCase):
                     "title": "协作表现",
                     "evaluation_target": "学生小组协作过程",
                     "evaluation_sources": ["课堂观察"],
+                    "learning_goal_codes": ["G1"],
+                    "evaluation_task_codes": ["T1"],
+                    "evidence_ownership": "individual",
+                    "material_types": ["observation", "score"],
                     "expected_performance": "学生能参与协作并回应同伴。",
                     "skip_condition": "本节未安排协作时不评价。",
                     "support_options": [],
@@ -306,18 +488,192 @@ class EvaluationFactTests(TestCase):
             subject=self.subject,
             course=self.course,
             plan=plan,
+            plan_version=plan_version,
             title="课堂作品评价标准",
             evaluation_target="学生课堂作答和上传作品",
             criteria=criteria,
             created_by=self.teacher,
             updated_by=self.teacher,
         )
+        confirm_standard_review(standard=standard, reviewed_by=self.teacher)
         version = publish_standard(standard, published_by=self.teacher).version
         binding = LessonStepEvaluationBinding.objects.create(
             lesson_step=self.lesson_step,
             standard_version=version,
             enable_self=True,
             enable_peer=True,
+            enable_teacher=True,
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        return standard, version, binding
+
+    def create_project_binding(self):
+        plan = EvaluationPlan.objects.create(
+            school=self.school,
+            subject=self.subject,
+            course=self.course,
+            title="信息科技项目成果评价方案",
+            content_version="2026.2",
+            target_students="参加信息科技项目学习的学生",
+            learning_goal="学生能够合作完成信息科技作品并独立说明设计取舍。",
+            learning_goals=[
+                {
+                    "code": "G_PROJECT",
+                    "title": "完成项目并说明设计取舍",
+                    "description": "合作完成可运行作品，并能独立答辩说明关键决策。",
+                    "curriculum_node_ids": self.curriculum_node_ids,
+                }
+            ],
+            evaluation_basis=[
+                {
+                    "code": "E_PROJECT",
+                    "goal_codes": ["G_PROJECT"],
+                    "description": "小组最终作品和学生个人答辩共同作为评价依据。",
+                    "source_types": ["小组作品", "个人答辩"],
+                }
+            ],
+            learning_activities=[
+                {
+                    "code": "A_PROJECT",
+                    "title": "项目设计与展示",
+                    "goal_codes": ["G_PROJECT"],
+                    "description": "小组合作设计作品，每名学生独立说明自己的设计判断。",
+                }
+            ],
+            evaluation_tasks=[
+                {
+                    "code": "T_ARTIFACT",
+                    "title": "小组项目作品",
+                    "goal_codes": ["G_PROJECT"],
+                    "activity_codes": ["A_PROJECT"],
+                    "mode": "project",
+                    "evidence_ownership": "group",
+                    "material_types": ["artifact"],
+                    "weight": 60,
+                    "description": "依据当前课堂实际小组提交的项目作品进行评价。",
+                },
+                {
+                    "code": "T_DEFENSE",
+                    "title": "个人项目答辩",
+                    "goal_codes": ["G_PROJECT"],
+                    "activity_codes": ["A_PROJECT"],
+                    "mode": "oral_defense",
+                    "evidence_ownership": "individual",
+                    "material_types": ["oral_defense", "observation"],
+                    "weight": 40,
+                    "description": "依据学生个人答辩中对关键设计取舍的说明进行评价。",
+                },
+            ],
+            assessment_modes=["project", "oral_defense"],
+            content_scope=["信息科技项目作品", "项目答辩"],
+            thinking_requirements=["apply", "evaluate", "create"],
+            support_options=[],
+            scoring_rules={
+                "approach": "项目作品与个人答辩分项评价",
+                "decision_rule": "缺少对应评价材料时该项暂不评价，不以低分替代。",
+            },
+            follow_up_suggestion="根据作品和答辩的不同表现安排针对性反馈。",
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        replace_plan_curriculum_references(
+            plan=plan,
+            node_ids=self.curriculum_node_ids,
+            actor=self.teacher,
+        )
+        confirm_plan_review(plan=plan, reviewed_by=self.teacher)
+        plan_version = publish_plan(plan, published_by=self.teacher).version
+        common_levels = {
+            "1": "尚未呈现可辨识的关键表现，需要补充评价材料。",
+            "2": "呈现少量关键表现，但作品或说明仍有明显缺漏。",
+            "3": "基本呈现预期表现，能够说明主要过程与结果。",
+            "4": "完整呈现预期表现，能够清楚说明过程与设计理由。",
+            "5": "高质量呈现预期表现，并能比较方案与反思设计取舍。",
+        }
+        criteria = [
+            {
+                "code": "C_ARTIFACT",
+                "dimension": "task_quality",
+                "title": "小组作品质量",
+                "evaluation_target": "当前课堂实际小组提交的项目作品",
+                "evaluation_sources": ["小组协作文档或小组文件"],
+                "learning_goal_codes": ["G_PROJECT"],
+                "evaluation_task_codes": ["T_ARTIFACT"],
+                "evidence_ownership": "group",
+                "material_types": ["artifact"],
+                "expected_performance": "小组作品能够运行并体现明确的信息处理方案。",
+                "skip_condition": "没有当前实际小组作品时暂不评价该指标。",
+                "support_options": [],
+                "common_problems": ["只提交个人文件，不能确认实际小组共同成果。"],
+                "level_descriptions": common_levels,
+                "scoring_examples": [
+                    {
+                        "level": 2,
+                        "title": "作品材料不完整",
+                        "example_description": "作品仅呈现局部结果，关键功能和设计说明缺失。",
+                        "file_reference": "project-artifact-L2",
+                    },
+                    {
+                        "level": 4,
+                        "title": "作品完整可用",
+                        "example_description": "作品功能完整，能够体现清晰的信息处理方案。",
+                        "file_reference": "project-artifact-L4",
+                    },
+                ],
+                "follow_up_suggestion": "根据作品缺失的关键环节安排小组修订。",
+            },
+            {
+                "code": "C_DEFENSE",
+                "dimension": "subject_practice",
+                "title": "个人答辩表现",
+                "evaluation_target": "学生个人对项目设计取舍的现场说明",
+                "evaluation_sources": ["教师现场答辩观察记录"],
+                "learning_goal_codes": ["G_PROJECT"],
+                "evaluation_task_codes": ["T_DEFENSE"],
+                "evidence_ownership": "individual",
+                "material_types": ["oral_defense"],
+                "expected_performance": "学生能够独立说明关键设计决策及其依据。",
+                "skip_condition": "学生未获得答辩机会或教师未观察时暂不评价。",
+                "support_options": [],
+                "common_problems": ["只能复述小组结果，不能说明自己的设计判断。"],
+                "level_descriptions": common_levels,
+                "scoring_examples": [
+                    {
+                        "level": 2,
+                        "title": "说明缺少依据",
+                        "example_description": "能够描述部分结果，但不能解释关键设计选择。",
+                        "file_reference": "project-defense-L2",
+                    },
+                    {
+                        "level": 4,
+                        "title": "独立说明清楚",
+                        "example_description": "能够独立说明关键决策，并给出合理的设计依据。",
+                        "file_reference": "project-defense-L4",
+                    },
+                ],
+                "follow_up_suggestion": "针对学生未能说明的设计环节安排个别追问。",
+            },
+        ]
+        standard = EvaluationStandard.objects.create(
+            school=self.school,
+            subject=self.subject,
+            course=self.course,
+            plan=plan,
+            plan_version=plan_version,
+            title="信息科技项目成果评价标准",
+            evaluation_target="小组项目作品与学生个人答辩表现",
+            criteria=criteria,
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        confirm_standard_review(standard=standard, reviewed_by=self.teacher)
+        version = publish_standard(standard, published_by=self.teacher).version
+        binding = LessonStepEvaluationBinding.objects.create(
+            lesson_step=self.lesson_step,
+            standard_version=version,
+            enable_self=True,
+            enable_peer=False,
             enable_teacher=True,
             created_by=self.teacher,
             updated_by=self.teacher,
@@ -543,6 +899,291 @@ class EvaluationFactTests(TestCase):
         )
         self.assertEqual(changed.status_code, 409, changed.data)
         self.assertEqual(self.client.delete(binding_url).status_code, 409)
+
+    def test_project_group_artifact_and_individual_defense_keep_separate_sources(self):
+        _standard, standard_version, _binding = self.create_project_binding()
+        group_file = ClassroomGroupFile.objects.create(
+            group=self.group,
+            uploader=self.students[0],
+            attachment=SimpleUploadedFile("group-project.zip", b"group-project"),
+            original_name="group-project.zip",
+            file_ext="zip",
+            file_size=13,
+            description="当前实际小组的项目作品",
+        )
+        enabled = self.enable_evaluation()
+        self.assertEqual(enabled.status_code, 200, enabled.data)
+        standard_use = ClassroomEvaluationStandardUse.objects.get(session=self.session)
+        criteria = {
+            item["criterion_code"]: item for item in standard_use.teacher_criteria
+        }
+        self.assertEqual(
+            criteria["C_ARTIFACT"]["learning_goal_codes"], ["G_PROJECT"]
+        )
+        self.assertEqual(
+            criteria["C_ARTIFACT"]["evaluation_task_codes"], ["T_ARTIFACT"]
+        )
+        self.assertEqual(len(criteria["C_ARTIFACT"]["learning_target_links"]), 1)
+        self.assertEqual(
+            criteria["C_ARTIFACT"]["learning_target_links"][0]["alignment_status"],
+            "complete",
+        )
+        self.assertEqual(criteria["C_ARTIFACT"]["evidence_ownership"], "group")
+        self.assertEqual(criteria["C_ARTIFACT"]["material_types"], ["artifact"])
+        self.assertEqual(criteria["C_DEFENSE"]["evidence_ownership"], "individual")
+        self.assertEqual(criteria["C_DEFENSE"]["material_types"], ["oral_defense"])
+
+        self.client.force_authenticate(self.teacher)
+        response = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/evaluation/teacher-submit/",
+            {
+                "target": self.students[0].id,
+                "ratings": {
+                    criteria["C_ARTIFACT"]["id"]: 4,
+                    criteria["C_DEFENSE"]["id"]: 5,
+                },
+                "comment": "学生已完成个人答辩，能够说明关键设计取舍。",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        evidence = EvaluationSubmissionEvidence.objects.get()
+        self.assertEqual(evidence.evidence_ownership, "both")
+        self.assertEqual(evidence.group, self.group)
+        self.assertIsNone(evidence.lesson_step_attempt)
+        self.assertIsNone(evidence.student_work_attachment)
+        artifact_row = next(
+            item
+            for item in evidence.material_manifest
+            if item["criterion_code"] == "C_ARTIFACT"
+        )
+        defense_row = next(
+            item
+            for item in evidence.material_manifest
+            if item["criterion_code"] == "C_DEFENSE"
+        )
+        self.assertEqual(artifact_row["ownership"], "group")
+        self.assertEqual(
+            artifact_row["schema_version"], "evaluation-material-manifest-v2"
+        )
+        self.assertEqual(
+            artifact_row["learning_target_links"],
+            criteria["C_ARTIFACT"]["learning_target_links"],
+        )
+        self.assertEqual(artifact_row["status"], "available")
+        self.assertEqual(
+            artifact_row["source"]["source_type"], "classroom_group_file"
+        )
+        self.assertEqual(artifact_row["source"]["source_id"], str(group_file.public_id))
+        self.assertSetEqual(
+            set(artifact_row["participant_student_ids"]),
+            {student.id for student in self.students},
+        )
+        self.assertEqual(defense_row["ownership"], "individual")
+        self.assertEqual(defense_row["status"], "available")
+        self.assertEqual(
+            defense_row["source"]["record_kind"],
+            "teacher_attested_live_observation",
+        )
+        self.assertEqual(defense_row["student_id"], self.students[0].id)
+        self.assertEqual(
+            standard_use.standard_version_id,
+            standard_version.id,
+        )
+        materials = list(
+            UnifiedAssessmentMaterial.objects.select_related(
+                "learning_target_version"
+            ).order_by("ownership", "id")
+        )
+        self.assertEqual(len(materials), 2)
+        group_material = next(
+            item
+            for item in materials
+            if item.ownership == UnifiedAssessmentMaterial.Ownership.GROUP
+        )
+        individual_material = next(
+            item
+            for item in materials
+            if item.ownership == UnifiedAssessmentMaterial.Ownership.INDIVIDUAL
+        )
+        self.assertIsNone(group_material.student_id)
+        self.assertEqual(group_material.group_reference, f"classroom_group:{self.group.id}")
+        self.assertEqual(individual_material.student, self.students[0])
+        self.assertEqual(
+            individual_material.learning_target_version,
+            group_material.learning_target_version,
+        )
+        self.assertIsNone(individual_material.score)
+        self.assertFalse(
+            individual_material.content["eligible_for_learning_target_estimate"]
+        )
+
+        target_state = StudentLearningTargetStateVersion.objects.get()
+        self.assertEqual(
+            target_state.learning_target_version,
+            individual_material.learning_target_version,
+        )
+        self.assertEqual(
+            target_state.evidence_status,
+            StudentLearningTargetStateVersion.EvidenceStatus.PENDING_REVIEW,
+        )
+        self.assertEqual(target_state.evidence_coverage, 1)
+        self.assertIsNone(target_state.estimate)
+        self.assertIsNone(target_state.uncertainty)
+        self.assertEqual(len(target_state.material_references), 1)
+        self.assertIn(
+            str(individual_material.material_id),
+            target_state.material_references[0],
+        )
+        self.assertNotIn(
+            str(group_material.material_id),
+            " ".join(target_state.material_references),
+        )
+        self.assertTrue(
+            any("小组材料未计入个人" in note for note in target_state.observation_notes)
+        )
+
+    def test_group_artifact_cannot_be_replaced_by_individual_work_and_missing_is_not_scored(self):
+        self.create_project_binding()
+        self.create_student_evidence(self.students[0])
+        ClassroomGroupDocumentVersion.objects.create(
+            group=self.group,
+            version_no=1,
+            file=SimpleUploadedFile("blank-template.docx", b"blank-template"),
+            file_sha256="c" * 64,
+            file_size=14,
+            source=ClassroomGroupDocumentVersion.Source.INITIAL,
+            verified_editor_ids=[str(self.students[0].id)],
+        )
+        enabled = self.enable_evaluation()
+        self.assertEqual(enabled.status_code, 200, enabled.data)
+        standard_use = ClassroomEvaluationStandardUse.objects.get(session=self.session)
+        criteria = {
+            item["criterion_code"]: item for item in standard_use.teacher_criteria
+        }
+        artifact_id = criteria["C_ARTIFACT"]["id"]
+        defense_id = criteria["C_DEFENSE"]["id"]
+
+        self.client.force_authenticate(self.teacher)
+        mismatched = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/evaluation/teacher-submit/",
+            {
+                "target": self.students[0].id,
+                "ratings": {artifact_id: 4, defense_id: 4},
+            },
+            format="json",
+        )
+        self.assertEqual(mismatched.status_code, 400, mismatched.data)
+        self.assertIn("缺少可追溯的小组评价材料", mismatched.data["message"])
+        self.assertFalse(ClassroomEvaluationSubmission.objects.exists())
+        self.assertFalse(EvaluationSubmissionEvidence.objects.exists())
+        self.assertFalse(UnifiedAssessmentMaterial.objects.exists())
+        self.assertFalse(StudentLearningTargetStateVersion.objects.exists())
+
+        not_scored = self.client.post(
+            f"/api/v1/teacher/classroom/sessions/{self.session.id}/evaluation/teacher-submit/",
+            {
+                "target": self.students[0].id,
+                "ratings": {defense_id: 4},
+                "not_assessed": {
+                    artifact_id: {
+                        "reason": "no_evidence",
+                        "note": "只有个人文件，没有可确认的实际小组作品。",
+                    }
+                },
+                "comment": "教师已记录学生个人答辩中的关键设计说明。",
+            },
+            format="json",
+        )
+        self.assertEqual(not_scored.status_code, 200, not_scored.data)
+        submission = ClassroomEvaluationSubmission.objects.get()
+        self.assertNotIn(artifact_id, submission.ratings)
+        self.assertEqual(
+            submission.not_assessed[artifact_id]["reason"], "no_evidence"
+        )
+        evidence = submission.standard_evidence
+        artifact_row = next(
+            item
+            for item in evidence.material_manifest
+            if item["criterion_code"] == "C_ARTIFACT"
+        )
+        self.assertEqual(artifact_row["status"], "missing")
+        self.assertIsNone(artifact_row["source"])
+        self.assertEqual(artifact_row["not_assessed_reason"], "no_evidence")
+        self.assertIsNone(evidence.student_work_attachment)
+        group_material = UnifiedAssessmentMaterial.objects.get(
+            ownership=UnifiedAssessmentMaterial.Ownership.GROUP
+        )
+        self.assertEqual(
+            group_material.material_status,
+            UnifiedAssessmentMaterial.MaterialStatus.MISSING,
+        )
+        self.assertIsNone(group_material.score)
+        target_state = StudentLearningTargetStateVersion.objects.get()
+        self.assertEqual(target_state.evidence_coverage, 1)
+        self.assertIsNone(target_state.estimate)
+
+    def test_foreign_classroom_group_is_rejected_before_evidence_is_created(self):
+        self.create_project_binding()
+        enabled = self.enable_evaluation()
+        self.assertEqual(enabled.status_code, 200, enabled.data)
+        standard_use = ClassroomEvaluationStandardUse.objects.get(session=self.session)
+        criteria = {
+            item["criterion_code"]: item for item in standard_use.teacher_criteria
+        }
+        foreign_session = ClassroomSession.objects.create(
+            school=self.school,
+            teacher=self.teacher,
+            course=self.course,
+            lesson=self.lesson,
+            class_group=self.class_group,
+            title="其他课堂",
+            status=ClassroomSession.Status.FINISHED,
+            current_step=self.lesson_step,
+            started_at=timezone.now(),
+            finished_at=timezone.now(),
+        )
+        foreign_collaboration = ClassroomGroupCollaboration.objects.create(
+            session=foreign_session,
+            is_enabled=True,
+            status=ClassroomGroupCollaboration.Status.CLOSED,
+            created_by=self.teacher,
+            opened_at=timezone.now(),
+            closed_at=timezone.now(),
+        )
+        foreign_group = ClassroomGroup.objects.create(
+            collaboration=foreign_collaboration,
+            group_no=1,
+            name="其他课堂第1组",
+        )
+        ClassroomGroupMember.objects.create(
+            collaboration=foreign_collaboration,
+            group=foreign_group,
+            student=self.students[0],
+            student_profile=self.profiles[0],
+        )
+
+        with self.assertRaises(EvaluationEventError) as caught:
+            append_evaluation_submission(
+                course=self.course,
+                class_group=self.class_group,
+                session=self.session,
+                evaluation_type=ClassroomEvaluationSubmission.EvaluationType.TEACHER,
+                evaluator=self.teacher,
+                target=self.students[0],
+                standard_use=standard_use,
+                ratings={
+                    criteria["C_ARTIFACT"]["id"]: 4,
+                    criteria["C_DEFENSE"]["id"]: 4,
+                },
+                not_assessed={},
+                comment="",
+                group=foreign_group,
+            )
+        self.assertEqual(caught.exception.code, "evaluation_evidence_scope_mismatch")
+        self.assertFalse(ClassroomEvaluationSubmission.objects.exists())
+        self.assertFalse(EvaluationSubmissionEvidence.objects.exists())
 
     def test_not_assessed_criterion_is_excluded_from_average_and_keeps_reason(self):
         _standard, _version, _binding = self.create_formal_binding(

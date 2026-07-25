@@ -29,5 +29,5 @@ export function logout() {
 }
 
 export function me() {
-  return apiRequest<CurrentUser>('/api/v1/auth/me/')
+  return apiRequest<CurrentUser | null>('/api/v1/auth/me/')
 }

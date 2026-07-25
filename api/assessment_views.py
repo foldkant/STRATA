@@ -5,7 +5,9 @@ import json
 import math
 import random
 from datetime import timedelta
+from uuid import uuid4
 
+from django.conf import settings
 from django.db import transaction
 from django.core.paginator import Paginator
 from django.db.models import Avg, Count, Q, Sum
@@ -14,7 +16,7 @@ from rest_framework.decorators import api_view, permission_classes
 
 from api.permissions import IsSchoolAdmin, IsStudent, IsTeacher
 from api.responses import fail, ok
-from api.services import ServiceError, generate_question_bank_drafts_with_ai
+from aiops.models import QuestionDraftGenerationJob
 from courses.models import Course, Subject
 from learning.models import (
     AssessmentComparabilityRecord,
@@ -36,6 +38,7 @@ from learning_analytics.services.assessment_events import (
     release_assessment_opportunities,
     withdraw_assessment_opportunities,
 )
+from learning_analytics.models import LearningTargetVersion
 from learning.services.question_bank import (
     create_question_items,
     ensure_question_version,
@@ -58,8 +61,65 @@ def _error(exc: AssessmentError):
     return fail(exc.message, errors=exc.errors, status=exc.status)
 
 
-def _service_error(exc: ServiceError):
-    return fail(exc.message, errors=exc.errors, status=exc.status)
+def _question_draft_job_row(job: QuestionDraftGenerationJob) -> dict:
+    return {
+        "id": job.id,
+        "status": job.status,
+        "status_label": job.get_status_display(),
+        "subject": _subject_row(job.subject),
+        "result": job.result_payload if job.status == job.Status.SUCCEEDED else {},
+        "error_message": job.error_message,
+        "error_fields": job.error_fields,
+        "attempt_count": job.attempt_count,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
+
+
+def _question_draft_request_payload(data) -> tuple[dict, dict]:
+    payload = {
+        "subject": data.get("subject"),
+        "direction": str(data.get("direction") or "").strip(),
+        "knowledge_point": str(data.get("knowledge_point") or "").strip(),
+        "question_type": str(data.get("question_type") or "mixed").strip(),
+        "difficulty": str(data.get("difficulty") or "normal").strip(),
+        "requirement": str(data.get("requirement") or "").strip(),
+    }
+    try:
+        payload["count"] = int(data.get("count") or 5)
+    except (TypeError, ValueError):
+        payload["count"] = 0
+    errors = {}
+    if not 4 <= len(payload["direction"]) <= 1500:
+        errors["direction"] = ["出题方向需为 4-1500 个字符。"]
+    if len(payload["knowledge_point"]) > 128:
+        errors["knowledge_point"] = ["知识点不能超过 128 个字符。"]
+    if payload["question_type"] not in {
+        "mixed", "single", "multiple", "judge", "blank", "text"
+    }:
+        errors["question_type"] = ["题型不正确。"]
+    if payload["difficulty"] not in {"easy", "normal", "hard"}:
+        errors["difficulty"] = ["难度不正确。"]
+    if not 1 <= payload["count"] <= 20:
+        errors["count"] = ["单次生成数量需为 1-20 道。"]
+    if len(payload["requirement"]) > 1000:
+        errors["requirement"] = ["补充要求不能超过 1000 个字符。"]
+    return payload, errors
+
+
+def _dispatch_question_draft_job(job: QuestionDraftGenerationJob):
+    from aiops.tasks import generate_question_bank_drafts_task
+
+    task_id = job.celery_task_id or str(uuid4())
+    job.celery_task_id = task_id
+    job.save(update_fields=["celery_task_id", "updated_at"])
+    generate_question_bank_drafts_task.apply_async(
+        args=[job.id],
+        task_id=task_id,
+        queue=getattr(settings, "AI_GENERATION_QUEUE", "ai_generation"),
+        retry=False,
+    )
 
 
 MIN_QUESTION_STAT_SAMPLE = 30
@@ -161,7 +221,7 @@ def _clean_answer_list(value) -> list[str]:
     return result
 
 
-def _clean_question_payload(data, *, allow_common=False) -> dict:
+def _clean_question_payload(data, *, allow_common=False, school=None, subject=None) -> dict:
     question_type = str(data.get("question_type") or "single").strip()
     allowed_types = {value for value, _ in QuestionBankItem.QuestionType.choices}
     if question_type not in allowed_types:
@@ -221,6 +281,26 @@ def _clean_question_payload(data, *, allow_common=False) -> dict:
             "共同题需要填写比较编号。",
             errors={"comparison_code": ["比较编号用于跨班级和跨学期匹配同一道题。"]},
         )
+    target_version = None
+    target_version_id = data.get("learning_target_version_id")
+    if target_version_id not in {None, ""}:
+        if school is None or subject is None:
+            raise AssessmentError("选择学习目标版本时必须先明确学校和学科。")
+        target_version = (
+            LearningTargetVersion.objects.select_related("target")
+            .filter(
+                pk=target_version_id,
+                target__school=school,
+                target__subject=subject,
+                alignment_status="complete",
+            )
+            .first()
+        )
+        if target_version is None or not target_version.curriculum_alignments.exists():
+            raise AssessmentError(
+                "所选学习目标版本不存在、范围不一致或课标依据不完整。",
+                errors={"learning_target_version_id": ["请选择当前学科已发布且课标依据完整的学习目标。"]},
+            )
     return {
         "stem": stem,
         "question_type": question_type,
@@ -233,6 +313,8 @@ def _clean_question_payload(data, *, allow_common=False) -> dict:
         "item_role": item_role,
         "layer_scope": layer_scope,
         "comparison_code": comparison_code,
+        "learning_target_version": target_version,
+        "legacy_unmapped": target_version is None,
     }
 
 
@@ -243,6 +325,7 @@ def _question_queryset():
         "creator",
         "reviewed_by",
         "disabled_by",
+        "learning_target_version__target__course",
     ).annotate(
         assessment_use_count=Count("assessment_questions", distinct=True),
         response_count=Count(
@@ -329,6 +412,19 @@ def question_row(question: QuestionBankItem, *, include_answer: bool = True) -> 
         "layer_scope": question.layer_scope,
         "layer_scope_label": question.get_layer_scope_display(),
         "comparison_code": question.comparison_code,
+        "learning_target_version": (
+            {
+                "id": question.learning_target_version_id,
+                "code": question.learning_target_version.code,
+                "title": question.learning_target_version.title,
+                "content_hash": question.learning_target_version.content_hash,
+                "course_id": question.learning_target_version.target.course_id,
+                "alignment_status": question.learning_target_version.alignment_status,
+            }
+            if question.learning_target_version_id
+            else None
+        ),
+        "legacy_unmapped": question.legacy_unmapped,
         "version_no": question.version_no,
         "content_hash": question.content_hash,
         "submitted_for_review_at": question.submitted_for_review_at,
@@ -363,6 +459,8 @@ def _question_detail_row(question: QuestionBankItem) -> dict:
             "source_label": version.get_source_display(),
             "status_snapshot": version.status_snapshot,
             "status_snapshot_label": version.get_status_snapshot_display(),
+            "learning_target_version_id": version.learning_target_version_id,
+            "legacy_unmapped": version.legacy_unmapped,
             "created_by": _user_row(version.created_by),
             "created_at": version.created_at,
         }
@@ -496,7 +594,7 @@ def teacher_question_bank_import(request):
                     str(row.get("适用层级") or "全体").strip(),
                     QuestionBankItem.LayerScope.ALL,
                 ),
-            })
+            }, school=request.user.school, subject=subject)
             created.append(
                 QuestionBankItem(
                     school=request.user.school,
@@ -543,6 +641,8 @@ def assessment_question_row(
                 "item_role": question.item_role,
                 "layer_scope": question.layer_scope,
                 "comparison_code": question.comparison_code,
+                "learning_target_version_id": question.learning_target_version_id,
+                "legacy_unmapped": question.legacy_unmapped,
             }
         )
     if include_answer:
@@ -634,6 +734,26 @@ def teacher_assessment_options(request):
             "question_sources": [{"value": value, "label": label} for value, label in QuestionBankItem.Source.choices],
         "item_roles": [{"value": value, "label": label} for value, label in QuestionBankItem.ItemRole.choices],
         "layer_scopes": [{"value": value, "label": label} for value, label in QuestionBankItem.LayerScope.choices],
+        "learning_target_versions": [
+            {
+                "id": item.id,
+                "code": item.code,
+                "title": item.title,
+                "subject": item.target.subject_id,
+                "course": item.target.course_id,
+                "course_title": item.target.course.title,
+                "content_hash": item.content_hash,
+            }
+            for item in LearningTargetVersion.objects.filter(
+                target__school=request.user.school,
+                target__course__teacher=request.user,
+                alignment_status="complete",
+            )
+            .select_related("target__course", "target__subject")
+            .prefetch_related("curriculum_alignments")
+            .order_by("target__subject__name", "target__course__title", "code", "-version_no")
+            if item.curriculum_alignments.exists()
+        ],
         "common_question_sets": [
             {
                 "id": item.id,
@@ -668,7 +788,9 @@ def teacher_question_bank(request):
             subject = Subject.objects.filter(pk=request.data.get("subject"), school=request.user.school, is_active=True).first()
             if subject is None:
                 raise AssessmentError("请选择本校有效学科。", errors={"subject": ["学科不存在或已停用。"]})
-            payload = _clean_question_payload(request.data)
+            payload = _clean_question_payload(
+                request.data, school=request.user.school, subject=subject
+            )
             question = create_question_items(
                 [
                     QuestionBankItem(
@@ -751,12 +873,107 @@ def teacher_question_bank_ai_generate(request):
     subject = Subject.objects.filter(pk=request.data.get("subject"), school=request.user.school, is_active=True).first()
     if subject is None:
         return fail("请选择本校有效学科。", errors={"subject": ["学科不存在或已停用。"]}, status=400)
+    payload, errors = _question_draft_request_payload(request.data)
+    if errors:
+        return fail("AI 出题设置未通过检查。", errors=errors, status=400)
+    payload["subject"] = subject.id
+    job = QuestionDraftGenerationJob.objects.create(
+        teacher=request.user,
+        subject=subject,
+        request_payload=payload,
+    )
     try:
-        payload = generate_question_bank_drafts_with_ai(request, request.data, subject_name=subject.name)
-    except ServiceError as exc:
-        return _service_error(exc)
-    payload["subject"] = _subject_row(subject)
-    return ok(payload, "AI 题目草稿已生成。")
+        _dispatch_question_draft_job(job)
+    except Exception:
+        job.status = job.Status.FAILED
+        job.error_message = "后台任务暂时无法加入队列，请稍后重试。"
+        job.finished_at = timezone.now()
+        job.save(
+            update_fields=[
+                "status", "error_message", "finished_at", "updated_at"
+            ]
+        )
+        return fail(
+            job.error_message,
+            errors={"queue": ["题目草稿未开始生成，原设置已经保留。"]},
+            status=503,
+        )
+    return ok(
+        _question_draft_job_row(job),
+        "题目草稿已加入后台生成队列，可以离开本页后再回来查看。",
+        status=202,
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_question_bank_ai_job_latest(request):
+    job = (
+        QuestionDraftGenerationJob.objects.select_related("subject")
+        .filter(teacher=request.user)
+        .first()
+    )
+    return ok(_question_draft_job_row(job) if job else None)
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
+def teacher_question_bank_ai_job_detail(request, pk):
+    job = (
+        QuestionDraftGenerationJob.objects.select_related("subject")
+        .filter(pk=pk, teacher=request.user)
+        .first()
+    )
+    if job is None:
+        return fail("题目草稿生成任务不存在。", status=404)
+    return ok(_question_draft_job_row(job))
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_question_bank_ai_job_retry(request, pk):
+    job = (
+        QuestionDraftGenerationJob.objects.select_related("subject")
+        .filter(pk=pk, teacher=request.user)
+        .first()
+    )
+    if job is None:
+        return fail("题目草稿生成任务不存在。", status=404)
+    if job.status not in {job.Status.FAILED, job.Status.CANCELLED}:
+        return fail("只有未完成或已取消的任务可以重新生成。", status=409)
+    job.status = job.Status.QUEUED
+    job.result_payload = {}
+    job.error_message = ""
+    job.error_fields = {}
+    job.celery_task_id = ""
+    job.started_at = None
+    job.finished_at = None
+    job.save()
+    try:
+        _dispatch_question_draft_job(job)
+    except Exception:
+        job.status = job.Status.FAILED
+        job.error_message = "后台任务暂时无法加入队列，请稍后重试。"
+        job.finished_at = timezone.now()
+        job.save()
+        return fail(job.error_message, status=503)
+    return ok(_question_draft_job_row(job), "题目草稿已重新排队。", status=202)
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_question_bank_ai_job_cancel(request, pk):
+    job = QuestionDraftGenerationJob.objects.filter(
+        pk=pk, teacher=request.user
+    ).first()
+    if job is None:
+        return fail("题目草稿生成任务不存在。", status=404)
+    if job.status != job.Status.QUEUED:
+        return fail("只有等待中的任务可以取消。", status=409)
+    job.status = job.Status.CANCELLED
+    job.finished_at = timezone.now()
+    job.save(update_fields=["status", "finished_at", "updated_at"])
+    return ok(_question_draft_job_row(job), "题目草稿生成任务已取消。")
 
 
 @api_view(["POST"])
@@ -777,7 +994,19 @@ def teacher_question_bank_ai_confirm(request):
             errors.append({"index": index, "message": "题目格式不正确。"})
             continue
         try:
-            cleaned.append(_clean_question_payload(raw))
+            payload = _clean_question_payload(
+                raw, school=request.user.school, subject=subject
+            )
+            if payload["learning_target_version"] is None:
+                raise AssessmentError(
+                    "AI 题目入库前必须由教师选择对应的学习目标版本。",
+                    errors={
+                        "learning_target_version_id": [
+                            "请依据当前课程内容选择已发布且课标依据完整的学习目标版本。"
+                        ]
+                    },
+                )
+            cleaned.append(payload)
         except AssessmentError as exc:
             errors.append({"index": index, "message": exc.message, "fields": exc.errors})
     if errors:
@@ -841,7 +1070,9 @@ def teacher_question_bank_detail(request, pk):
                 "请选择本校有效学科。",
                 errors={"subject": ["学科不存在或已停用。"]},
             )
-        payload = _clean_question_payload(request.data)
+        payload = _clean_question_payload(
+            request.data, school=request.user.school, subject=subject
+        )
         for field, value in payload.items():
             setattr(question, field, value)
         question.subject = subject
@@ -917,6 +1148,8 @@ def teacher_question_bank_action(request, pk):
                         difficulty=question.difficulty,
                         knowledge_point=question.knowledge_point,
                         default_score=question.default_score,
+                        learning_target_version=question.learning_target_version,
+                        legacy_unmapped=question.legacy_unmapped,
                         status=QuestionBankItem.Status.DRAFT,
                         source=QuestionBankItem.Source.COPY,
                         library_scope=QuestionBankItem.LibraryScope.PERSONAL,
@@ -1214,7 +1447,7 @@ def school_admin_common_question_sets(request):
             subject=subject,
             library_scope=QuestionBankItem.LibraryScope.SCHOOL,
             status=QuestionBankItem.Status.ACTIVE,
-        )
+        ).select_related("learning_target_version__target")
     }
     if len(questions) != len(question_ids):
         return fail("共同题只能选择本学科已启用的共享题目。", status=400)
@@ -1233,6 +1466,17 @@ def school_admin_common_question_sets(request):
         code = _clean_text(raw.get("comparison_code") if isinstance(raw, dict) else "", 64).upper()
         if question is None or not code or code in seen_codes:
             return fail("每道共同题都需要填写不重复的比较编号。", status=400)
+        target_version = question.learning_target_version
+        if (
+            target_version is None
+            or question.legacy_unmapped
+            or target_version.alignment_status != "complete"
+            or not target_version.curriculum_alignments.exists()
+        ):
+            return fail(
+                "共同题必须先对应课标依据完整的学习目标版本；未映射题目只能保留为历史或普通材料。",
+                status=400,
+            )
         seen_codes.add(code)
         anchor = None
         anchor_id = raw.get("anchor_source_id") if isinstance(raw, dict) else None
@@ -1244,6 +1488,8 @@ def school_admin_common_question_sets(request):
                 return fail("锚题在两个版本中必须使用相同的比较编号。", status=400)
             if anchor.question_version.content_hash != question.content_hash:
                 return fail("锚题内容已经改变，请取消锚题标记或恢复原题版本。", status=400)
+            if anchor.question_version.learning_target_version_id != target_version.id:
+                return fail("锚题必须保持完全相同的学习目标版本。", status=400)
         cleaned_items.append((question, code, bool(raw.get("required", True)), anchor))
     with transaction.atomic():
         latest = (
@@ -1280,6 +1526,8 @@ def school_admin_common_question_sets(request):
             {
                 "comparison_code": code,
                 "question_hash": version.content_hash,
+                "learning_target_version_id": version.learning_target_version_id,
+                "learning_target_hash": version.learning_target_version.content_hash,
                 "required": required,
             }
             for version, _question, code, required, anchor in version_rows
@@ -1535,6 +1783,21 @@ def _validate_assessment_question_mix(assessment, sources: list[QuestionBankItem
     ]
     if common_sources and assessment.common_question_set_id is None:
         raise AssessmentError("共同题必须来自已选择的共同题集合。")
+    if common_sources and assessment.course_id is None:
+        raise AssessmentError("共同测试必须先选择具体课程，才能核对学习目标版本。")
+    for item in common_sources:
+        target_version = item.learning_target_version
+        if (
+            target_version is None
+            or item.legacy_unmapped
+            or target_version.alignment_status != "complete"
+            or not target_version.curriculum_alignments.exists()
+        ):
+            raise AssessmentError(
+                "共同题中存在未对应完整课标依据学习目标版本的题目，不能形成正式可比材料。"
+            )
+        if target_version.target.course_id != assessment.course_id:
+            raise AssessmentError("共同题学习目标版本与本次测试课程不一致。")
     if layered_sources and not common_sources:
         raise AssessmentError("分层题不能替代共同题，请至少加入一道共同题。")
     if assessment.common_question_set_id:
@@ -1581,7 +1844,7 @@ def teacher_assessment_questions(request, pk):
                     },
                     creator=request.user,
                 )
-            )
+            ).select_related("learning_target_version__target")
         }
         if len(source_map) != len(set(question_ids)):
             raise AssessmentError("部分题目未启用、不是本人可试用题目或学科不匹配。")
@@ -1617,6 +1880,8 @@ def teacher_assessment_questions(request, pk):
                 item_role=source.item_role,
                 layer_scope=source.layer_scope,
                 comparison_code=source.comparison_code,
+                learning_target_version=source_version.learning_target_version,
+                legacy_unmapped=source_version.legacy_unmapped,
             ))
         if total_score > 1000:
             raise AssessmentError("试卷总分不能超过 1000 分。")
@@ -1645,6 +1910,18 @@ def _change_assessment_status(user, pk, action: str):
             for item in snapshots
             if item.item_role == QuestionBankItem.ItemRole.COMMON
         ]
+        for item in common_snapshots:
+            target_version = item.learning_target_version
+            if (
+                target_version is None
+                or item.legacy_unmapped
+                or target_version.alignment_status != "complete"
+                or not target_version.curriculum_alignments.exists()
+                or target_version.target.course_id != assessment.course_id
+            ):
+                raise AssessmentError(
+                    "共同题的学习目标版本缺失、不完整或与测试课程不一致，不能发布。"
+                )
         if any(item.item_role == QuestionBankItem.ItemRole.LAYERED for item in snapshots) and not common_snapshots:
             raise AssessmentError("分层题不能替代共同题，请至少加入一道共同题。")
         if assessment.common_question_set_id:
@@ -2272,7 +2549,13 @@ def student_assessment_start(request, pk):
         if timezone.now() >= _attempt_deadline(attempt):
             _submit_attempt(attempt)
             raise AssessmentError("作答时间已结束，系统已自动交卷。")
-        return ok({"attempt": _attempt_row(attempt), "deadline": _attempt_deadline(attempt)}, "测试已开始。")
+        return ok(
+            {
+                "attempt": _attempt_row(attempt),
+                "deadline": _attempt_deadline(attempt),
+            },
+            "测试已开始。",
+        )
     except AssessmentError as exc:
         return _error(exc)
 
@@ -2412,11 +2695,6 @@ def student_assessment_submit(request, pk):
         if attempt.status != TestAttempt.Status.IN_PROGRESS:
             return ok(_attempt_row(attempt), "测试已经提交。")
         _submit_attempt(attempt, source_override=None)
-        result = _attempt_row(attempt)
-        if not assessment.show_score_after_submit:
-            result["objective_score"] = None
-            result["subjective_score"] = None
-            result["total_score"] = None
-        return ok(result, "测试已提交。")
+        return ok(_attempt_row(attempt), "测试已提交。")
     except AssessmentError as exc:
         return _error(exc)

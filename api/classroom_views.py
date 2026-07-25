@@ -27,6 +27,7 @@ from django.db.models import Count, F, Max, Prefetch, Q, Sum, TextField
 from django.db.models.functions import Cast, TruncDate
 from django.middleware.csrf import get_token
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -72,6 +73,7 @@ from learning.models import (
     PretestSubmission,
     QuestionBankItem,
     StratificationDecision,
+    StudentSubjectBand,
     StudentWorkAttachment,
     TestAssessment,
     TestAttempt,
@@ -119,9 +121,12 @@ from learning_analytics.services.evaluation_events import (
     standard_binding_criteria,
     withdraw_classroom_evaluation_opportunities,
 )
+from learning_analytics.services.evaluation import standard_curriculum_alignment
 from learning_analytics.models import (
     ClassroomEvaluationStandardUse,
     GroupingCandidateRun,
+    GroupingDecisionPoint,
+    GroupingPlanVersion,
     LessonStepEvaluationBinding,
 )
 from learning_analytics.services.group_collaboration_events import (
@@ -133,10 +138,13 @@ from learning_analytics.services.group_collaboration_events import (
     withdraw_group_collaboration_opportunities,
 )
 from learning_analytics.services.grouping_plans import (
+    activate_reviewed_grouping_plan,
     capture_grouping_outcomes,
     confirm_grouping_candidate,
     generate_grouping_candidate_run,
+    mark_grouping_plan_notified,
     record_confirmed_plan_evidence,
+    save_grouping_decision_point,
 )
 from learning_analytics.services.operational_events import (
     record_classroom_interaction_response,
@@ -319,6 +327,13 @@ from .views import (
     _validate_evaluation_response,
 )
 
+
+_STUDENT_BAND_LABELS = dict(StudentSubjectBand.Band.choices)
+
+
+def _student_band_label(band: str | None) -> str:
+    return _STUDENT_BAND_LABELS.get(band, "")
+
 def _teacher_classroom_sessions(request):
     query = request.GET.get("q", "").strip()
     status = request.GET.get("status", "").strip()
@@ -332,9 +347,17 @@ def _teacher_classroom_sessions(request):
             "course",
             "course__subject",
             "lesson",
+            "lesson__course",
             "class_group",
             "current_step",
             "current_step__lesson",
+        )
+        .prefetch_related(
+            Prefetch(
+                "course__course_classes",
+                queryset=CourseClass.objects.select_related("class_group"),
+                to_attr="prefetched_course_classes",
+            )
         )
         .annotate(
             activity_count=Count("activities", distinct=True),
@@ -938,9 +961,11 @@ def _grouping_candidate_run_row(run: GroupingCandidateRun) -> dict:
             "max_group_size": run.policy.max_group_size,
             "roles": run.policy.role_scheme,
         },
+        "decision_point": _grouping_decision_point_row(run.decision_point),
         "students": list(students.values()),
         "locked_assignments": run.input_snapshot.get("locked_assignments") or {},
         "candidates": candidates,
+        "candidate_count": run.candidate_count,
         "conflicts": run.conflict_explanations,
         "selected_candidate_key": run.selected_candidate_key,
         "created_at": run.created_at,
@@ -948,11 +973,67 @@ def _grouping_candidate_run_row(run: GroupingCandidateRun) -> dict:
     }
 
 
+def _grouping_decision_point_row(point: GroupingDecisionPoint) -> dict:
+    return {
+        "id": point.id,
+        "point_id": str(point.point_id),
+        "status": point.status,
+        "status_label": point.get_status_display(),
+        "trigger": point.trigger,
+        "task_purpose": point.task_purpose,
+        "task_purpose_label": point.get_task_purpose_display(),
+        "task_stage": point.task_stage,
+        "role_requirements": point.role_requirements,
+        "resource_requirements": point.resource_requirements,
+        "safety_constraints": point.safety_constraints,
+        "opportunity_requirements": point.opportunity_requirements,
+        "stability_until": point.stability_until,
+        "scheduled_for": point.scheduled_for,
+        "created_at": point.created_at,
+    }
+
+
+def _grouping_plan_row(plan: GroupingPlanVersion) -> dict:
+    return {
+        "id": plan.id,
+        "plan_id": str(plan.plan_id),
+        "plan_version": plan.plan_version,
+        "status": plan.status,
+        "status_label": plan.get_status_display(),
+        "candidate_key": plan.candidate_key,
+        "assignments": plan.assignments,
+        "adjustment_note": plan.adjustment_note,
+        "confirmed_at": plan.confirmed_at,
+        "activated_at": plan.activated_at,
+        "notified_at": plan.notified_at,
+        "decision_point": _grouping_decision_point_row(plan.decision_point),
+    }
+
+
+def _grouping_draft_settings(collaboration: ClassroomGroupCollaboration) -> dict:
+    metadata = (
+        collaboration.generation_metadata
+        if isinstance(collaboration.generation_metadata, dict)
+        else {}
+    )
+    draft = metadata.get("draft_settings")
+    if isinstance(draft, dict):
+        return draft
+    return {
+        "group_size": collaboration.group_size,
+        "grouping_strategy": collaboration.grouping_strategy,
+        "document_type": collaboration.document_type,
+        "storage_quota_mb": collaboration.storage_quota_mb,
+        "allow_student_upload": collaboration.allow_student_upload,
+        "allow_onlyoffice_edit": collaboration.allow_onlyoffice_edit,
+    }
+
+
 def _setup_classroom_group_collaboration(
     request, session: ClassroomSession, data
 ) -> ClassroomGroupCollaboration:
     if session.status != ClassroomSession.Status.RUNNING:
-        raise ServiceError("只有进行中的课堂可以开启小组合作。", status=409)
+        raise ServiceError("只有进行中的课堂可以保存小组合作设置。", status=409)
     group_size = _int_in_range(data.get("group_size"), 4, 2, 12)
     storage_quota_mb = _int_in_range(data.get("storage_quota_mb"), 20, 10, 2048)
     strategy = str(
@@ -986,7 +1067,14 @@ def _setup_classroom_group_collaboration(
     allow_onlyoffice_edit = str(
         data.get("allow_onlyoffice_edit", "true")
     ).lower() not in {"0", "false", "no"}
-    regenerate = str(data.get("regenerate", "")).lower() in {"1", "true", "yes"}
+    draft_settings = {
+        "group_size": group_size,
+        "grouping_strategy": strategy,
+        "document_type": document_type,
+        "storage_quota_mb": storage_quota_mb,
+        "allow_student_upload": allow_student_upload,
+        "allow_onlyoffice_edit": allow_onlyoffice_edit,
+    }
 
     with transaction.atomic():
         (
@@ -1004,75 +1092,34 @@ def _setup_classroom_group_collaboration(
                 "allow_onlyoffice_edit": allow_onlyoffice_edit,
             },
         )
-        has_groups = collaboration.groups.filter(
+        has_active_groups = collaboration.groups.filter(
             is_active=True,
             plan_version=collaboration.active_plan_version,
         ).exists()
-        grouping_configuration_changed = has_groups and (
-            collaboration.group_size != group_size
-            or collaboration.grouping_strategy != strategy
-            or collaboration.document_type != document_type
+        metadata = (
+            dict(collaboration.generation_metadata)
+            if isinstance(collaboration.generation_metadata, dict)
+            else {}
         )
-        if grouping_configuration_changed and not regenerate:
-            raise ServiceError(
-                "已有分组；修改人数、策略或文档类型时必须执行重新分组。",
-                status=400,
-            )
-        collaboration_was_open = (
-            collaboration.is_enabled
-            and collaboration.status == ClassroomGroupCollaboration.Status.OPEN
-        )
-        collaboration.group_size = group_size
-        collaboration.grouping_strategy = strategy
-        collaboration.document_type = document_type
-        collaboration.storage_quota_mb = storage_quota_mb
-        collaboration.allow_student_upload = allow_student_upload
-        collaboration.allow_onlyoffice_edit = allow_onlyoffice_edit
-        collaboration.is_enabled = True
-        collaboration.status = ClassroomGroupCollaboration.Status.OPEN
-        if not collaboration_was_open:
-            collaboration.opened_at = timezone.now()
-        collaboration.closed_at = None
-        if (regenerate and has_groups) or (not created and not has_groups):
-            latest_plan_version = (
-                collaboration.groups.order_by("-plan_version")
-                .values_list("plan_version", flat=True)
-                .first()
-            )
-            collaboration.active_plan_version = (
-                latest_plan_version + 1 if latest_plan_version else 1
-            )
-        collaboration.save()
-
-        if regenerate and has_groups:
-            try:
-                withdraw_group_collaboration_opportunities(
-                    collaboration=collaboration,
-                    actor=request.user,
-                    reason_code="group_regenerated",
-                )
-            except GroupCollaborationEventError as exc:
-                raise ServiceError(exc.message, status=400) from exc
-
-        if created or regenerate or not has_groups:
-            _archive_active_classroom_groups(collaboration)
-            _generate_classroom_groups(
-                collaboration,
-                plan_version=collaboration.active_plan_version,
-            )
+        metadata["draft_settings"] = draft_settings
+        collaboration.generation_metadata = metadata
+        if not has_active_groups:
+            collaboration.group_size = group_size
+            collaboration.grouping_strategy = strategy
+            collaboration.document_type = document_type
+            collaboration.storage_quota_mb = storage_quota_mb
+            collaboration.allow_student_upload = allow_student_upload
+            collaboration.allow_onlyoffice_edit = allow_onlyoffice_edit
+            collaboration.is_enabled = False
+            collaboration.status = ClassroomGroupCollaboration.Status.DRAFT
+            collaboration.opened_at = None
+            collaboration.closed_at = None
         else:
-            for group in collaboration.groups.filter(
-                is_active=True,
-                plan_version=collaboration.active_plan_version,
-            ):
-                _ensure_group_document(group)
-        try:
-            release_group_collaboration_opportunities(
-                collaboration=collaboration,
-                actor=request.user,
-            )
-        except GroupCollaborationEventError as exc:
-            raise ServiceError(exc.message, status=400) from exc
+            # Keep the running plan unchanged. Proposed settings are applied only
+            # after a reviewed plan is explicitly activated.
+            collaboration.is_enabled = True
+            collaboration.status = ClassroomGroupCollaboration.Status.OPEN
+        collaboration.save()
 
     write_audit(
         request,
@@ -1085,7 +1132,8 @@ def _setup_classroom_group_collaboration(
             "grouping_strategy": strategy,
             "document_type": document_type,
             "storage_quota_mb": storage_quota_mb,
-            "regenerate": regenerate,
+            "state": "draft_saved",
+            "active_groups_preserved": has_active_groups,
         },
     )
     return _with_prefetched_groups(collaboration)
@@ -1148,7 +1196,82 @@ def teacher_classroom_group_collaboration_setup(request, pk):
         )
     except ServiceError as exc:
         return _service_fail(exc)
-    return ok(classroom_group_collaboration_row(collaboration), "小组合作已开启")
+    return ok(
+        classroom_group_collaboration_row(collaboration),
+        "小组合作设置已保存；尚未生成、启用或通知任何分组。",
+    )
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_grouping_decision(request, pk):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    if request.method == "GET":
+        point = (
+            GroupingDecisionPoint.objects.filter(classroom_session=session)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        return ok(_grouping_decision_point_row(point) if point else None)
+    collaboration = ClassroomGroupCollaboration.objects.filter(session=session).first()
+    if collaboration is None:
+        return fail("请先保存小组合作的基础设置。", status=409)
+    required_fields = {
+        "task_purpose": "任务目的",
+        "task_stage": "学习阶段",
+        "role_requirements": "小组角色",
+        "resource_requirements": "学习资源",
+    }
+    missing = [label for field, label in required_fields.items() if field not in request.data]
+    if missing:
+        return fail(f"请先确定：{'、'.join(missing)}。", status=400)
+    stability_until = None
+    raw_stability_until = request.data.get("stability_until")
+    if raw_stability_until:
+        stability_until = parse_datetime(str(raw_stability_until))
+        if stability_until is None:
+            return fail("稳定期结束时间格式不正确。", status=400)
+        if timezone.is_naive(stability_until):
+            stability_until = timezone.make_aware(stability_until)
+    task_context = request.data.get("task_context") or {}
+    if not isinstance(task_context, dict):
+        return fail("任务补充信息格式不正确。", status=400)
+    try:
+        point = save_grouping_decision_point(
+            session=session,
+            actor=request.user,
+            task_purpose=str(request.data.get("task_purpose") or ""),
+            task_stage=str(request.data.get("task_stage") or ""),
+            role_requirements=request.data.get("role_requirements"),
+            resource_requirements=request.data.get("resource_requirements"),
+            safety_constraints=request.data.get("safety_constraints") or {},
+            opportunity_requirements=request.data.get("opportunity_requirements") or {},
+            stability_until=stability_until,
+            task_context=task_context,
+        )
+    except ValidationError as exc:
+        return fail(exc.messages[0], status=400)
+    write_audit(
+        request,
+        "teacher.classroom.grouping.decision.prepare",
+        school=session.school,
+        target_type="grouping_decision_point",
+        target_id=point.id,
+        detail={
+            "task_purpose": point.task_purpose,
+            "task_stage": point.task_stage,
+            "role_count": len(point.role_requirements),
+            "resource_count": len(point.resource_requirements),
+        },
+    )
+    return ok(
+        _grouping_decision_point_row(point),
+        "分组任务信息已保存，可以生成候选方案。",
+        status=201,
+    )
 
 
 @api_view(["GET", "POST"])
@@ -1172,29 +1295,40 @@ def teacher_classroom_grouping_candidates(request, pk):
         return ok(_grouping_candidate_run_row(run) if run else None)
 
     collaboration = ClassroomGroupCollaboration.objects.filter(session=session).first()
-    if collaboration is None or not collaboration.is_enabled:
-        return fail("请先保存并开启小组合作设置。", status=409)
+    if collaboration is None:
+        return fail("请先保存小组合作设置。", status=409)
+    decision_point_id = request.data.get("decision_point_id")
+    point = GroupingDecisionPoint.objects.filter(
+        pk=decision_point_id,
+        classroom_session=session,
+        status=GroupingDecisionPoint.Status.OPEN,
+    ).first()
+    if point is None:
+        return fail("请先保存本次分组的任务目的、阶段、角色与资源。", status=409)
+    draft_settings = _grouping_draft_settings(collaboration)
     raw_locks = request.data.get("locked_assignments") or {}
     if not isinstance(raw_locks, dict):
         return fail("锁定学生格式不正确。", status=400)
     document_type = str(
-        request.data.get("document_type") or collaboration.document_type
+        request.data.get("document_type") or draft_settings["document_type"]
     ).lower()
     if document_type not in ClassroomGroupCollaboration.DocumentType.values:
         return fail("协作文档类型不正确。", status=400)
     try:
         storage_quota_mb = _int_in_range(
             request.data.get("storage_quota_mb"),
-            collaboration.storage_quota_mb,
+            int(draft_settings["storage_quota_mb"]),
             10,
             2048,
         )
         run = generate_grouping_candidate_run(
             session=session,
             actor=request.user,
-            group_size=request.data.get("group_size") or collaboration.group_size,
+            decision_point=point,
+            group_size=request.data.get("group_size") or draft_settings["group_size"],
             requested_strategy=str(
-                request.data.get("grouping_strategy") or collaboration.grouping_strategy
+                request.data.get("grouping_strategy")
+                or draft_settings["grouping_strategy"]
             ),
             locked_assignments=raw_locks,
             runtime_settings={
@@ -1202,13 +1336,15 @@ def teacher_classroom_grouping_candidates(request, pk):
                 "storage_quota_mb": storage_quota_mb,
                 "allow_student_upload": str(
                     request.data.get(
-                        "allow_student_upload", collaboration.allow_student_upload
+                        "allow_student_upload",
+                        draft_settings["allow_student_upload"],
                     )
                 ).lower()
                 not in {"0", "false", "no"},
                 "allow_onlyoffice_edit": str(
                     request.data.get(
-                        "allow_onlyoffice_edit", collaboration.allow_onlyoffice_edit
+                        "allow_onlyoffice_edit",
+                        draft_settings["allow_onlyoffice_edit"],
                     )
                 ).lower()
                 not in {"0", "false", "no"},
@@ -1251,49 +1387,120 @@ def teacher_classroom_grouping_confirm(request, pk, run_id):
         return fail("分组候选不存在。", status=404)
     collaboration = ClassroomGroupCollaboration.objects.filter(
         session=session,
-        is_enabled=True,
-        status=ClassroomGroupCollaboration.Status.OPEN,
     ).first()
     if collaboration is None:
-        return fail("小组合作尚未开启。", status=409)
+        return fail("尚未保存小组合作设置。", status=409)
     candidate_key = str(request.data.get("candidate_key") or "").strip()
     existing_plan = run.plans.filter(collaboration=collaboration).first()
     if existing_plan is not None:
         if existing_plan.candidate_key != candidate_key:
             return fail("该候选运行已经确认，不能改选其他方案。", status=409)
+        existing_message = {
+            GroupingPlanVersion.Status.REVIEWED: "该分组方案已经完成教师复核，尚未启用。",
+            GroupingPlanVersion.Status.ACTIVE: "该分组方案已经启用。",
+            GroupingPlanVersion.Status.ARCHIVED: "该分组方案已经归档。",
+        }.get(existing_plan.status, "该分组方案已经完成教师复核。")
         return ok(
-            classroom_group_collaboration_row(_with_prefetched_groups(collaboration)),
-            "该分组已经生效。",
+            _grouping_plan_row(existing_plan),
+            existing_message,
         )
     adjustments = request.data.get("adjustments") or {}
     if not isinstance(adjustments, dict):
         return fail("分组调整格式不正确。", status=400)
     try:
+        plan, _assignments = confirm_grouping_candidate(
+            run=run,
+            candidate_key=candidate_key,
+            collaboration=collaboration,
+            actor=request.user,
+            adjustments=adjustments,
+            note=str(request.data.get("note") or ""),
+        )
+    except ValidationError as exc:
+        return fail(exc.messages[0], status=400)
+    except (GroupCollaborationEventError, ServiceError) as exc:
+        if isinstance(exc, ServiceError):
+            return _service_fail(exc)
+        return fail(exc.message, status=400)
+    write_audit(
+        request,
+        "teacher.classroom.grouping.review",
+        school=session.school,
+        target_type="grouping_plan_version",
+        target_id=plan.id,
+        detail={
+            "candidate_run_id": run.id,
+            "candidate_key": candidate_key,
+            "plan_version": plan.plan_version,
+            "adjusted": bool(adjustments),
+        },
+    )
+    return ok(
+        _grouping_plan_row(plan),
+        "分组方案已完成教师复核；尚未启用，也未通知学生。",
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_grouping_activate(request, pk, plan_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    plan = (
+        GroupingPlanVersion.objects.select_related(
+            "decision_point",
+            "candidate_run",
+            "candidate_run__policy",
+            "collaboration",
+        )
+        .filter(pk=plan_id, decision_point__classroom_session=session)
+        .first()
+    )
+    if plan is None:
+        return fail("分组方案不存在。", status=404)
+    collaboration = plan.collaboration
+    if plan.status == GroupingPlanVersion.Status.ACTIVE:
+        return ok(
+            {
+                "plan": _grouping_plan_row(plan),
+                "collaboration": classroom_group_collaboration_row(
+                    _with_prefetched_groups(collaboration)
+                ),
+            },
+            "该分组方案已经启用；学生通知仍需单独发送。",
+        )
+    try:
         with transaction.atomic():
-            withdraw_group_collaboration_opportunities(
-                collaboration=collaboration,
-                actor=request.user,
-                reason_code="group_plan_replaced",
+            collaboration = ClassroomGroupCollaboration.objects.select_for_update().get(
+                pk=collaboration.pk
             )
-            plan, assignments = confirm_grouping_candidate(
-                run=run,
-                candidate_key=candidate_key,
-                collaboration=collaboration,
+            has_active_groups = collaboration.groups.filter(is_active=True).exists()
+            plan, _superseded = activate_reviewed_grouping_plan(
+                plan=plan,
                 actor=request.user,
-                adjustments=adjustments,
-                note=str(request.data.get("note") or ""),
             )
+            if has_active_groups:
+                withdraw_group_collaboration_opportunities(
+                    collaboration=collaboration,
+                    actor=request.user,
+                    reason_code="group_plan_replaced",
+                )
             _archive_active_classroom_groups(collaboration)
+            runtime_settings = plan.candidate_run.input_snapshot.get(
+                "runtime_settings"
+            ) or {}
             collaboration.active_plan_version = plan.plan_version
             collaboration.group_size = int(
-                run.input_snapshot.get("group_size") or collaboration.group_size
+                plan.candidate_run.input_snapshot.get("group_size")
+                or collaboration.group_size
             )
             collaboration.grouping_strategy = str(
-                run.input_snapshot.get("requested_strategy")
+                plan.candidate_run.input_snapshot.get("requested_strategy")
                 or collaboration.grouping_strategy
             )
-            collaboration.strategy_version = run.algorithm_version
-            runtime_settings = run.input_snapshot.get("runtime_settings") or {}
+            collaboration.strategy_version = plan.candidate_run.algorithm_version
             collaboration.document_type = str(
                 runtime_settings.get("document_type") or collaboration.document_type
             )
@@ -1311,30 +1518,25 @@ def teacher_classroom_grouping_confirm(request, pk, run_id):
                     "allow_onlyoffice_edit", collaboration.allow_onlyoffice_edit
                 )
             )
+            collaboration.is_enabled = True
+            collaboration.status = ClassroomGroupCollaboration.Status.OPEN
+            collaboration.opened_at = collaboration.opened_at or timezone.now()
+            collaboration.closed_at = None
             collaboration.generation_metadata = {
-                "candidate_run_id": run.id,
-                "candidate_key": candidate_key,
-                "policy_id": run.policy_id,
-                "policy_hash": run.policy.content_hash,
+                "candidate_run_id": plan.candidate_run_id,
+                "candidate_key": plan.candidate_key,
+                "policy_id": plan.candidate_run.policy_id,
+                "policy_hash": plan.candidate_run.policy.content_hash,
                 "plan_id": str(plan.plan_id),
+                "task_definition": plan.candidate_run.input_snapshot.get(
+                    "task_definition"
+                )
+                or {},
             }
-            collaboration.save(
-                update_fields=[
-                    "active_plan_version",
-                    "group_size",
-                    "grouping_strategy",
-                    "strategy_version",
-                    "generation_metadata",
-                    "document_type",
-                    "storage_quota_mb",
-                    "allow_student_upload",
-                    "allow_onlyoffice_edit",
-                    "updated_at",
-                ]
-            )
+            collaboration.save()
             _generate_classroom_groups_from_assignments(
                 collaboration,
-                assignments=assignments,
+                assignments=plan.assignments,
                 plan_version=plan.plan_version,
             )
             record_confirmed_plan_evidence(plan=plan)
@@ -1343,36 +1545,87 @@ def teacher_classroom_grouping_confirm(request, pk, run_id):
                 actor=request.user,
             )
     except ValidationError as exc:
-        return fail(exc.messages[0], status=400)
-    except (GroupCollaborationEventError, ServiceError) as exc:
-        if isinstance(exc, ServiceError):
-            return _service_fail(exc)
+        return fail(exc.messages[0], status=409)
+    except GroupCollaborationEventError as exc:
         return fail(exc.message, status=400)
+    except ServiceError as exc:
+        return _service_fail(exc)
     write_audit(
         request,
-        "teacher.classroom.grouping.confirm",
+        "teacher.classroom.grouping.activate",
         school=session.school,
         target_type="grouping_plan_version",
         target_id=plan.id,
-        detail={
-            "candidate_run_id": run.id,
-            "candidate_key": candidate_key,
-            "plan_version": plan.plan_version,
-            "adjusted": bool(adjustments),
-        },
+        detail={"plan_version": plan.plan_version},
     )
-    _shared_views.publish_chat_event(
-        [session_group(session.id), teacher_group(session.id)],
-        {
-            "type": "grouping.updated",
-            "session_id": session.id,
-            "plan_version": plan.plan_version,
-        },
-    )
-    collaboration = ClassroomGroupCollaboration.objects.get(pk=collaboration.pk)
+    collaboration.refresh_from_db()
+    plan.refresh_from_db()
     return ok(
-        classroom_group_collaboration_row(_with_prefetched_groups(collaboration)),
-        "新分组已生效。",
+        {
+            "plan": _grouping_plan_row(plan),
+            "collaboration": classroom_group_collaboration_row(
+                _with_prefetched_groups(collaboration)
+            ),
+        },
+        "分组方案已启用；尚未通知学生。",
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsTeacher])
+def teacher_classroom_grouping_notify(request, pk, plan_id):
+    try:
+        session = _teacher_classroom_session(request, pk)
+    except ServiceError as exc:
+        return _service_fail(exc)
+    plan = (
+        GroupingPlanVersion.objects.select_related("decision_point", "collaboration")
+        .filter(pk=plan_id, decision_point__classroom_session=session)
+        .first()
+    )
+    if plan is None:
+        return fail("分组方案不存在。", status=404)
+    try:
+        with transaction.atomic():
+            plan, notified_now = mark_grouping_plan_notified(
+                plan=plan,
+                actor=request.user,
+            )
+            if notified_now:
+                notice = Notice.objects.create(
+                    school=session.school,
+                    teacher=request.user,
+                    title="课堂分组已更新",
+                    content=(
+                        f"{session.title}的小组安排已经由教师确认并启用，"
+                        "请进入课堂查看自己的小组、角色与学习任务。"
+                    ),
+                    status=Notice.Status.PUBLISHED,
+                    published_at=timezone.now(),
+                )
+                notice.target_classes.add(session.class_group)
+    except ValidationError as exc:
+        return fail(exc.messages[0], status=409)
+    if notified_now:
+        publish_chat_event(
+            [session_group(session.id), teacher_group(session.id)],
+            {
+                "type": "grouping.updated",
+                "session_id": session.id,
+                "plan_version": plan.plan_version,
+            },
+        )
+        write_audit(
+            request,
+            "teacher.classroom.grouping.notify",
+            school=session.school,
+            target_type="grouping_plan_version",
+            target_id=plan.id,
+            detail={"plan_version": plan.plan_version},
+        )
+    return ok(
+        _grouping_plan_row(plan),
+        "学生已收到分组通知。" if notified_now else "该分组通知已经发送。",
     )
 
 
@@ -1401,6 +1654,20 @@ def teacher_classroom_group_collaboration_close(request, pk):
                 update_fields=["is_enabled", "status", "closed_at", "updated_at"]
             )
             capture_grouping_outcomes(collaboration=collaboration)
+            active_plan = GroupingPlanVersion.objects.filter(
+                collaboration=collaboration,
+                plan_version=collaboration.active_plan_version,
+                status__in=[
+                    GroupingPlanVersion.Status.ACTIVE,
+                    GroupingPlanVersion.Status.CONFIRMED,
+                ],
+            ).first()
+            if active_plan:
+                active_plan.status = GroupingPlanVersion.Status.ARCHIVED
+                active_plan.archived_at = collaboration.closed_at
+                active_plan.save(update_fields=["status", "archived_at"])
+                active_plan.decision_point.status = GroupingDecisionPoint.Status.CLOSED
+                active_plan.decision_point.save(update_fields=["status"])
     except ServiceError as exc:
         return _service_fail(exc)
     except GroupCollaborationEventError as exc:
@@ -1478,12 +1745,124 @@ def _peer_possible_count(session: ClassroomSession) -> int:
     return count
 
 
+def _classroom_evaluation_availability(session: ClassroomSession) -> dict:
+    bindings = list(
+        LessonStepEvaluationBinding.objects.select_related(
+            "lesson_step", "standard_version"
+        )
+        .filter(lesson_step__lesson_id=session.lesson_id)
+        .order_by("lesson_step__sort_order", "lesson_step_id")
+    )
+    current_binding = next(
+        (
+            binding
+            for binding in bindings
+            if binding.lesson_step_id == session.current_step_id
+        ),
+        None,
+    )
+    frozen_use = (
+        ClassroomEvaluationStandardUse.objects.select_related(
+            "lesson_step", "standard_version"
+        )
+        .filter(session=session)
+        .first()
+    )
+    current_step = (
+        {
+            "id": session.current_step_id,
+            "title": session.current_step.title,
+        }
+        if session.current_step_id
+        else None
+    )
+    bound_steps = [
+        {
+            "id": binding.lesson_step_id,
+            "title": binding.lesson_step.title,
+            "standard_version": binding.standard_version_id,
+            "standard_title": binding.standard_version.title,
+            "version_no": binding.standard_version.version_no,
+        }
+        for binding in bindings
+    ]
+
+    can_enable = True
+    reason_code = "ready"
+    reason = "当前环节已绑定经过教师复核的评价版本，可以开启课堂评价。"
+    recovery = ""
+    if session.status != ClassroomSession.Status.RUNNING:
+        can_enable = False
+        reason_code = "classroom_not_running"
+        reason = "课堂尚未开始，暂时不能开放评价。"
+        recovery = "请先开始课堂并投放需要评价的教学环节。"
+    elif current_step is None:
+        can_enable = False
+        reason_code = "no_current_step"
+        reason = "当前没有正在实施的教学环节，暂时不能开放评价。"
+        recovery = "请先投放一个已设置评价方案的教学环节。"
+    elif current_binding is None:
+        can_enable = False
+        reason_code = "current_step_unbound"
+        reason = f"当前环节“{current_step['title']}”尚未设置评价方案。"
+        recovery = "可返回课时设计为本环节设置评价，或在课堂中投放一个已设置评价的环节。"
+    elif frozen_use is not None and frozen_use.lesson_step_id != session.current_step_id:
+        can_enable = False
+        reason_code = "frozen_for_other_step"
+        reason = (
+            f"本课堂已固定使用“{frozen_use.lesson_step.title}”环节的评价版本，"
+            f"不能用于当前“{current_step['title']}”环节。"
+        )
+        recovery = "请继续查看已形成的评价记录；后续环节需在新的课堂实施记录中使用对应版本。"
+
+    return {
+        "can_enable": can_enable,
+        "reason_code": reason_code,
+        "reason": reason,
+        "recovery": recovery,
+        "current_step": current_step,
+        "current_binding": (
+            {
+                "id": current_binding.id,
+                "standard_version": current_binding.standard_version_id,
+                "standard_title": current_binding.standard_version.title,
+                "version_no": current_binding.standard_version.version_no,
+            }
+            if current_binding
+            else None
+        ),
+        "bound_steps": bound_steps,
+    }
+
+
+def _attach_curriculum_alignment(config, config_row: dict) -> dict:
+    """Decorate legacy frozen snapshots with reproducible display-only links."""
+    version = getattr(config, "standard_version", None)
+    if version is None:
+        return config_row
+    alignment_by_code = standard_curriculum_alignment(version)
+    if not alignment_by_code:
+        return config_row
+    result = {**config_row}
+    for field in ("self_criteria", "peer_criteria", "teacher_criteria"):
+        result[field] = [
+            {
+                **criterion,
+                "curriculum_alignment": criterion.get("curriculum_alignment")
+                or alignment_by_code.get(str(criterion.get("criterion_code") or ""), {}),
+            }
+            for criterion in config_row.get(field, [])
+        ]
+    return result
+
+
 def _teacher_evaluation_payload(
     session: ClassroomSession,
     config=None,
 ) -> dict:
     config = config or _classroom_evaluation_source(session)
     config_row = classroom_evaluation_config_row(config)
+    config_row = _attach_curriculum_alignment(config, config_row)
     runtime_enabled = bool(session.evaluation_enabled)
     profiles = _classroom_student_profiles(session)
     submissions = list(
@@ -1548,7 +1927,7 @@ def _teacher_evaluation_payload(
         peer_submissions = peer_by_target.get(profile.user_id, [])
         student_rows.append(
             {
-                **_evaluation_student_row(profile),
+                **_evaluation_student_row(profile, course=session.course),
                 "self_submission": classroom_evaluation_submission_row(
                     self_by_target.get(profile.user_id)
                 ),
@@ -1577,6 +1956,7 @@ def _teacher_evaluation_payload(
             for item in current_submissions[:50]
         ],
         "peer_available": _open_group_collaboration(session) is not None,
+        "availability": _classroom_evaluation_availability(session),
     }
 
 
@@ -1596,13 +1976,13 @@ def teacher_classroom_evaluation(request, pk):
             )
             if "evaluation_enabled" in request.data:
                 enabled = _bool_value(request.data.get("evaluation_enabled", False))
-                if enabled and session.status != ClassroomSession.Status.RUNNING:
-                    raise ServiceError("请先开启课堂，再开放评价。", status=400)
-                if enabled and binding is None:
-                    raise ServiceError(
-                        "当前环节尚未选择评价标准，请先在课时设计中完成设置。",
-                        status=400,
-                    )
+                if enabled:
+                    availability = _classroom_evaluation_availability(session)
+                    if not availability["can_enable"]:
+                        raise ServiceError(
+                            f"{availability['reason']} {availability['recovery']}".strip(),
+                            status=400,
+                        )
                 with transaction.atomic():
                     session = ClassroomSession.objects.select_for_update().get(
                         pk=session.pk
@@ -1651,10 +2031,7 @@ def teacher_classroom_evaluation(request, pk):
                     _teacher_evaluation_payload(session, standard_use),
                     "课堂评价已开启。" if enabled else "课堂评价已关闭。",
                 )
-            raise ServiceError(
-                "评价内容请在评价标准页面维护，课堂只负责开启和执行。",
-                status=400,
-            )
+            raise ServiceError("评价内容请在课时设计中维护，课堂负责开启和实施。", status=400)
     except ServiceError as exc:
         return _service_fail(exc)
     except EvaluationEventError as exc:
@@ -1821,16 +2198,41 @@ def _url_origin(value: str) -> tuple[str, str, int | None]:
     return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
 
 
+class _OnlyOfficeSameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, allowed_origin: tuple[str, str, int | None]):
+        super().__init__()
+        self.allowed_origin = allowed_origin
+
+    def redirect_request(
+        self,
+        req,
+        fp,
+        code,
+        msg,
+        headers,
+        newurl,
+    ):
+        if _url_origin(newurl) != self.allowed_origin:
+            raise ValueError("ONLYOFFICE 回调下载禁止跳转到其他来源。")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _download_onlyoffice_callback_file(url: str, *, max_bytes: int) -> bytes:
     allowed_origin = _url_origin(settings.ONLYOFFICE_DOCUMENT_SERVER_URL)
     requested_origin = _url_origin(url)
+    parsed = urlparse(url)
     if (
         requested_origin != allowed_origin
         or requested_origin[0] not in {"http", "https"}
         or not requested_origin[1]
+        or parsed.username
+        or parsed.password
     ):
         raise ValueError("ONLYOFFICE 回调下载地址不属于已配置文档服务器。")
-    with urllib.request.urlopen(url, timeout=30) as response:
+    opener = urllib.request.build_opener(
+        _OnlyOfficeSameOriginRedirectHandler(allowed_origin)
+    )
+    with opener.open(url, timeout=30) as response:
         if _url_origin(response.geturl()) != allowed_origin:
             raise ValueError("ONLYOFFICE 回调下载发生了跨主机跳转。")
         content_length = response.headers.get("Content-Length")
@@ -2092,10 +2494,11 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
     auto_score_rows = 0
     max_auto_score = 0.0
     for profile in profiles:
+        student_band = _student_course_band(profile, session.course)
         questions = normalize_lesson_question_items(
             step.question_items,
             include_answer=True,
-            student_layer=_student_course_band(profile, session.course),
+            student_layer=student_band,
             apply_layering=apply_layering,
         )
         attempt = latest_attempt_by_student.get(profile.user_id)
@@ -2140,10 +2543,8 @@ def _teacher_classroom_step_progress_payload(session: ClassroomSession) -> dict:
                 "username": profile.user.username,
                 "display_name": profile.user.display_name or profile.user.username,
                 "student_no": profile.student_no,
-                "current_layer": profile.current_layer or "",
-                "current_layer_label": (
-                    profile.get_current_layer_display() if profile.current_layer else ""
-                ),
+                "current_layer": student_band or "",
+                "current_layer_label": _student_band_label(student_band),
                 "submitted": submitted,
                 "submitted_at": (
                     attempt.submitted_at
@@ -2393,6 +2794,9 @@ def _teacher_quick_answer_payload(activity: ClassroomActivity) -> dict:
     rows = []
     for index, event in enumerate(_quick_answer_response_events(activity), start=1):
         profile = getattr(event.actor, "student_profile", None)
+        student_band = (
+            _student_course_band(profile, activity.session.course) if profile else None
+        )
         score_event = score_by_student.get(event.actor_id)
         score_metadata = (
             score_event.metadata
@@ -2407,12 +2811,8 @@ def _teacher_quick_answer_payload(activity: ClassroomActivity) -> dict:
                 "username": event.actor.username,
                 "display_name": event.actor.display_name or event.actor.username,
                 "student_no": getattr(profile, "student_no", "") if profile else "",
-                "current_layer": getattr(profile, "current_layer", "") or "",
-                "current_layer_label": (
-                    profile.get_current_layer_display()
-                    if profile and profile.current_layer
-                    else ""
-                ),
+                "current_layer": student_band or "",
+                "current_layer_label": _student_band_label(student_band),
                 "responded_at": event.occurred_at,
                 "score": score_event.score if score_event else None,
                 "score_action": str(score_metadata.get("score_action") or ""),
@@ -2463,6 +2863,7 @@ def _teacher_random_pick_student_rows(
         .order_by("user__display_name", "user__username")
     )
     for profile in profiles:
+        student_band = _student_course_band(profile, session.course)
         score_event = score_by_student.get(profile.user_id)
         score_metadata = (
             score_event.metadata
@@ -2475,10 +2876,8 @@ def _teacher_random_pick_student_rows(
             "username": profile.user.username,
             "display_name": profile.user.display_name or profile.user.username,
             "student_no": profile.student_no,
-            "current_layer": profile.current_layer or "",
-            "current_layer_label": (
-                profile.get_current_layer_display() if profile.current_layer else ""
-            ),
+            "current_layer": student_band or "",
+            "current_layer_label": _student_band_label(student_band),
             "is_picked": profile.user_id == picked_user_id,
             "score": score_event.score if score_event else None,
             "score_action": str(score_metadata.get("score_action") or ""),

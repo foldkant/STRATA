@@ -1,19 +1,33 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from io import BytesIO
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, OperationalError
 from django.test import TestCase
 from openpyxl import load_workbook
 from rest_framework.test import APIClient
 
 from accounts.models import User
 from courses.models import Course, Lesson, LessonStep, Subject
+from curriculum_standards.models import (
+    CurriculumDocumentType,
+    CurriculumNodeType,
+    CurriculumStandard,
+    CurriculumStandardNode,
+    CurriculumStandardVersion,
+    CurriculumVersionStatus,
+    SchoolStage,
+)
 from learning_analytics.evaluation_models import (
     EvaluationPlan,
     EvaluationPlanVersion,
+    EvaluationReviewStatus,
     EvaluationScope,
     EvaluationCriterionVersion,
+    EvaluationStandard,
     EvaluationStandardVersion,
     EvaluationTrialRecord,
 )
@@ -70,6 +84,65 @@ class EvaluationManagementApiTests(TestCase):
             role=User.Role.SCHOOL_ADMIN,
             school=self.other_school,
         )
+        self.curriculum_standard = CurriculumStandard.objects.create(
+            title="Information Technology Curriculum Standard",
+            document_type=CurriculumDocumentType.SUBJECT_STANDARD,
+            school_stage=SchoolStage.SENIOR_HIGH,
+            subject_code="information_technology",
+            subject_name="Information Technology",
+            created_by=self.school_admin,
+            updated_by=self.school_admin,
+        )
+        self.curriculum_version = CurriculumStandardVersion.objects.create(
+            source=self.curriculum_standard,
+            version_label="2025",
+            publication_year=2025,
+            effective_year=2025,
+            title_snapshot=self.curriculum_standard.title,
+            official_title="Information Technology Curriculum Standard (2025)",
+            document_type_snapshot=self.curriculum_standard.document_type,
+            school_stage_snapshot=self.curriculum_standard.school_stage,
+            subject_code_snapshot=self.curriculum_standard.subject_code,
+            subject_name_snapshot=self.curriculum_standard.subject_name,
+            pdf_file="curriculum_standards/tests/information-technology-2025.pdf",
+            pdf_sha256="1" * 64,
+            pdf_size_bytes=1024,
+            pdf_page_count=100,
+            content_hash="2" * 64,
+            created_by=self.school_admin,
+        )
+        node_definitions = (
+            (CurriculumNodeType.CORE_COMPETENCY, "IT.CORE", "Core competency"),
+            (CurriculumNodeType.COURSE_OBJECTIVE, "IT.OBJECTIVE", "Course objective"),
+            (CurriculumNodeType.COURSE_CONTENT, "IT.CONTENT", "Course content"),
+            (CurriculumNodeType.ACADEMIC_QUALITY, "IT.QUALITY", "Academic quality"),
+        )
+        self.curriculum_nodes = []
+        for index, (node_type, code, title) in enumerate(node_definitions, start=1):
+            self.curriculum_nodes.append(
+                CurriculumStandardNode.objects.create(
+                    version=self.curriculum_version,
+                    node_type=node_type,
+                    code=code,
+                    title=title,
+                    content=f"Published source text for {title} and data representation learning.",
+                    source_page_start=index,
+                    source_page_end=index,
+                    source_paragraph=title,
+                    sort_order=index,
+                )
+            )
+        CurriculumStandardVersion.objects.filter(pk=self.curriculum_version.pk).update(
+            status=CurriculumVersionStatus.PUBLISHED,
+            reviewed_by=self.school_admin,
+            published_by=self.school_admin,
+        )
+        CurriculumStandard.objects.filter(pk=self.curriculum_standard.pk).update(
+            current_version=self.curriculum_version,
+        )
+        self.curriculum_version.refresh_from_db()
+        self.curriculum_standard.refresh_from_db()
+        self.curriculum_node_ids = [node.id for node in self.curriculum_nodes]
         self.course = Course.objects.create(
             subject=self.subject,
             title="Data and Computing",
@@ -114,6 +187,7 @@ class EvaluationManagementApiTests(TestCase):
                     "code": "C1",
                     "title": "Representation selection",
                     "description": "The student selects a defensible representation for the stated data problem.",
+                    "curriculum_node_ids": self.curriculum_node_ids,
                 }
             ],
             "evaluation_basis": [
@@ -124,14 +198,28 @@ class EvaluationManagementApiTests(TestCase):
                     "source_types": ["student artifact", "written explanation"],
                 }
             ],
-            "learning_tasks": [
+            "learning_activities": [
                 {
-                    "code": "T1",
-                    "title": "Campus data visualization",
-                    "basis_codes": ["E1"],
+                    "code": "A1",
+                    "title": "Campus data inquiry",
+                    "goal_codes": ["C1"],
                     "description": "Create a visualization and explain the mapping between variables and visual encodings.",
                 }
             ],
+            "evaluation_tasks": [
+                {
+                    "code": "T1",
+                    "title": "Campus data visualization artifact",
+                    "goal_codes": ["C1"],
+                    "activity_codes": ["A1"],
+                    "mode": "project",
+                    "evidence_ownership": "individual",
+                    "material_types": ["artifact", "observation", "oral_defense"],
+                    "weight": 100,
+                    "description": "Submit the visualization artifact together with a reasoned design explanation.",
+                }
+            ],
+            "assessment_modes": ["project"],
             "content_scope": ["data representation", "visual encoding"],
             "thinking_requirements": ["apply", "analyze"],
             "support_options": ["teacher-provided data dictionary"],
@@ -140,11 +228,21 @@ class EvaluationManagementApiTests(TestCase):
                 "decision_rule": "Interpret each criterion separately and do not replace missing evidence with a low score.",
             },
             "follow_up_suggestion": "Use the weakest evidenced criterion to select the next feedback prompt and practice task.",
+            "curriculum_node_ids": self.curriculum_node_ids,
         }
 
-    def standard_payload(self, plan_id: int) -> dict:
+    def standard_payload(
+        self,
+        plan_id: int,
+        *,
+        plan_version_id: int | None = None,
+    ) -> dict:
+        if plan_version_id is None:
+            plan_version_id = EvaluationPlanVersion.objects.filter(
+                source_id=plan_id
+            ).latest("version_no").id
         return {
-            "plan": plan_id,
+            "plan_version": plan_version_id,
             "title": "Data representation evaluation standard",
             "evaluation_target": "Student visualization artifact and written design explanation",
             "criteria": [
@@ -154,6 +252,10 @@ class EvaluationManagementApiTests(TestCase):
                     "title": "Representation reasoning",
                     "evaluation_target": "The submitted visualization and explanation",
                     "evaluation_sources": ["visualization artifact", "written explanation"],
+                    "learning_goal_codes": ["C1"],
+                    "evaluation_task_codes": ["T1"],
+                    "evidence_ownership": "individual",
+                    "material_types": ["artifact"],
                     "expected_performance": "The student links data characteristics, visual encoding choices, and the intended reader.",
                     "skip_condition": "Do not evaluate this criterion when no visualization or explanation is available.",
                     "support_options": ["data dictionary", "chart-type reference sheet"],
@@ -184,6 +286,98 @@ class EvaluationManagementApiTests(TestCase):
             ],
         }
 
+    def two_task_plan_payload(self) -> dict:
+        payload = self.plan_payload()
+        payload["learning_goals"].append(
+            {
+                "code": "C2",
+                "title": "Representation justification",
+                "description": "The student compares alternatives and justifies a representation for its intended audience.",
+                "curriculum_node_ids": self.curriculum_node_ids,
+            }
+        )
+        payload["evaluation_basis"].append(
+            {
+                "code": "E2",
+                "goal_codes": ["C2"],
+                "description": "The explanation contains a comparison of alternatives and an audience-based justification.",
+                "source_types": ["oral explanation", "design rationale"],
+            }
+        )
+        payload["learning_activities"].append(
+            {
+                "code": "A2",
+                "title": "Representation comparison discussion",
+                "goal_codes": ["C2"],
+                "description": "Compare two plausible representations and discuss their trade-offs for the intended audience.",
+            }
+        )
+        payload["evaluation_tasks"][0]["weight"] = 50
+        payload["evaluation_tasks"].append(
+            {
+                "code": "T2",
+                "title": "Representation design defense",
+                "goal_codes": ["C2"],
+                "activity_codes": ["A2"],
+                "mode": "project",
+                "evidence_ownership": "group",
+                "material_types": ["artifact", "observation", "oral_defense"],
+                "weight": 50,
+                "description": "The group submits its design and explains why it is appropriate for the intended audience.",
+            }
+        )
+        return payload
+
+    def create_plan_from_payload(self, payload: dict) -> dict:
+        response = self.client.post(
+            "/api/v1/teacher/evaluations/plans/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data["data"]
+
+    def review_plan_id(self, plan_id: int):
+        return self.client.post(
+            f"/api/v1/teacher/evaluations/plans/{plan_id}/review-confirm/",
+            {},
+            format="json",
+        )
+
+    def publish_plan_id(self, plan_id: int):
+        reviewed = self.review_plan_id(plan_id)
+        self.assertEqual(reviewed.status_code, 200, reviewed.data)
+        return self.client.post(
+            f"/api/v1/teacher/evaluations/plans/{plan_id}/publish/",
+            {},
+            format="json",
+        )
+
+    def create_standard_from_payload(self, payload: dict) -> dict:
+        response = self.client.post(
+            "/api/v1/teacher/evaluations/standards/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        return response.data["data"]
+
+    def review_standard_id(self, standard_id: int):
+        return self.client.post(
+            f"/api/v1/teacher/evaluations/standards/{standard_id}/review-confirm/",
+            {},
+            format="json",
+        )
+
+    def publish_standard_id(self, standard_id: int):
+        reviewed = self.review_standard_id(standard_id)
+        self.assertEqual(reviewed.status_code, 200, reviewed.data)
+        return self.client.post(
+            f"/api/v1/teacher/evaluations/standards/{standard_id}/publish/",
+            {},
+            format="json",
+        )
+
     def create_plan(self, *, course: Course | None = None) -> dict:
         payload = self.plan_payload()
         if course is not None:
@@ -196,15 +390,490 @@ class EvaluationManagementApiTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         return response.data["data"]
 
+    def test_plan_draft_api_derives_assessment_modes_from_evaluation_tasks(self):
+        payload = self.plan_payload()
+        payload["assessment_modes"] = ["test", "operation"]
+
+        plan = self.create_plan_from_payload(payload)
+
+        self.assertEqual(plan["assessment_modes"], ["project"])
+        source = EvaluationPlan.objects.get(pk=plan["id"])
+        self.assertEqual(source.assessment_modes, ["project"])
+
+    def test_review_confirmation_is_teacher_scoped_audited_and_required(self):
+        plan = self.create_plan()
+        publish_url = f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/"
+
+        response = self.client.post(publish_url, {}, format="json")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(EvaluationPlanVersion.objects.exists())
+
+        peer_client = APIClient()
+        peer_client.force_authenticate(self.peer_teacher)
+        response = peer_client.post(
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/review-confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404, response.data)
+
+        response = self.review_plan_id(plan["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        plan_source = EvaluationPlan.objects.get(pk=plan["id"])
+        self.assertEqual(plan_source.review_status, EvaluationReviewStatus.REVIEWED)
+        self.assertEqual(plan_source.reviewed_by_id, self.teacher.id)
+        self.assertIsNotNone(plan_source.reviewed_at)
+        self.assertEqual(len(plan_source.reviewed_content_hash), 64)
+
+        response = self.client.post(publish_url, {}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        plan_version = EvaluationPlanVersion.objects.get(source_id=plan["id"])
+        self.assertEqual(
+            plan_source.reviewed_content_hash,
+            plan_version.content_hash,
+        )
+
+        standard = self.create_standard_from_payload(
+            self.standard_payload(plan["id"], plan_version_id=plan_version.id)
+        )
+        standard_publish_url = (
+            f"/api/v1/teacher/evaluations/standards/{standard['id']}/publish/"
+        )
+        response = self.client.post(standard_publish_url, {}, format="json")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(EvaluationStandardVersion.objects.exists())
+
+        response = peer_client.post(
+            f"/api/v1/teacher/evaluations/standards/{standard['id']}/review-confirm/",
+            {},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404, response.data)
+
+        response = self.review_standard_id(standard["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        standard_source = EvaluationStandard.objects.get(pk=standard["id"])
+        self.assertEqual(
+            standard_source.review_status,
+            EvaluationReviewStatus.REVIEWED,
+        )
+        self.assertEqual(standard_source.reviewed_by_id, self.teacher.id)
+        self.assertIsNotNone(standard_source.reviewed_at)
+        self.assertEqual(len(standard_source.reviewed_content_hash), 64)
+
+        response = self.client.patch(
+            f"/api/v1/teacher/evaluations/standards/{standard['id']}/",
+            {"title": "Revised data representation evaluation standard"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        standard_source.refresh_from_db()
+        self.assertEqual(standard_source.review_status, EvaluationReviewStatus.DRAFT)
+        self.assertIsNone(standard_source.reviewed_by_id)
+        self.assertIsNone(standard_source.reviewed_at)
+        self.assertEqual(standard_source.reviewed_content_hash, "")
+
+        response = self.client.post(standard_publish_url, {}, format="json")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertFalse(EvaluationStandardVersion.objects.exists())
+
+    def test_all_six_evaluation_mode_chains_can_be_published(self):
+        cases = (
+            ("test", ["answer", "score"], ["answer"], None),
+            ("operation", ["operation", "observation"], ["operation"], None),
+            (
+                "project",
+                ["artifact", "observation", "oral_defense"],
+                ["artifact"],
+                None,
+            ),
+            ("artifact", ["artifact", "observation"], ["artifact"], None),
+            (
+                "oral_defense",
+                ["oral_defense", "observation"],
+                ["oral_defense"],
+                None,
+            ),
+            (
+                "mixed",
+                ["artifact", "observation", "oral_defense"],
+                ["artifact"],
+                ["artifact", "oral_defense"],
+            ),
+        )
+        for index, (
+            mode,
+            task_materials,
+            criterion_materials,
+            component_modes,
+        ) in enumerate(
+            cases,
+            start=1,
+        ):
+            with self.subTest(mode=mode):
+                plan_payload = self.plan_payload()
+                plan_payload["title"] = f"P2 {mode} evaluation plan {index}"
+                plan_payload["assessment_modes"] = [mode]
+                plan_payload["evaluation_tasks"][0].update(
+                    {
+                        "mode": mode,
+                        "evidence_ownership": "individual",
+                        "material_types": task_materials,
+                    }
+                )
+                if component_modes is not None:
+                    plan_payload["evaluation_tasks"][0][
+                        "component_modes"
+                    ] = component_modes
+                plan = self.create_plan_from_payload(plan_payload)
+                published_plan = self.publish_plan_id(plan["id"])
+                self.assertEqual(published_plan.status_code, 200, published_plan.data)
+                if mode == "mixed":
+                    plan_version = EvaluationPlanVersion.objects.get(
+                        source_id=plan["id"]
+                    )
+                    self.assertEqual(
+                        plan_version.evaluation_tasks[0]["component_modes"],
+                        component_modes,
+                    )
+
+                standard_payload = self.standard_payload(plan["id"])
+                standard_payload["title"] = f"P2 {mode} evaluation standard {index}"
+                standard_payload["criteria"][0].update(
+                    {
+                        "evidence_ownership": "individual",
+                        "material_types": criterion_materials,
+                    }
+                )
+                standard = self.create_standard_from_payload(standard_payload)
+                published_standard = self.publish_standard_id(standard["id"])
+                self.assertEqual(
+                    published_standard.status_code,
+                    200,
+                    published_standard.data,
+                )
+
+    def test_mode_material_contract_and_mixed_components_are_enforced(self):
+        cases = (
+            {
+                "mode": "test",
+                "material_types": ["artifact"],
+            },
+            {
+                "mode": "mixed",
+                "material_types": ["artifact", "oral_defense"],
+            },
+            {
+                "mode": "mixed",
+                "component_modes": ["artifact"],
+                "material_types": ["artifact"],
+            },
+            {
+                "mode": "mixed",
+                "component_modes": ["artifact", "mixed"],
+                "material_types": ["artifact", "oral_defense"],
+            },
+            {
+                "mode": "mixed",
+                "component_modes": ["artifact", "oral_defense"],
+                "material_types": ["artifact"],
+            },
+            {
+                "mode": "project",
+                "component_modes": ["artifact", "oral_defense"],
+                "material_types": ["artifact", "oral_defense"],
+            },
+        )
+        for index, task_changes in enumerate(cases, start=1):
+            with self.subTest(case=index):
+                payload = self.plan_payload()
+                payload["title"] = f"Invalid mode contract {index}"
+                payload["assessment_modes"] = [task_changes["mode"]]
+                payload["evaluation_tasks"][0].update(task_changes)
+                plan = self.create_plan_from_payload(payload)
+
+                response = self.review_plan_id(plan["id"])
+
+                self.assertEqual(response.status_code, 400, response.data)
+                source = EvaluationPlan.objects.get(pk=plan["id"])
+                self.assertEqual(source.review_status, EvaluationReviewStatus.DRAFT)
+                self.assertIsNone(source.reviewed_by_id)
+                self.assertIsNone(source.reviewed_at)
+                self.assertEqual(source.reviewed_content_hash, "")
+        self.assertFalse(EvaluationPlanVersion.objects.exists())
+
+    def test_evaluation_task_and_activity_must_share_each_task_goal(self):
+        cases = (
+            {
+                "goal_codes": ["C1"],
+                "activity_codes": ["A1", "A2"],
+            },
+            {
+                "goal_codes": ["C1", "C2"],
+                "activity_codes": ["A1"],
+            },
+        )
+        for index, task_links in enumerate(cases, start=1):
+            with self.subTest(case=index):
+                payload = self.two_task_plan_payload()
+                payload["title"] = f"Invalid activity goal alignment {index}"
+                payload["evaluation_tasks"][0].update(task_links)
+                plan = self.create_plan_from_payload(payload)
+
+                response = self.review_plan_id(plan["id"])
+
+                self.assertEqual(response.status_code, 400, response.data)
+                self.assertIn("evaluation_tasks", response.data["errors"])
+        self.assertFalse(EvaluationPlanVersion.objects.exists())
+
+    def test_standard_cannot_bind_codes_that_exist_only_in_plan_draft(self):
+        plan = self.create_plan()
+        published = self.publish_plan_id(plan["id"])
+        self.assertEqual(published.status_code, 200, published.data)
+
+        draft_payload = self.two_task_plan_payload()
+        response = self.client.patch(
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/",
+            draft_payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+
+        standard_payload = self.standard_payload(plan["id"])
+        standard_payload["criteria"][0].update(
+            {
+                "learning_goal_codes": ["C2"],
+                "evaluation_task_codes": ["T2"],
+                "evidence_ownership": "group",
+                "material_types": ["artifact"],
+            }
+        )
+        standard = self.create_standard_from_payload(standard_payload)
+        rejected = self.review_standard_id(standard["id"])
+        self.assertEqual(rejected.status_code, 400, rejected.data)
+        self.assertIn("未知学习目标", str(rejected.data["errors"]))
+
+    def test_standard_rejects_uncovered_evaluation_task(self):
+        plan = self.create_plan_from_payload(self.two_task_plan_payload())
+        published = self.publish_plan_id(plan["id"])
+        self.assertEqual(published.status_code, 200, published.data)
+
+        standard = self.create_standard_from_payload(self.standard_payload(plan["id"]))
+        rejected = self.review_standard_id(standard["id"])
+        self.assertEqual(rejected.status_code, 400, rejected.data)
+        self.assertIn("T2", str(rejected.data["errors"]))
+        self.assertIn("尚未设置评价指标", str(rejected.data["errors"]))
+
+    def test_standard_rejects_goal_task_mismatch(self):
+        plan = self.create_plan_from_payload(self.two_task_plan_payload())
+        published = self.publish_plan_id(plan["id"])
+        self.assertEqual(published.status_code, 200, published.data)
+        payload = self.standard_payload(plan["id"])
+        payload["criteria"][0].update(
+            {
+                "learning_goal_codes": ["C1"],
+                "evaluation_task_codes": ["T2"],
+                "evidence_ownership": "group",
+                "material_types": ["artifact"],
+            }
+        )
+        standard = self.create_standard_from_payload(payload)
+        rejected = self.review_standard_id(standard["id"])
+        self.assertEqual(rejected.status_code, 400, rejected.data)
+        self.assertIn("必须来自其所选评价任务", str(rejected.data["errors"]))
+
+    def test_standard_rejects_ownership_and_material_type_mismatches(self):
+        plan = self.create_plan()
+        published = self.publish_plan_id(plan["id"])
+        self.assertEqual(published.status_code, 200, published.data)
+
+        ownership_payload = self.standard_payload(plan["id"])
+        ownership_payload["title"] = "Ownership mismatch standard"
+        ownership_payload["criteria"][0]["evidence_ownership"] = "group"
+        ownership_standard = self.create_standard_from_payload(ownership_payload)
+        ownership_rejected = self.review_standard_id(ownership_standard["id"])
+        self.assertEqual(ownership_rejected.status_code, 400, ownership_rejected.data)
+        self.assertIn("材料归属", str(ownership_rejected.data["errors"]))
+
+        material_payload = self.standard_payload(plan["id"])
+        material_payload["title"] = "Material mismatch standard"
+        material_payload["criteria"][0]["material_types"] = ["answer"]
+        material_standard = self.create_standard_from_payload(material_payload)
+        material_rejected = self.review_standard_id(material_standard["id"])
+        self.assertEqual(material_rejected.status_code, 400, material_rejected.data)
+        self.assertIn("共同的评价材料类型", str(material_rejected.data["errors"]))
+
+    def test_both_task_requires_aggregate_individual_and_group_criterion_coverage(self):
+        plan_payload = self.plan_payload()
+        plan_payload["evaluation_tasks"][0]["evidence_ownership"] = "both"
+        plan = self.create_plan_from_payload(plan_payload)
+        published = self.publish_plan_id(plan["id"])
+        self.assertEqual(published.status_code, 200, published.data)
+
+        incomplete_payload = self.standard_payload(plan["id"])
+        incomplete_payload["title"] = "Incomplete both ownership standard"
+        incomplete = self.create_standard_from_payload(incomplete_payload)
+        response = self.review_standard_id(incomplete["id"])
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("criteria", response.data["errors"])
+
+        aggregate_payload = self.standard_payload(plan["id"])
+        aggregate_payload["title"] = "Aggregate both ownership standard"
+        group_criterion = deepcopy(aggregate_payload["criteria"][0])
+        group_criterion.update(
+            {
+                "code": "D2",
+                "title": "Group representation reasoning",
+                "evaluation_target": "The group visualization and shared rationale",
+                "evidence_ownership": "group",
+            }
+        )
+        aggregate_payload["criteria"].append(group_criterion)
+        aggregate = self.create_standard_from_payload(aggregate_payload)
+        response = self.publish_standard_id(aggregate["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+
+        shared_payload = self.standard_payload(plan["id"])
+        shared_payload["title"] = "Single both ownership standard"
+        shared_payload["criteria"][0]["evidence_ownership"] = "both"
+        shared = self.create_standard_from_payload(shared_payload)
+        response = self.publish_standard_id(shared["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+
+    def test_standard_stays_bound_to_the_exact_selected_plan_version(self):
+        plan = self.create_plan()
+        response = self.publish_plan_id(plan["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        first_plan_version = EvaluationPlanVersion.objects.get(
+            source_id=plan["id"],
+            version_no=1,
+        )
+
+        revised_payload = self.plan_payload()
+        revised_payload["follow_up_suggestion"] = (
+            "Use a second contrast case before asking the student to revise the explanation."
+        )
+        response = self.client.patch(
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/",
+            revised_payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        response = self.publish_plan_id(plan["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        second_plan_version = EvaluationPlanVersion.objects.get(
+            source_id=plan["id"],
+            version_no=2,
+        )
+
+        standard_payload = self.standard_payload(
+            plan["id"],
+            plan_version_id=first_plan_version.id,
+        )
+        standard = self.create_standard_from_payload(standard_payload)
+        standard_source = EvaluationStandard.objects.get(pk=standard["id"])
+        self.assertEqual(standard_source.plan_id, plan["id"])
+        self.assertEqual(standard_source.plan_version_id, first_plan_version.id)
+
+        response = self.publish_standard_id(standard["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        standard_version = EvaluationStandardVersion.objects.get(
+            source_id=standard["id"]
+        )
+        self.assertEqual(standard_version.plan_version_id, first_plan_version.id)
+        self.assertNotEqual(standard_version.plan_version_id, second_plan_version.id)
+
+        response = self.client.patch(
+            f"/api/v1/teacher/evaluations/standards/{standard['id']}/",
+            {"plan_version": second_plan_version.id},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        standard_source.refresh_from_db()
+        self.assertEqual(standard_source.plan_version_id, first_plan_version.id)
+
+        legacy_payload = self.standard_payload(
+            plan["id"],
+            plan_version_id=second_plan_version.id,
+        )
+        legacy_payload["plan"] = plan["id"]
+        response = self.client.post(
+            "/api/v1/teacher/evaluations/standards/",
+            legacy_payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("unknown_fields", response.data["errors"])
+
+    def test_standard_detail_api_returns_complete_exact_plan_version(self):
+        plan = self.create_plan()
+        response = self.publish_plan_id(plan["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        first_plan_version = EvaluationPlanVersion.objects.get(
+            source_id=plan["id"],
+            version_no=1,
+        )
+
+        revised_payload = self.plan_payload()
+        revised_payload["learning_goals"][0]["title"] = (
+            "Revised representation selection"
+        )
+        revised_payload["evaluation_tasks"][0]["description"] = (
+            "Submit a revised visualization and compare it with one alternative."
+        )
+        response = self.client.patch(
+            f"/api/v1/teacher/evaluations/plans/{plan['id']}/",
+            revised_payload,
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        response = self.publish_plan_id(plan["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        second_plan_version = EvaluationPlanVersion.objects.get(
+            source_id=plan["id"],
+            version_no=2,
+        )
+
+        standard = self.create_standard_from_payload(
+            self.standard_payload(
+                plan["id"],
+                plan_version_id=first_plan_version.id,
+            )
+        )
+        response = self.client.get(
+            f"/api/v1/teacher/evaluations/standards/{standard['id']}/"
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        plan_version = response.data["data"]["plan_version"]
+        self.assertEqual(
+            plan_version,
+            {
+                "id": first_plan_version.id,
+                "source_plan_id": plan["id"],
+                "title": first_plan_version.title,
+                "version_no": first_plan_version.version_no,
+                "content_hash": first_plan_version.content_hash,
+                "review_status": EvaluationReviewStatus.REVIEWED,
+                "subject": {
+                    "id": self.subject.id,
+                    "name": self.subject.name,
+                },
+                "course": {
+                    "id": self.course.id,
+                    "title": self.course.title,
+                },
+                "learning_goals": first_plan_version.learning_goals,
+                "evaluation_tasks": first_plan_version.evaluation_tasks,
+            },
+        )
+        self.assertNotEqual(plan_version["id"], second_plan_version.id)
+
     def create_published_standard(
         self, *, course: Course | None = None
     ) -> EvaluationStandardVersion:
         plan = self.create_plan(course=course)
-        response = self.client.post(
-            f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
-            {},
-            format="json",
-        )
+        response = self.publish_plan_id(plan["id"])
         self.assertEqual(response.status_code, 200, response.data)
         response = self.client.post(
             "/api/v1/teacher/evaluations/standards/",
@@ -213,11 +882,7 @@ class EvaluationManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 201, response.data)
         standard_id = response.data["data"]["id"]
-        response = self.client.post(
-            f"/api/v1/teacher/evaluations/standards/{standard_id}/publish/",
-            {},
-            format="json",
-        )
+        response = self.publish_standard_id(standard_id)
         self.assertEqual(response.status_code, 200, response.data)
         return EvaluationStandardVersion.objects.get(source_id=standard_id)
 
@@ -248,6 +913,16 @@ class EvaluationManagementApiTests(TestCase):
         loaded = self.client.get(url)
         self.assertEqual(loaded.status_code, 200, loaded.data)
         self.assertEqual(loaded.data["data"]["binding"]["standard_version"], version.id)
+        use_boundaries = {
+            row["code"]: row for row in loaded.data["data"]["use_boundaries"]
+        }
+        self.assertEqual(use_boundaries["classroom_feedback"]["status"], "available")
+        self.assertEqual(
+            use_boundaries["learning_state_update"]["status"], "requires_review"
+        )
+        self.assertEqual(
+            use_boundaries["research_and_model"]["status"], "not_direct"
+        )
 
     def test_lesson_step_binding_requires_teacher_scope_and_one_type(self):
         version = self.create_published_standard()
@@ -332,6 +1007,55 @@ class EvaluationManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_options_api_returns_complete_p2_plan_version_contract(self):
+        plan = self.create_plan()
+        response = self.publish_plan_id(plan["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        version = EvaluationPlanVersion.objects.get(source_id=plan["id"])
+
+        response = self.client.get("/api/v1/teacher/evaluations/options/")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        course_option = next(
+            row
+            for row in response.data["data"]["courses"]
+            if row["id"] == self.course.id
+        )
+        self.assertEqual(
+            course_option["subject"],
+            {
+                "id": self.subject.id,
+                "name": self.subject.name,
+                "code": self.subject.code,
+            },
+        )
+        plan_version = next(
+            row
+            for row in response.data["data"]["plan_versions"]
+            if row["id"] == version.id
+        )
+        self.assertEqual(
+            plan_version,
+            {
+                "id": version.id,
+                "source_plan_id": plan["id"],
+                "title": version.title,
+                "version_no": version.version_no,
+                "content_hash": version.content_hash,
+                "review_status": EvaluationReviewStatus.REVIEWED,
+                "subject": {
+                    "id": self.subject.id,
+                    "name": self.subject.name,
+                },
+                "course": {
+                    "id": self.course.id,
+                    "title": self.course.title,
+                },
+                "learning_goals": version.learning_goals,
+                "evaluation_tasks": version.evaluation_tasks,
+            },
+        )
+
     def test_incomplete_draft_can_save_but_cannot_publish(self):
         response = self.client.post(
             "/api/v1/teacher/evaluations/plans/",
@@ -353,11 +1077,17 @@ class EvaluationManagementApiTests(TestCase):
         plan = self.create_plan()
         publish_url = f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/"
 
+        reviewed = self.review_plan_id(plan["id"])
+        self.assertEqual(reviewed.status_code, 200, reviewed.data)
         response = self.client.post(publish_url, {}, format="json")
         self.assertEqual(response.status_code, 200, response.data)
         version = EvaluationPlanVersion.objects.get()
         self.assertEqual(version.version_no, 1)
         self.assertEqual(len(version.content_hash), 64)
+        self.assertEqual(version.review_status, "reviewed")
+        self.assertEqual(version.reviewed_by_id, self.teacher.id)
+        self.assertIsNotNone(version.reviewed_at)
+        self.assertEqual(version.reviewed_content_hash, version.content_hash)
 
         response = self.client.post(publish_url, {}, format="json")
         self.assertEqual(response.status_code, 200)
@@ -375,6 +1105,18 @@ class EvaluationManagementApiTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 200, response.data)
+        plan_source = EvaluationPlan.objects.get(pk=plan["id"])
+        self.assertEqual(plan_source.review_status, "draft")
+        self.assertIsNone(plan_source.reviewed_by_id)
+        self.assertIsNone(plan_source.reviewed_at)
+        self.assertEqual(plan_source.reviewed_content_hash, "")
+
+        response = self.client.post(publish_url, {}, format="json")
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(EvaluationPlanVersion.objects.count(), 1)
+
+        reviewed = self.review_plan_id(plan["id"])
+        self.assertEqual(reviewed.status_code, 200, reviewed.data)
         response = self.client.post(publish_url, {}, format="json")
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(
@@ -382,13 +1124,97 @@ class EvaluationManagementApiTests(TestCase):
             [1, 2],
         )
 
+    def test_plan_publish_recovers_from_one_sqlite_create_error(self):
+        errors = (
+            IntegrityError("forced concurrent version conflict"),
+            OperationalError("database is locked"),
+        )
+        for index, injected_error in enumerate(errors, start=1):
+            with self.subTest(error=type(injected_error).__name__):
+                payload = self.plan_payload()
+                payload["title"] = f"Retryable plan publish {index}"
+                plan = self.create_plan_from_payload(payload)
+                reviewed = self.review_plan_id(plan["id"])
+                self.assertEqual(reviewed.status_code, 200, reviewed.data)
+
+                original_create = EvaluationPlanVersion.objects.create
+                create_calls = 0
+
+                def flaky_create(*args, **kwargs):
+                    nonlocal create_calls
+                    create_calls += 1
+                    if create_calls == 1:
+                        raise injected_error
+                    return original_create(*args, **kwargs)
+
+                with patch(
+                    "learning_analytics.services.evaluation."
+                    "EvaluationPlanVersion.objects.create",
+                    side_effect=flaky_create,
+                ):
+                    response = self.client.post(
+                        f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
+                        {},
+                        format="json",
+                    )
+
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(create_calls, 2)
+                self.assertEqual(
+                    EvaluationPlanVersion.objects.filter(source_id=plan["id"]).count(),
+                    1,
+                )
+
+    def test_standard_publish_recovers_from_one_sqlite_create_error(self):
+        plan = self.create_plan()
+        response = self.publish_plan_id(plan["id"])
+        self.assertEqual(response.status_code, 200, response.data)
+        errors = (
+            IntegrityError("forced concurrent version conflict"),
+            OperationalError("database is locked"),
+        )
+        for index, injected_error in enumerate(errors, start=1):
+            with self.subTest(error=type(injected_error).__name__):
+                payload = self.standard_payload(plan["id"])
+                payload["title"] = f"Retryable standard publish {index}"
+                standard = self.create_standard_from_payload(payload)
+                reviewed = self.review_standard_id(standard["id"])
+                self.assertEqual(reviewed.status_code, 200, reviewed.data)
+
+                original_create = EvaluationStandardVersion.objects.create
+                create_calls = 0
+
+                def flaky_create(*args, **kwargs):
+                    nonlocal create_calls
+                    create_calls += 1
+                    if create_calls == 1:
+                        raise injected_error
+                    return original_create(*args, **kwargs)
+
+                with patch(
+                    "learning_analytics.services.evaluation."
+                    "EvaluationStandardVersion.objects.create",
+                    side_effect=flaky_create,
+                ):
+                    response = self.client.post(
+                        f"/api/v1/teacher/evaluations/standards/{standard['id']}/publish/",
+                        {},
+                        format="json",
+                    )
+
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(create_calls, 2)
+                self.assertEqual(
+                    EvaluationStandardVersion.objects.filter(
+                        source_id=standard["id"]
+                    ).count(),
+                    1,
+                )
+
     def test_standard_publish_creates_normalized_immutable_level_descriptions(self):
         plan = self.create_plan()
-        self.client.post(
-            f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
-            {},
-            format="json",
-        )
+        published_plan = self.publish_plan_id(plan["id"])
+        self.assertEqual(published_plan.status_code, 200, published_plan.data)
         response = self.client.post(
             "/api/v1/teacher/evaluations/standards/",
             self.standard_payload(plan["id"]),
@@ -397,15 +1223,15 @@ class EvaluationManagementApiTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         standard_id = response.data["data"]["id"]
 
-        response = self.client.post(
-            f"/api/v1/teacher/evaluations/standards/{standard_id}/publish/",
-            {},
-            format="json",
-        )
+        response = self.publish_standard_id(standard_id)
         self.assertEqual(response.status_code, 200, response.data)
         version = EvaluationStandardVersion.objects.get()
         criterion = EvaluationCriterionVersion.objects.get()
         self.assertEqual(version.plan_version.version_no, 1)
+        self.assertEqual(version.review_status, "reviewed")
+        self.assertEqual(version.reviewed_by_id, self.teacher.id)
+        self.assertIsNotNone(version.reviewed_at)
+        self.assertEqual(version.reviewed_content_hash, version.content_hash)
         self.assertEqual(criterion.dimension, "subject_practice")
         self.assertEqual(criterion.scoring_examples.count(), 2)
         self.assertIn("Do not evaluate", criterion.skip_condition)
@@ -416,11 +1242,8 @@ class EvaluationManagementApiTests(TestCase):
 
     def test_forbidden_operational_indicator_cannot_enter_published_standard(self):
         plan = self.create_plan()
-        self.client.post(
-            f"/api/v1/teacher/evaluations/plans/{plan['id']}/publish/",
-            {},
-            format="json",
-        )
+        published_plan = self.publish_plan_id(plan["id"])
+        self.assertEqual(published_plan.status_code, 200, published_plan.data)
         payload = self.standard_payload(plan["id"])
         payload["criteria"][0]["title"] = "签到与出勤表现"
         response = self.client.post(
@@ -430,11 +1253,7 @@ class EvaluationManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         standard_id = response.data["data"]["id"]
-        response = self.client.post(
-            f"/api/v1/teacher/evaluations/standards/{standard_id}/publish/",
-            {},
-            format="json",
-        )
+        response = self.review_standard_id(standard_id)
         self.assertEqual(response.status_code, 400)
         self.assertFalse(EvaluationStandardVersion.objects.exists())
 
@@ -517,6 +1336,24 @@ class EvaluationManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 409)
         self.assertTrue(EvaluationTrialRecord.objects.filter(pk=record_id).exists())
+
+        completed = EvaluationTrialRecord.objects.get(pk=record_id)
+        self.assertEqual(len(completed.completion_hash), 64)
+        self.assertEqual(completed.completed_by_id, self.teacher.id)
+        self.assertIsNotNone(completed.completed_at)
+        self.assertEqual(
+            completed.completion_hash,
+            completed.compute_completion_hash(),
+        )
+
+        completed.title = "ORM mutation must be rejected"
+        with self.assertRaises(ValidationError):
+            completed.save()
+        with self.assertRaises(ValidationError):
+            completed.delete()
+        persisted = EvaluationTrialRecord.objects.get(pk=record_id)
+        self.assertEqual(persisted.title, payload["title"])
+        self.assertEqual(persisted.completion_hash, completed.completion_hash)
 
     def test_scoring_check_requires_agreement_rate(self):
         version = self.create_published_standard()

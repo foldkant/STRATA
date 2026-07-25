@@ -87,7 +87,7 @@ onMounted(load)
         <header class="modal-header">
           <div>
             <h2 id="curriculum-trace-title">课程标准依据追溯</h2>
-            <p>分别核对结构化内容条目、PDF 逐页原文及其课程标准版本。</p>
+            <p>核对评价所引用的内容条目、PDF 逐页原文和课程标准版本。</p>
           </div>
           <button class="icon-button" type="button" aria-label="关闭" data-modal-initial-focus @click="emit('close')">×</button>
         </header>
@@ -114,15 +114,15 @@ onMounted(load)
             <section class="curriculum-trace-item" aria-labelledby="curriculum-trace-item-title">
               <header>
                 <div>
-                  <strong id="curriculum-trace-item-title">结构化内容条目</strong>
-                  <small>供评价设计引用的结构化条目，不等同于 PDF 整页原文。</small>
+                  <strong id="curriculum-trace-item-title">评价所引用的内容条目</strong>
+                  <small>此处展示供评价设计引用的课程标准内容，请结合 PDF 原文核对。</small>
                   <small v-if="trace.source_paragraph">段落标识：{{ trace.source_paragraph }}</small>
                 </div>
                 <span>{{ pageLabel(trace) }}</span>
               </header>
               <p>{{ trace.content }}</p>
               <footer>
-                <span>内容条目校验值</span>
+                <span>内容条目校验信息</span>
                 <code>{{ trace.content_hash || '未提供' }}</code>
               </footer>
             </section>
@@ -131,7 +131,7 @@ onMounted(load)
               <header>
                 <div>
                   <strong id="curriculum-trace-pages-title">PDF 逐页原文</strong>
-                  <small>以下为该课程标准版本保存的逐页提取或 OCR 文本，PDF 文件是最终核验依据。</small>
+                  <small>以下为系统逐页提取或识别的文字，PDF 原文件是最终核验依据。</small>
                 </div>
                 <span>{{ sourcePages.length }} 页</span>
               </header>
@@ -160,7 +160,7 @@ onMounted(load)
                   <pre>{{ page.text || '本页暂无可读取文本，请直接核验 PDF 原文件。' }}</pre>
                   <footer>
                     <span>{{ page.char_count.toLocaleString('zh-CN') }} 字符</span>
-                    <span>逐页文本校验值</span>
+                    <span>逐页文本校验信息</span>
                     <code>{{ page.content_hash || '未提供' }}</code>
                   </footer>
                 </article>
@@ -171,10 +171,10 @@ onMounted(load)
             </section>
 
             <details class="curriculum-trace-verification">
-              <summary>查看版本级校验信息</summary>
+              <summary>查看文件校验信息</summary>
               <dl>
-                <div><dt>课程标准版本校验值</dt><dd>{{ trace.curriculum_version.content_hash || '未提供' }}</dd></div>
-                <div><dt>PDF 校验值</dt><dd>{{ trace.curriculum_version.pdf_sha256 || '未提供' }}</dd></div>
+                <div><dt>版本内容校验信息</dt><dd>{{ trace.curriculum_version.content_hash || '未提供' }}</dd></div>
+                <div><dt>PDF 文件校验信息</dt><dd>{{ trace.curriculum_version.pdf_sha256 || '未提供' }}</dd></div>
               </dl>
             </details>
           </template>
@@ -262,7 +262,7 @@ onMounted(load)
   display: inline-flex;
   border-radius: 999px;
   padding: 3px 8px;
-  background: #e8f1ff;
+  background: #e4ede8;
   color: var(--primary-dark);
   font-size: 12px;
   font-weight: 700;

@@ -1,0 +1,345 @@
+{
+  "desktop-1440": {
+    "metrics": {
+      "body": {
+        "scrollWidth": 1440,
+        "clientWidth": 1440,
+        "scrollHeight": 900,
+        "clientHeight": 900
+      },
+      "shell": {
+        "x": 12,
+        "y": 12,
+        "width": 1416,
+        "height": 876,
+        "scrollWidth": 1416,
+        "scrollHeight": 876
+      },
+      "grid": {
+        "x": 12,
+        "y": 196,
+        "width": 1416,
+        "height": 692,
+        "scrollWidth": 1416,
+        "scrollHeight": 692
+      },
+      "steps": {
+        "x": 12,
+        "y": 196,
+        "width": 223,
+        "height": 692,
+        "scrollWidth": 221,
+        "scrollHeight": 690
+      },
+      "stage": {
+        "x": 247,
+        "y": 196,
+        "width": 835,
+        "height": 692,
+        "scrollWidth": 833,
+        "scrollHeight": 690
+      },
+      "context": {
+        "x": 1094,
+        "y": 196,
+        "width": 334,
+        "height": 692,
+        "scrollWidth": 332,
+        "scrollHeight": 690
+      },
+      "resourceTabs": {
+        "x": 259,
+        "y": 321,
+        "width": 811,
+        "height": 42,
+        "scrollWidth": 811,
+        "scrollHeight": 41
+      },
+      "resourceStage": {
+        "x": 258,
+        "y": 270,
+        "width": 813,
+        "height": 607,
+        "scrollWidth": 811,
+        "scrollHeight": 605
+      },
+      "preview": {
+        "x": 259,
+        "y": 363,
+        "width": 811,
+        "height": 513,
+        "scrollWidth": 811,
+        "scrollHeight": 513
+      },
+      "contextTabs": {
+        "x": 1095,
+        "y": 260,
+        "width": 332,
+        "height": 57,
+        "scrollWidth": 332,
+        "scrollHeight": 56
+      },
+      "controls": [
+        {
+          "text": "投放此环节",
+          "x": 750,
+          "y": 213,
+          "w": 85,
+          "h": 30
+        },
+        {
+          "text": "锁定提交",
+          "x": 841,
+          "y": 213,
+          "w": 72,
+          "h": 30
+        },
+        {
+          "text": "关闭环节",
+          "x": 919,
+          "y": 213,
+          "w": 72,
+          "h": 30
+        },
+        {
+          "text": "下一环节",
+          "x": 997,
+          "y": 213,
+          "w": 72,
+          "h": 30
+        }
+      ]
+    },
+    "pageErrors": [
+      "Cannot read properties of undefined (reading 'extend')"
+    ]
+  },
+  "tablet-768": {
+    "metrics": {
+      "body": {
+        "scrollWidth": 768,
+        "clientWidth": 768,
+        "scrollHeight": 2104,
+        "clientHeight": 1024
+      },
+      "shell": {
+        "x": 12,
+        "y": 12,
+        "width": 744,
+        "height": 2080,
+        "scrollWidth": 744,
+        "scrollHeight": 2080
+      },
+      "grid": {
+        "x": 12,
+        "y": 219,
+        "width": 744,
+        "height": 1862,
+        "scrollWidth": 744,
+        "scrollHeight": 1862
+      },
+      "steps": {
+        "x": 12,
+        "y": 219,
+        "width": 744,
+        "height": 185,
+        "scrollWidth": 742,
+        "scrollHeight": 183
+      },
+      "stage": {
+        "x": 12,
+        "y": 416,
+        "width": 744,
+        "height": 873,
+        "scrollWidth": 742,
+        "scrollHeight": 871
+      },
+      "context": {
+        "x": 12,
+        "y": 1300,
+        "width": 744,
+        "height": 780,
+        "scrollWidth": 742,
+        "scrollHeight": 778
+      },
+      "resourceTabs": {
+        "x": 24,
+        "y": 543,
+        "width": 720,
+        "height": 52,
+        "scrollWidth": 720,
+        "scrollHeight": 51
+      },
+      "resourceStage": {
+        "x": 23,
+        "y": 492,
+        "width": 722,
+        "height": 786,
+        "scrollWidth": 720,
+        "scrollHeight": 784
+      },
+      "preview": {
+        "x": 24,
+        "y": 595,
+        "width": 720,
+        "height": 682,
+        "scrollWidth": 720,
+        "scrollHeight": 682
+      },
+      "contextTabs": {
+        "x": 13,
+        "y": 1364,
+        "width": 742,
+        "height": 57,
+        "scrollWidth": 742,
+        "scrollHeight": 56
+      },
+      "controls": [
+        {
+          "text": "投放此环节",
+          "x": 323,
+          "y": 427,
+          "w": 101,
+          "h": 44
+        },
+        {
+          "text": "锁定提交",
+          "x": 430,
+          "y": 427,
+          "w": 101,
+          "h": 44
+        },
+        {
+          "text": "关闭环节",
+          "x": 536,
+          "y": 427,
+          "w": 101,
+          "h": 44
+        },
+        {
+          "text": "下一环节",
+          "x": 643,
+          "y": 427,
+          "w": 101,
+          "h": 44
+        }
+      ]
+    },
+    "pageErrors": [
+      "Cannot read properties of undefined (reading 'extend')"
+    ]
+  },
+  "mobile-390": {
+    "metrics": {
+      "body": {
+        "scrollWidth": 390,
+        "clientWidth": 390,
+        "scrollHeight": 2123,
+        "clientHeight": 844
+      },
+      "shell": {
+        "x": 8,
+        "y": 8,
+        "width": 374,
+        "height": 2107,
+        "scrollWidth": 374,
+        "scrollHeight": 2107
+      },
+      "grid": {
+        "x": 8,
+        "y": 316,
+        "width": 374,
+        "height": 1791,
+        "scrollWidth": 374,
+        "scrollHeight": 1791
+      },
+      "steps": {
+        "x": 8,
+        "y": 316,
+        "width": 374,
+        "height": 185,
+        "scrollWidth": 372,
+        "scrollHeight": 183
+      },
+      "stage": {
+        "x": 8,
+        "y": 513,
+        "width": 374,
+        "height": 802,
+        "scrollWidth": 372,
+        "scrollHeight": 800
+      },
+      "context": {
+        "x": 8,
+        "y": 1327,
+        "width": 374,
+        "height": 780,
+        "scrollWidth": 372,
+        "scrollHeight": 778
+      },
+      "resourceTabs": {
+        "x": 18,
+        "y": 688,
+        "width": 354,
+        "height": 52,
+        "scrollWidth": 447,
+        "scrollHeight": 52
+      },
+      "resourceStage": {
+        "x": 17,
+        "y": 637,
+        "width": 356,
+        "height": 669,
+        "scrollWidth": 354,
+        "scrollHeight": 667
+      },
+      "preview": {
+        "x": 18,
+        "y": 740,
+        "width": 354,
+        "height": 565,
+        "scrollWidth": 354,
+        "scrollHeight": 565
+      },
+      "contextTabs": {
+        "x": 9,
+        "y": 1391,
+        "width": 372,
+        "height": 57,
+        "scrollWidth": 372,
+        "scrollHeight": 56
+      },
+      "controls": [
+        {
+          "text": "投放此环节",
+          "x": 151,
+          "y": 524,
+          "w": 106,
+          "h": 44
+        },
+        {
+          "text": "锁定提交",
+          "x": 263,
+          "y": 524,
+          "w": 106,
+          "h": 44
+        },
+        {
+          "text": "关闭环节",
+          "x": 151,
+          "y": 574,
+          "w": 106,
+          "h": 44
+        },
+        {
+          "text": "下一环节",
+          "x": 263,
+          "y": 574,
+          "w": 106,
+          "h": 44
+        }
+      ]
+    },
+    "pageErrors": []
+  }
+}

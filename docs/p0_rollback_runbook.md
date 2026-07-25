@@ -237,6 +237,6 @@ git -C "tmp/p0-code-restore" status --short
 | 已应用迁移 | `curriculum_standards.0004`、`learning_analytics.0032`；迁移后共 140 条已应用迁移 |
 | 数据登记 | `TEST-MANUAL-COURSE-4-20260722` 首次正式登记为 `CREATED`，重复执行为 `UNCHANGED` |
 | 迁移后检查 | `manage.py check` 为 0 个问题；`makemigrations --check --dry-run` 无待生成迁移；开发库 `PRAGMA quick_check=ok` |
-| 服务恢复 | Web 在 8010 端口恢复并通过 `/api/health/`；课程标准 worker 以单并发、低优先级和 2 个逻辑处理器限制恢复 |
+| 服务恢复 | Web 在 8010 端口恢复并通过 `/api/health/`；课程标准 worker 以单并发、低优先级和本机默认 1 个逻辑处理器限制恢复 |
 
 如需撤销本次 P0—P1 数据结构和正式登记，优先按第 5—7 节在隔离副本验证上述最终迁移前备份，再同时切换与其匹配的代码版本。不得在 worker 运行时直接反向迁移或覆盖 `storage/dev.sqlite3`。

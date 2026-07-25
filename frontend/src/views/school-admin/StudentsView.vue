@@ -39,14 +39,6 @@ const statusOptions = [
   { label: '停用', value: 'disabled' }
 ]
 
-const layerOptions = [
-  { label: '全部层级', value: '' },
-  { label: '未分层', value: 'unassigned' },
-  { label: 'A 拓展挑战层', value: 'A' },
-  { label: 'B 核心发展层', value: 'B' },
-  { label: 'C 基础提升层', value: 'C' }
-]
-
 const rows = ref<StudentRow[]>([])
 const classes = ref<ClassGroupRow[]>([])
 const total = ref(0)
@@ -55,7 +47,6 @@ const pageSize = ref(20)
 const query = ref('')
 const status = ref('')
 const classId = ref('')
-const layer = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const notice = ref('')
@@ -136,18 +127,6 @@ const studentFields = computed<FormField[]>(() => {
       placeholder: '可为空'
     },
     {
-      name: 'current_layer',
-      label: '当前层级',
-      type: 'select',
-      options: [
-        { label: '未分层，前测后生成', value: '' },
-        { label: 'A 拓展挑战层', value: 'A' },
-        { label: 'B 核心发展层', value: 'B' },
-        { label: 'C 基础提升层', value: 'C' }
-      ],
-      helper: '新生默认不分层，完成素养前测和态度问卷后再进入分层流程。'
-    },
-    {
       name: 'current_group_no',
       label: '小组号',
       type: 'number',
@@ -197,7 +176,6 @@ function emptyStudent(): FormModel {
     student_no: '',
     phone: '',
     password: '',
-    current_layer: '',
     current_group_no: '',
     score: 0,
     is_active: true
@@ -219,7 +197,6 @@ function toPayload(model: FormModel): StudentPayload {
     display_name: String(model.display_name || '').trim(),
     student_no: String(model.student_no || '').trim(),
     phone: String(model.phone || '').trim(),
-    current_layer: String(model.current_layer || ''),
     current_group_no: model.current_group_no ? String(model.current_group_no).trim() : '',
     score: typeof model.score === 'boolean' ? 0 : model.score || 0,
     is_active: Boolean(model.is_active)
@@ -243,7 +220,6 @@ async function load() {
         q: query.value,
         status: status.value,
         class: classId.value,
-        layer: layer.value,
         page: page.value,
         page_size: pageSize.value
       })
@@ -270,7 +246,6 @@ function editRow(row: StudentRow) {
     display_name: row.display_name,
     student_no: row.student_no,
     phone: row.phone,
-    current_layer: row.current_layer || '',
     current_group_no: row.current_group_no || '',
     score: row.score,
     is_active: row.is_active
@@ -418,7 +393,6 @@ function resetFilters() {
   query.value = ''
   status.value = ''
   classId.value = ''
-  layer.value = ''
   page.value = 1
   load()
 }
@@ -432,7 +406,6 @@ function studentsExportUrl() {
   if (query.value) params.set('q', query.value)
   if (status.value) params.set('status', status.value)
   if (classId.value) params.set('class', classId.value)
-  if (layer.value) params.set('layer', layer.value)
   const raw = params.toString()
   return `/api/v1/school-admin/students/export/${raw ? `?${raw}` : ''}`
 }
@@ -470,7 +443,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <AppShell title="学生管理" eyebrow="学校管理员" :nav-items="navItems">
+  <AppShell title="学生管理" eyebrow="学校教学管理" :nav-items="navItems" shell-variant="school-admin">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <div class="extra-filter">
@@ -483,19 +456,13 @@ onMounted(async () => {
           </option>
         </AppSelect>
       </label>
-      <label>
-        <span>层级</span>
-        <AppSelect v-model="layer" @change="page = 1; load()">
-          <option v-for="item in layerOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
-        </AppSelect>
-      </label>
     </div>
 
     <ManagementPage
       v-model:query="query"
       v-model:status="status"
       title="学生管理"
-      description="维护本校学生账号。新生可暂不分班、不分层，首次使用时改密、选班并完成前测；删除前必须先停用。"
+      description="维护本校学生账号和班级信息。学生的学习情况由任课教师依据具体学科、课程和学习材料确认；删除账号前需先停用。"
       :total="total"
       :page="page"
       :page-size="pageSize"
@@ -537,7 +504,6 @@ onMounted(async () => {
             <th>姓名</th>
             <th>学号</th>
             <th>班级</th>
-            <th>层级</th>
             <th>使用状态</th>
             <th>小组</th>
             <th>积分</th>
@@ -564,10 +530,6 @@ onMounted(async () => {
               {{ row.class_group.grade ? `${row.class_group.grade} ` : '' }}{{ row.class_group.name }}
             </template>
             <span v-else class="muted-text">未选班级</span>
-          </td>
-          <td>
-            <template v-if="row.current_layer">{{ row.current_layer }} {{ row.current_layer_label }}</template>
-            <span v-else class="muted-text">未分层</span>
           </td>
           <td>
             <span

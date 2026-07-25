@@ -7,6 +7,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from aiops.models import QuestionDraftGenerationJob
+from aiops.tasks import generate_question_bank_drafts_task
 from courses.models import (
     ClassroomActivity,
     ClassroomGroup,
@@ -19,6 +21,16 @@ from courses.models import (
     LessonStep,
     Resource,
     Subject,
+)
+from curriculum_standards.models import (
+    CurriculumDocumentType,
+    CurriculumNodeType,
+    CurriculumStandard,
+    CurriculumStandardNode,
+    CurriculumStandardVersion,
+    CurriculumVersionStatus,
+    EvaluationPlanCurriculumReference,
+    SchoolStage,
 )
 from learning.models import (
     AssessmentComparabilityRecord,
@@ -40,6 +52,8 @@ from learning_analytics.models import (
     LearningOpportunityTransitionFact,
     ParticipationPointLedger,
 )
+from learning_analytics.evaluation_models import EvaluationPlan
+from learning_analytics.services.evaluation import confirm_plan_review, publish_plan
 from realtime.models import ClassroomChatConfig, ClassroomChatMessage
 from realtime.moderation import moderate_content
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
@@ -208,6 +222,153 @@ class AssessmentWorkflowTests(TestCase):
         )
         StudentProfile.objects.create(user=self.other_student, class_group=self.other_class, is_first_use=False)
         self.client = APIClient()
+        self._question_target_version = None
+
+    def _aligned_learning_target_version(self):
+        """Create one published, curriculum-aligned target for formal question tests."""
+        if self._question_target_version is not None:
+            return self._question_target_version
+
+        course = Course.objects.create(
+            subject=self.subject,
+            title="Data representation and coding",
+            teacher=self.teacher,
+            is_active=True,
+        )
+        standard = CurriculumStandard.objects.create(
+            title="Information Technology Curriculum Standard",
+            document_type=CurriculumDocumentType.SUBJECT_STANDARD,
+            school_stage=SchoolStage.SENIOR_HIGH,
+            subject_code="information_technology",
+            subject_name=self.subject.name,
+            created_by=self.school_admin,
+            updated_by=self.school_admin,
+        )
+        curriculum_version = CurriculumStandardVersion.objects.create(
+            source=standard,
+            version_label="2025",
+            publication_year=2025,
+            effective_year=2025,
+            title_snapshot=standard.title,
+            official_title=f"{self.subject.name}课程标准（2025年版）",
+            document_type_snapshot=standard.document_type,
+            school_stage_snapshot=standard.school_stage,
+            subject_code_snapshot=standard.subject_code,
+            subject_name_snapshot=standard.subject_name,
+            pdf_file="curriculum_standards/tests/it-2025.pdf",
+            pdf_sha256="1" * 64,
+            pdf_size_bytes=1024,
+            pdf_page_count=100,
+            content_hash="2" * 64,
+            created_by=self.school_admin,
+        )
+        node_specs = (
+            (CurriculumNodeType.CORE_COMPETENCY, "IT.CORE", "Core competency"),
+            (CurriculumNodeType.COURSE_OBJECTIVE, "IT.OBJECTIVE", "Course objective"),
+            (CurriculumNodeType.COURSE_CONTENT, "IT.CONTENT", "Course content"),
+            (CurriculumNodeType.ACADEMIC_QUALITY, "IT.QUALITY", "Academic quality"),
+        )
+        nodes = []
+        for sort_order, (node_type, code, title) in enumerate(node_specs, start=1):
+            nodes.append(
+                CurriculumStandardNode.objects.create(
+                    version=curriculum_version,
+                    node_type=node_type,
+                    code=code,
+                    title=title,
+                    content=f"Published source text for {title} and data representation.",
+                    source_page_start=sort_order,
+                    source_page_end=sort_order,
+                    source_paragraph=title,
+                    sort_order=sort_order,
+                )
+            )
+        CurriculumStandardVersion.objects.filter(pk=curriculum_version.pk).update(
+            status=CurriculumVersionStatus.PUBLISHED,
+            reviewed_by=self.school_admin,
+            published_by=self.school_admin,
+        )
+        CurriculumStandard.objects.filter(pk=standard.pk).update(
+            current_version=curriculum_version
+        )
+        curriculum_version.refresh_from_db()
+        nodes = list(
+            CurriculumStandardNode.objects.filter(version=curriculum_version).order_by(
+                "sort_order", "id"
+            )
+        )
+
+        node_ids = [node.id for node in nodes]
+        plan = EvaluationPlan.objects.create(
+            school=self.school,
+            subject=self.subject,
+            course=course,
+            title="Data representation evaluation plan",
+            content_version="2026.1",
+            target_students="Grade 10 students studying data representation",
+            learning_goal="Students select a representation and explain why it fits the problem.",
+            learning_goals=[
+                {
+                    "code": "IT_DATA_01",
+                    "title": "Representation selection",
+                    "description": "Select and justify a defensible representation for the data problem.",
+                    "curriculum_node_ids": node_ids,
+                }
+            ],
+            evaluation_basis=[
+                {
+                    "code": "B1",
+                    "goal_codes": ["IT_DATA_01"],
+                    "description": "The answer demonstrates the intended learning target.",
+                    "source_types": ["student answer"],
+                }
+            ],
+            learning_activities=[
+                {
+                    "code": "A1",
+                    "title": "Data representation inquiry",
+                    "goal_codes": ["IT_DATA_01"],
+                    "description": "Students compare and explain data representations.",
+                }
+            ],
+            evaluation_tasks=[
+                {
+                    "code": "T1",
+                    "title": "Data representation question",
+                    "goal_codes": ["IT_DATA_01"],
+                    "activity_codes": ["A1"],
+                    "mode": "test",
+                    "evidence_ownership": "individual",
+                    "material_types": ["answer", "score"],
+                    "weight": 100,
+                    "description": "Answer the question and retain the individual response.",
+                }
+            ],
+            assessment_modes=["test"],
+            content_scope=["data representation"],
+            thinking_requirements=["apply"],
+            support_options=[],
+            scoring_rules={
+                "approach": "criterion-referenced",
+                "decision_rule": "Do not treat missing evidence as a low level.",
+            },
+            follow_up_suggestion="Use the response evidence to plan the next learning support.",
+            created_by=self.teacher,
+            updated_by=self.teacher,
+        )
+        for node in nodes:
+            EvaluationPlanCurriculumReference.objects.create(
+                plan=plan,
+                node=node,
+                alignment_explanation="This source passage supports the learning target.",
+                created_by=self.teacher,
+            )
+        confirm_plan_review(plan=plan, reviewed_by=self.teacher)
+        plan_version = publish_plan(plan, published_by=self.teacher).version
+        self._question_target_version = plan_version.learning_target_versions.get(
+            code="IT_DATA_01"
+        )
+        return self._question_target_version
 
     def test_shared_question_and_student_auto_grading_workflow(self):
         self.client.force_authenticate(self.teacher)
@@ -724,8 +885,23 @@ class AssessmentWorkflowTests(TestCase):
         )
         self.assertEqual(self.client.delete(f"/api/v1/teacher/question-bank/{question.id}/").status_code, 200)
 
-    @patch("api.assessment_views.generate_question_bank_drafts_with_ai")
-    def test_ai_generate_endpoint_returns_drafts_without_saving(self, generate_mock):
+    @patch("api.assessment_views._dispatch_question_draft_job")
+    def test_ai_generate_endpoint_queues_without_saving(self, dispatch_mock):
+        self.client.force_authenticate(self.teacher)
+        before = QuestionBankItem.objects.count()
+        response = self.client.post(
+            "/api/v1/teacher/question-bank/ai-generate/",
+            {"subject": self.subject.id, "direction": "生成一题判断题", "question_type": "judge", "difficulty": "normal", "count": 1},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["data"]["status"], "queued")
+        self.assertEqual(response.data["data"]["subject"]["id"], self.subject.id)
+        dispatch_mock.assert_called_once()
+        self.assertEqual(QuestionBankItem.objects.count(), before)
+
+    @patch("api.pretest_services.generate_question_bank_drafts_with_ai")
+    def test_ai_question_worker_persists_recoverable_drafts(self, generate_mock):
         generate_mock.return_value = {
             "questions": [{
                 "draft_id": "ai_test",
@@ -742,19 +918,28 @@ class AssessmentWorkflowTests(TestCase):
             "requested_count": 1,
             "valid_count": 1,
         }
-        self.client.force_authenticate(self.teacher)
-        before = QuestionBankItem.objects.count()
-        response = self.client.post(
-            "/api/v1/teacher/question-bank/ai-generate/",
-            {"subject": self.subject.id, "direction": "生成一题判断题", "question_type": "judge", "difficulty": "normal", "count": 1},
-            format="json",
+        job = QuestionDraftGenerationJob.objects.create(
+            teacher=self.teacher,
+            subject=self.subject,
+            request_payload={
+                "subject": self.subject.id,
+                "direction": "生成一题判断题",
+                "question_type": "judge",
+                "difficulty": "normal",
+                "count": 1,
+            },
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["data"]["valid_count"], 1)
-        self.assertEqual(QuestionBankItem.objects.count(), before)
+
+        generate_question_bank_drafts_task.run(job.id)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, QuestionDraftGenerationJob.Status.SUCCEEDED)
+        self.assertEqual(job.result_payload["valid_count"], 1)
+        self.assertEqual(job.result_payload["subject"]["id"], self.subject.id)
 
     def test_ai_confirm_validates_and_bulk_creates_questions(self):
         self.client.force_authenticate(self.teacher)
+        target_version = self._aligned_learning_target_version()
         valid = {
             "draft_id": "ai_valid",
             "stem": "AI 生成的判断题",
@@ -766,6 +951,7 @@ class AssessmentWorkflowTests(TestCase):
             "knowledge_point": "知识点",
             "default_score": 2,
             "selected": True,
+            "learning_target_version_id": target_version.id,
         }
         response = self.client.post(
             "/api/v1/teacher/question-bank/ai-confirm/",
@@ -789,6 +975,7 @@ class AssessmentWorkflowTests(TestCase):
         self.assertFalse(QuestionBankItem.objects.filter(stem="无效 AI 题").exists())
 
     def test_follow_up_common_test_preserves_anchors_and_knowledge_mappings(self):
+        target_version = self._aligned_learning_target_version()
         questions = []
         for index in range(10):
             questions.append(
@@ -804,6 +991,8 @@ class AssessmentWorkflowTests(TestCase):
                     default_score=2,
                     status=QuestionBankItem.Status.ACTIVE,
                     library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+                    learning_target_version=target_version,
+                    legacy_unmapped=False,
                 )
             )
         self.client.force_authenticate(self.school_admin)
@@ -867,6 +1056,7 @@ class AssessmentWorkflowTests(TestCase):
         )
 
     def test_common_and_layered_questions_keep_common_measurement_base(self):
+        target_version = self._aligned_learning_target_version()
         common_question = QuestionBankItem.objects.create(
             school=self.school,
             subject=self.subject,
@@ -878,6 +1068,8 @@ class AssessmentWorkflowTests(TestCase):
             default_score=2,
             status=QuestionBankItem.Status.ACTIVE,
             library_scope=QuestionBankItem.LibraryScope.SCHOOL,
+            learning_target_version=target_version,
+            legacy_unmapped=False,
         )
         self.client.force_authenticate(self.school_admin)
         common_set_response = self.client.post(
@@ -915,6 +1107,7 @@ class AssessmentWorkflowTests(TestCase):
                 "default_score": 4,
                 "item_role": "layered",
                 "layer_scope": "a",
+                "learning_target_version_id": target_version.id,
             },
             format="json",
         )
@@ -924,7 +1117,7 @@ class AssessmentWorkflowTests(TestCase):
             {
                 "title": "共同题与分层题测试",
                 "subject": self.subject.id,
-                "course": "",
+                "course": target_version.target.course_id,
                 "common_question_set": common_set_id,
                 "class_ids": [self.class_group.id],
                 "instruction": "独立完成",
@@ -957,7 +1150,7 @@ class AssessmentWorkflowTests(TestCase):
         self.client.post(f"/api/v1/teacher/assessments/{assessment['id']}/publish/")
         self.client.post(f"/api/v1/teacher/assessments/{assessment['id']}/open/")
 
-        StudentProfile.objects.filter(user=self.student).update(current_layer="A")
+        StudentProfile.objects.filter(user=self.student).update(current_layer="C")
         a_band_decision = StratificationDecision.objects.create(
             student=self.student,
             class_group=self.class_group,
@@ -989,7 +1182,7 @@ class AssessmentWorkflowTests(TestCase):
         StudentProfile.objects.create(
             user=c_student,
             class_group=self.class_group,
-            current_layer="C",
+            current_layer="A",
             is_first_use=False,
         )
         c_band_decision = StratificationDecision.objects.create(
@@ -1040,7 +1233,7 @@ class AssessmentWorkflowTests(TestCase):
             {
                 "title": "共同题复测",
                 "subject": self.subject.id,
-                "course": "",
+                "course": target_version.target.course_id,
                 "common_question_set": common_set_id,
                 "class_ids": [self.class_group.id],
                 "instruction": "",
@@ -1106,7 +1299,7 @@ class StudentArchiveTests(TestCase):
             school=self.school,
             display_name="李四",
         )
-        StudentProfile.objects.create(
+        self.profile = StudentProfile.objects.create(
             user=self.student,
             class_group=self.class_group,
             student_no="2026001",
@@ -1115,6 +1308,11 @@ class StudentArchiveTests(TestCase):
             is_first_use=False,
         )
         StudentProfile.objects.create(user=self.other_student, class_group=self.class_group, is_first_use=False)
+        TeachingAssignment.objects.create(
+            school=self.school,
+            class_group=self.class_group,
+            teacher=self.teacher,
+        )
         self.course = Course.objects.create(
             subject=self.subject,
             title="数据与计算",
@@ -1156,7 +1354,7 @@ class StudentArchiveTests(TestCase):
             subject=self.subject,
             course=self.course,
             title="单元测试",
-            status=TestAssessment.Status.CLOSED,
+            status=TestAssessment.Status.DRAFT,
         )
         assessment.target_classes.add(self.class_group)
         TestAssessmentQuestion.objects.create(
@@ -1167,6 +1365,9 @@ class StudentArchiveTests(TestCase):
             answer=["正确"],
             score=2,
         )
+        assessment.status = TestAssessment.Status.CLOSED
+        assessment.closed_at = timezone.now()
+        assessment.save(update_fields=["status", "closed_at", "updated_at"])
         TestAttempt.objects.create(
             assessment=assessment,
             student=self.student,
@@ -1200,7 +1401,6 @@ class StudentArchiveTests(TestCase):
 
         response = self.client.get("/api/v1/student/profile/?subject=999999")
         self.assertEqual(response.status_code, 404)
-
 
 class ClassroomChatWorkflowTests(TestCase):
     def setUp(self):

@@ -155,8 +155,8 @@ describe('CurriculumReferenceTraceModal', () => {
     await flushPromises()
 
     const item = wrapper.get('.curriculum-trace-item')
-    expect(item.text()).toContain('结构化内容条目')
-    expect(item.text()).toContain('不等同于 PDF 整页原文')
+    expect(item.text()).toContain('评价所引用的内容条目')
+    expect(item.text()).toContain('请结合 PDF 原文核对')
     expect(item.text()).toContain('能够根据解决问题的需要')
     expect(item.text()).toContain('node-content-hash')
     expect(item.text()).not.toContain('PDF 第十二页真实文本')

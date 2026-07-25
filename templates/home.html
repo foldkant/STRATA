@@ -6,17 +6,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="STRATA数智教学系统，面向课堂教学使用，关注学习过程与分层成长。">
   <title>STRATA数智教学系统</title>
-  <link rel="icon" href="{% static 'brand/favicon.ico' %}?v=202607011241" sizes="any">
-  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'brand/favicon-32.png' %}?v=202607011241">
-  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'brand/favicon-180.png' %}?v=202607011241">
-  <link rel="stylesheet" href="{% static 'css/home.css' %}">
+  <link rel="icon" href="{% static 'brand/favicon.ico' %}?v=202607242349" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="{% static 'brand/favicon-32.png' %}?v=202607242349">
+  <link rel="apple-touch-icon" sizes="180x180" href="{% static 'brand/favicon-180.png' %}?v=202607242349">
+  <link rel="preload" href="{% static 'fonts/lxgw-wenkai-lite-v1.522/LXGWWenKaiLite-Regular.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{% static 'fonts/lxgw-wenkai-lite-v1.522/LXGWWenKaiLite-Medium.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{% static 'css/public-fonts.css' %}?v=202607242112">
+  <link rel="stylesheet" href="{% static 'css/home.css' %}?v=202607250730">
+  <link rel="stylesheet" href="{% static 'css/brand-emblem.css' %}?v=202607251140">
+  <script src="{% static 'js/home.js' %}?v=202607250730" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到主要内容</a>
+  <div class="page-reveal" aria-hidden="true"></div>
 
   <header class="site-header" aria-label="平台导航">
     <a class="brand" href="/" aria-label="STRATA数智教学系统首页">
-      <img class="brand-mark" src="{% static 'brand/brand-logo.png' %}?v=202607011241" alt="" aria-hidden="true">
+      <img class="brand-mark" src="{% static 'brand/brand-logo.png' %}?v=202607251130" alt="" aria-hidden="true">
       <span class="brand-name">STRATA数智教学系统</span>
     </a>
     <a class="header-action" href="{% url 'login' %}">进入平台</a>
@@ -24,9 +30,18 @@
 
   <main id="main" class="home-main">
     <section class="hero" aria-labelledby="hero-title">
-      <p class="eyebrow">关注过程 · 尊重差异 · 促进成长</p>
-      <h1 id="hero-title">STRATA数智教学系统</h1>
-      <a class="primary-action" href="{% url 'login' %}">进入平台</a>
+      <div class="hero-copy">
+        <p class="eyebrow"><span>关注过程 · 尊重差异 · 促进成长</span></p>
+        <h1 id="hero-title" aria-label="STRATA数智教学系统">
+          <span class="title-latin" aria-hidden="true">STRATA</span>
+          <span class="title-chinese" aria-hidden="true">数智教学系统</span>
+        </h1>
+        <a class="primary-action" href="{% url 'login' %}"><span>进入平台</span></a>
+      </div>
+
+      <div class="strata-stage" aria-hidden="true">
+        {% include "includes/brand_emblem.html" %}
+      </div>
     </section>
   </main>
 

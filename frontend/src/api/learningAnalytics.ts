@@ -77,6 +77,33 @@ export type StratificationSuggestionRow = {
   support_suggestion: string
   decision_kind: 'support' | 'content_band' | 'legacy'
   support_priority: '' | 'routine' | 'watch' | 'high'
+  recommendation_status: string
+  recommendation_status_label: string
+  target_state: null | {
+    id: number
+    learning_target_code: string
+    learning_target_name: string
+    evidence_status: 'available' | 'partial' | 'insufficient' | 'pending_review' | 'not_observed'
+    evidence_status_label: string
+    evidence_coverage: number
+    uncertainty: number | null
+    valid_until: string | null
+  }
+  target_states: Array<{
+    id: number
+    learning_target_version_id: number
+    learning_target_code: string
+    learning_target_name: string
+    evidence_status: 'available' | 'partial' | 'insufficient' | 'pending_review' | 'not_observed'
+    evidence_coverage: number
+    estimate: number | null
+    uncertainty: number | null
+    valid_until: string | null
+    content_hash: string
+  }>
+  abstain_reason: string
+  transition_checks: Record<string, unknown>
+  mastery_snapshot_id: number | null
   rule_version: string
   source_label: string
   window_start: string | null
@@ -185,6 +212,7 @@ export function bulkReviewStratificationSuggestions(payload: {
 export function manuallyAdjustStratification(payload: {
   student: number
   course: number
+  source_decision: number
   layer: 'A' | 'B' | 'C'
   reason_code: string
   note?: string

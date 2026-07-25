@@ -40,23 +40,6 @@
       </div>
     </article>
 
-    <article class="panel">
-      <div class="panel-heading">
-        <h2>当前分层</h2>
-        <p>按学生档案当前层级统计。</p>
-      </div>
-      <div class="ratio-list">
-        {% for row in layer_rows %}
-          <div class="ratio-row">
-            <div>
-              <span>{{ row.value }}层 · {{ row.label }}</span>
-              <strong>{{ row.count }}</strong>
-            </div>
-            <div class="ratio-track"><span style="width: {{ row.percent }}%"></span></div>
-          </div>
-        {% endfor %}
-      </div>
-    </article>
   </section>
 
   <section class="screen-grid">

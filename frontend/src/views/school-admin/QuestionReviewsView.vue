@@ -271,7 +271,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <AppShell title="题库审核" eyebrow="学校管理员" :nav-items="navItems">
+  <AppShell title="题库审核" eyebrow="学校教学管理" :nav-items="navItems" shell-variant="school-admin">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="question-review-head">

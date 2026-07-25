@@ -1,4 +1,6 @@
 <script setup lang="ts" generic="T extends { id: number }">
+import { nextTick, onMounted, onUpdated, ref } from 'vue'
+
 withDefaults(defineProps<{
   title: string
   description: string
@@ -20,6 +22,7 @@ withDefaults(defineProps<{
   showTemplate: true,
   showImport: true
 })
+const tableWrap = ref<HTMLElement | null>(null)
 
 const emit = defineEmits<{
   search: [payload: { q: string; status: string }]
@@ -33,6 +36,27 @@ const emit = defineEmits<{
   'update:query': [value: string]
   'update:status': [value: string]
 }>()
+
+function labelMobileCells() {
+  const table = tableWrap.value?.querySelector('table')
+  if (!table) return
+  const labels = Array.from(table.querySelectorAll('thead th')).map(
+    (cell) => cell.textContent?.trim() || '内容'
+  )
+  table.querySelectorAll('tbody tr').forEach((row) => {
+    Array.from(row.children).forEach((cell, index) => {
+      if (!(cell instanceof HTMLTableCellElement) || cell.classList.contains('empty')) return
+      if (!cell.dataset.label) cell.dataset.label = labels[index] || '内容'
+    })
+  })
+}
+
+function scheduleMobileLabels() {
+  void nextTick(labelMobileCells)
+}
+
+onMounted(scheduleMobileLabels)
+onUpdated(scheduleMobileLabels)
 </script>
 
 <template>
@@ -43,8 +67,8 @@ const emit = defineEmits<{
         <p>{{ description }}</p>
       </div>
       <div class="heading-actions">
-        <button v-if="showExport !== false" class="secondary-button" type="button" @click="emit('export')">导出 XLSX</button>
-        <button v-if="showTemplate !== false" class="secondary-button" type="button" @click="emit('template')">下载模板</button>
+        <button v-if="showExport !== false" class="secondary-button" type="button" @click="emit('export')">导出表格</button>
+        <button v-if="showTemplate !== false" class="secondary-button" type="button" @click="emit('template')">下载导入模板</button>
         <button v-if="showImport !== false" class="secondary-button" type="button" @click="emit('import')">批量导入</button>
         <slot name="actions-extra" />
         <button v-if="bulkLabel" class="secondary-button" type="button" @click="emit('bulk')">{{ bulkLabel }}</button>
@@ -76,7 +100,7 @@ const emit = defineEmits<{
 
     <slot name="bulk-actions" />
 
-    <div class="table-wrap management-table">
+    <div ref="tableWrap" class="table-wrap management-table">
       <table>
         <slot name="head" />
         <tbody>

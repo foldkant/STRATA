@@ -14,6 +14,7 @@ import { ApiError } from '@/api/client'
 import AppShell from '@/layouts/AppShell.vue'
 import EChartPanel from '@/components/EChartPanel.vue'
 import NoticeLine from '@/components/NoticeLine.vue'
+import { governanceChartTextStyle } from '@/utils/chartOptions'
 import { schoolAdminNav } from './nav'
 
 const navItems = schoolAdminNav('/school-admin/data-quality')
@@ -133,9 +134,10 @@ function metricValue(report: DataQualityReport, key: string) {
 
 function trendOption(keys: Array<{ key: string; label: string; inverse?: boolean }>): EChartsCoreOption {
   const reports = [...(data.value?.history || [])].reverse()
-  const colors = ['#1f6feb', '#b45309', '#b42318', '#6d28d9', '#0f766e']
+  const colors = ['#183d37', '#b54a3a', '#9a6328', '#52786f', '#8fa89f']
   return {
     color: colors,
+    textStyle: governanceChartTextStyle,
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value: unknown) => `${Number(value).toFixed(2)}%`
@@ -145,7 +147,7 @@ function trendOption(keys: Array<{ key: string; label: string; inverse?: boolean
       right: 0,
       itemWidth: 18,
       itemHeight: 3,
-      textStyle: { color: '#64748b', fontSize: 12 }
+      textStyle: governanceChartTextStyle
     },
     grid: { top: 44, right: 18, bottom: 26, left: 48, containLabel: true },
     xAxis: {
@@ -153,15 +155,15 @@ function trendOption(keys: Array<{ key: string; label: string; inverse?: boolean
       boundaryGap: false,
       data: reports.map((report) => formatDay(report.window_end)),
       axisTick: { show: false },
-      axisLabel: { color: '#64748b', fontSize: 12 },
-      axisLine: { lineStyle: { color: '#d8e1ec' } }
+      axisLabel: governanceChartTextStyle,
+      axisLine: { lineStyle: { color: '#cbd5ce' } }
     },
     yAxis: {
       type: 'value',
       min: 0,
       max: 100,
-      axisLabel: { color: '#64748b', formatter: '{value}%' },
-      splitLine: { lineStyle: { color: '#e2e8f0' } }
+      axisLabel: { ...governanceChartTextStyle, formatter: '{value}%' },
+      splitLine: { lineStyle: { color: '#e1e7e2' } }
     },
     series: keys.map((item, index) => ({
       name: item.label,
@@ -203,7 +205,7 @@ onBeforeUnmount(clearPoll)
 </script>
 
 <template>
-  <AppShell title="数据检查" eyebrow="学校管理员" :nav-items="navItems" natural-scroll>
+  <AppShell title="数据检查" eyebrow="学校教学管理" :nav-items="navItems" shell-variant="school-admin" natural-scroll>
     <section class="quality-page-heading">
       <div>
         <h2>学习数据检查</h2>

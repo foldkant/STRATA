@@ -1,0 +1,1175 @@
+{
+  "name": "mobile-390",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "account": "a10101",
+  "results": [
+    {
+      "route": "/app/student",
+      "finalUrl": "http://127.0.0.1:8010/app/student",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 2485
+        },
+        "horizontalOverflow": false,
+        "bodyText": "高一 高一10班\n\n学习首页\n公告通知\n班级与课程动态\n全部公告\n欢迎新加入的同学们\n\n欢迎新加入的同学们\n\n方劲 · 07/17 12:15\n课堂进行中\n图像编码与数据量估算课堂\n\n数据与计算 · 图像编码与数据量估算\n\n进入课堂\n待完成\n查看课程\n正在上课\n图像编码与数据量估算课堂\n首次使用\n请完成改密、选班和学习起点诊断。\n我的课程\n3\n当前班级可见\n学习事件\n580\n已记录行为\n近 7 天学习\n75\n行为事件\n公告\n1\n近期发布\n最近课程\n\n继续上次的学习，或进入新的课时。\n\n全部课程\n公共参与与责\n政治\n公共参与与责任担当\n\n方劲 · 1 个课时\n\n可学习\n数字化学习基\n信息科技\n数字化学习基础\n\n詹雅琪 · 1 个课时\n\n可学习\n数据与计算\n信息科技\n数据与计算\n\n方劲 · 2 个课时\n\n可学习",
+        "headings": [
+          "学习首页",
+          "待完成",
+          "最近课程",
+          "公共参与与责任担当",
+          "数字化学习基础",
+          "数据与计算"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 13,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "a",
+            "label": "全部公告",
+            "width": 48,
+            "height": 16
+          },
+          {
+            "tag": "a",
+            "label": "进入课堂",
+            "width": 98,
+            "height": 42
+          },
+          {
+            "tag": "a",
+            "label": "查看课程",
+            "width": 328,
+            "height": 19
+          },
+          {
+            "tag": "a",
+            "label": "全部课程",
+            "width": 366,
+            "height": 19
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": [
+        {
+          "route": "/app/student",
+          "kind": "request-failed",
+          "detail": "GET http://127.0.0.1:8010/api/v1/student/dashboard/ net::ERR_ABORTED"
+        }
+      ]
+    },
+    {
+      "route": "/app/student/onboarding",
+      "finalUrl": "http://127.0.0.1:8010/app/student/onboarding",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-onboarding.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 1561
+        },
+        "horizontalOverflow": false,
+        "bodyText": "完成基础设置后进入课程学习\n\n首次使用\n1\n修改密码\n待完成\n2\n选择班级\n已完成\n3\n完成学习起点诊断\n已完成\n修改密码\n\n学生密码允许使用课堂便捷密码，但首次登录必须自己修改一次。\n\n新密码\n确认密码\n保存密码\n选择班级\n\n如果学号还没有确定，可以先选班级，学号后续由学校管理员批量更新。\n\n我的班级\n高一 高一10班\n请选择班级\n高一 [SIM-AEE9EE85] 高一1班\n高一 [SIM-AEE9EE85] 高一2班\n高一 [SIM-AEE9EE85] 高一3班\n高一 [SIM-AEE9EE85] 高一4班\n高一 高一10班\n高一 高一11班\n高一 高一12班\n高一 高一13班\n高一 高一14班\n高一 高一15班\n高一 高一16班\n高一 高一17班\n高一 高一18班\n高一 高一19班\n高一 高一1班\n高一 高一20班\n高一 高一21班\n高一 高一22班\n高一 高一23班\n高一 高一24班\n高一 高一25班\n高一 高一26班\n高一 高一27班\n高一 高一28班\n高一 高一29班\n高一 高一2班\n高一 高一30班\n高一 高一3班\n高一 高一4班\n高一 高一5班\n高一 高一6班\n高一 高一7班\n高一 高一8班\n高一 高一9班\n保存班级\n学习起点诊断\n\n请按学校发布的实施批次完成学科学习诊断；学习支持问卷另行说明用途，不作为学科能力判断。\n\n信息科技\n暂无学习起点诊断实施安排\n信息科技（SIM-AEE9EE85）\n暂无学习起点诊断实施安排\n政治\n暂无学习起点诊断实施安排\n进入首页",
+        "headings": [
+          "首次使用",
+          "修改密码",
+          "选择班级",
+          "学习起点诊断"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 13,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "input",
+            "label": "6-32 位，不能包含空格",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "input",
+            "label": "再次输入新密码",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "保存密码",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "高一 高一10班",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "保存班级",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "进入首页",
+            "width": 98,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/courses",
+      "finalUrl": "http://127.0.0.1:8010/app/student/courses",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-courses.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 1298
+        },
+        "horizontalOverflow": false,
+        "bodyText": "按班级发布的学习内容\n\n我的课程\n公共参与与责任担\n政治 · 项目式学习\n公共参与与责任担当\n\n暂无课程简介。\n\n方劲\n1 个课时\n可学习\n数字化学习基础\n信息科技 · 项目式学习\n数字化学习基础\n\n暂无课程简介。\n\n詹雅琪\n1 个课时\n可学习\n数据与计算\n信息科技 · 项目式学习\n数据与计算\n\n暂无课程简介。\n\n方劲\n2 个课时\n可学习",
+        "headings": [
+          "我的课程",
+          "公共参与与责任担当",
+          "数字化学习基础",
+          "数据与计算"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 8,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "input",
+            "label": "搜索课程",
+            "width": 366,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/resources",
+      "finalUrl": "http://127.0.0.1:8010/app/student/resources",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-resources.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "课外拓展与优秀项目\n\n资源中心\n全部资源\n校内资源\n跨校资源\n学生项目\n查询\n\n当前没有可查看的资源。",
+        "headings": [
+          "资源中心"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 10,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "全部资源",
+            "width": 338,
+            "height": 34
+          },
+          {
+            "tag": "button",
+            "label": "校内资源",
+            "width": 338,
+            "height": 34
+          },
+          {
+            "tag": "button",
+            "label": "跨校资源",
+            "width": 338,
+            "height": 34
+          },
+          {
+            "tag": "button",
+            "label": "学生项目",
+            "width": 338,
+            "height": 34
+          },
+          {
+            "tag": "input",
+            "label": "搜索资源",
+            "width": 298,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "查询",
+            "width": 60,
+            "height": 40
+          }
+        ],
+        "emptyOrErrorText": [
+          "当前没有可查看的资源。"
+        ]
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/assessments",
+      "finalUrl": "http://127.0.0.1:8010/app/student/assessments",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-assessments.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "课程检测与阶段测试\n\n测试\n可作答\n0\n进行中\n0\n已完成\n1\n全部\n待完成\n已完成\n信息科技\n已结束\n信息科技学习情况检测\n\n请在规定时间内独立完成测试。\n\n试卷\n20 题 · 52 分\n时长\n10 分钟\n教师\n方劲\n截止\n教师手动控制\n已完成\n已完成",
+        "headings": [
+          "测试",
+          "信息科技学习情况检测"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 8,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "全部",
+            "width": 64,
+            "height": 38
+          },
+          {
+            "tag": "button",
+            "label": "待完成",
+            "width": 80,
+            "height": 38
+          },
+          {
+            "tag": "button",
+            "label": "已完成",
+            "width": 80,
+            "height": 38
+          },
+          {
+            "tag": "a",
+            "label": "已完成",
+            "width": 67,
+            "height": 40
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/profile",
+      "finalUrl": "http://127.0.0.1:8010/app/student/profile",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-profile.png",
+      "title": "学习档案 - STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 1233
+        },
+        "horizontalOverflow": false,
+        "bodyText": "高一 高一10班\n\n学习档案\n学科\n全部学科\n全部学科\n信息科技\n政治\n张\n中山市小榄中学\n张三\n\n高一 高一10班 · 账号 a10101 · 学号 待补充\n\n最近学习\n2026/07/25 01:36\n课程\n3\n当前可学习\n活跃天数\n13\n累计有学习记录\n学习记录\n580\n已采集过程行为\n完成测试\n1\n已完成评分\n提交作品\n0\n课堂附件作品\n学习概览\n课程学习\n测试与作品\n我的反馈\n课堂参与\n\n学习行为类型分布\n\n查看学习资源\n465\n浏览学习内容\n75\n进入课时学习\n29\n参与课堂交流\n5\n提交学习作答\n2",
+        "headings": [
+          "学习档案",
+          "张三",
+          "课堂参与"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 9,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "全部学科",
+            "width": 366,
+            "height": 40
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/notices",
+      "finalUrl": "http://127.0.0.1:8010/app/student/notices",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-notices.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "任课教师发布给本班的通知\n\n公告通知\n欢迎新加入的同学们\n方劲 · 2026/7/17 12:15:57\n\n欢迎新加入的同学们",
+        "headings": [
+          "公告通知",
+          "欢迎新加入的同学们"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 5,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "input",
+            "label": "搜索公告",
+            "width": 366,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/feedback",
+      "finalUrl": "http://127.0.0.1:8010/app/student/feedback",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-feedback.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 951
+        },
+        "horizontalOverflow": false,
+        "bodyText": "向任课教师提交问题或建议\n\n留言反馈\n提交留言\n\n教师回复后会在右侧列表中显示。\n\n任课教师\n方劲\n请选择教师\n方劲\n詹雅琪\n反馈类型\n学习问题\n学习问题\n账号问题\n资源问题\n建议反馈\n其他\n标题\n内容\n提交留言\n我的留言\n\n0 条记录\n\n暂无留言记录。",
+        "headings": [
+          "留言反馈",
+          "提交留言",
+          "我的留言"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 9,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "方劲",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "学习问题",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "input",
+            "label": "简要描述问题",
+            "width": 328,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "提交留言",
+            "width": 328,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": [
+          "暂无留言记录。"
+        ]
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/classroom/3",
+      "finalUrl": "http://127.0.0.1:8010/app/student/classroom/3",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-classroom-3.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 1838
+        },
+        "horizontalOverflow": false,
+        "bodyText": "进行中 · 已投放\n图像编码与数据量估算课堂\n\n方劲 · 数据与计算 · 图像编码与数据量估算\n\n开始时间：2026/7/11 00:45:12\n演示文稿1 (1)\n导入视频\n本环节任务\n导入\n已投放\n\n教师暂未填写学生可见说明。\n\n3\n题目\n2\n资源\n1\n活动\n\n点击按钮进入作答面板，题目和附件上传会在弹窗中完成。\n\n开始作答\n课堂评价5 星评价\n待完成\n\n自评 · 小组互评\n\n进入评价\n课堂控制\n1 个进行中\n签到\n已响应 1 人\n课堂签到\n\n请完成课堂签到。\n\n已签到\n签到成功 · 06:33:22\n小组合作第1组\n打开协作文档\n\n张三、李四\n\n张三李四\n0MB/ 20MB\n小组共享文件说明\n小组共享文件\n选择后立即上传，并计入小组共享空间。\n选择并上传\n\n小组共享区暂无文件。\n\n课堂聊天\n课堂实名交流\n全班聊天\n×\n全班\n老师\n\n暂无消息\n\n0/500 · Enter 发送，Shift+Enter 换行\n发送",
+        "headings": [
+          "导入"
+        ],
+        "nav": null,
+        "targetCount": 13,
+        "smallTargets": [
+          {
+            "tag": "button",
+            "label": "演示文稿1 (1)",
+            "width": 123,
+            "height": 34
+          },
+          {
+            "tag": "button",
+            "label": "导入视频",
+            "width": 86,
+            "height": 34
+          },
+          {
+            "tag": "button",
+            "label": "开始作答",
+            "width": 302,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "进入评价",
+            "width": 92,
+            "height": 34
+          },
+          {
+            "tag": "button",
+            "label": "已签到",
+            "width": 76,
+            "height": 34
+          },
+          {
+            "tag": "button",
+            "label": "打开协作文档",
+            "width": 328,
+            "height": 34
+          },
+          {
+            "tag": "input",
+            "label": "文件说明，可不填",
+            "width": 186,
+            "height": 27
+          },
+          {
+            "tag": "button",
+            "label": "关闭聊天",
+            "width": 36,
+            "height": 36
+          },
+          {
+            "tag": "button",
+            "label": "发送",
+            "width": 68,
+            "height": 36
+          }
+        ],
+        "emptyOrErrorText": [
+          "小组共享区暂无文件。"
+        ]
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/courses/16",
+      "finalUrl": "http://127.0.0.1:8010/app/student/courses/16",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-courses-16.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "课程学习\n\n课程详情\n公共参与与责任担\n政治 · 项目式学习\n公共参与与责任担当\n\n暂无课程简介。\n\n任课教师：方劲\n1 个课时\n2 个学习环节\n课时目录\n\n按教师设计的学习过程进入课时。\n\n10\n公共决策中的责任与参与\n该课时由课堂教学控制。\n等待教师创建课堂",
+        "headings": [
+          "课程详情",
+          "公共参与与责任担当",
+          "课时目录"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 5,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/courses/4",
+      "finalUrl": "http://127.0.0.1:8010/app/student/courses/4",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-courses-4.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "课程学习\n\n课程详情\n数字化学习基础\n信息科技 · 项目式学习\n数字化学习基础\n\n暂无课程简介。\n\n任课教师：詹雅琪\n1 个课时\n1 个学习环节\n课时目录\n\n按教师设计的学习过程进入课时。\n\n10\n第一节课\n该课时由课堂教学控制。\n课堂已结束",
+        "headings": [
+          "课程详情",
+          "数字化学习基础",
+          "课时目录"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 5,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/courses/3",
+      "finalUrl": "http://127.0.0.1:8010/app/student/courses/3",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-courses-3.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 954
+        },
+        "horizontalOverflow": false,
+        "bodyText": "课程学习\n\n课程详情\n数据与计算\n信息科技 · 项目式学习\n数据与计算\n\n暂无课程简介。\n\n任课教师：方劲\n2 个课时\n3 个学习环节\n课时目录\n\n按教师设计的学习过程进入课时。\n\n1\n图像编码与数据量估算\n进入课时查看学习资源、活动和任务。\n课堂进行中 · 已投放\n2\n数据表示方法探究\n该课时由课堂教学控制。\n等待教师创建课堂",
+        "headings": [
+          "课程详情",
+          "数据与计算",
+          "课时目录"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 6,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/pretests/1",
+      "finalUrl": "http://127.0.0.1:8010/app/student/pretests/1",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-pretests-1.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "了解各学习目标的起始情况，为后续学习支持与任务安排提供依据\n\n信息科技学习起点诊断（前测）\n返回\n信息科技\n\n当前学科暂无学习起点诊断实施安排。\n\n暂无可完成的学习起点诊断。",
+        "headings": [
+          "信息科技学习起点诊断（前测）",
+          "信息科技"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 5,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "返回",
+            "width": 366,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": [
+          "暂无可完成的学习起点诊断。"
+        ]
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/pretests/14",
+      "finalUrl": "http://127.0.0.1:8010/app/student/pretests/14",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-pretests-14.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "了解各学习目标的起始情况，为后续学习支持与任务安排提供依据\n\n信息科技（SIM-AEE9EE85）学习起点诊断（前测）\n返回\n信息科技（SIM-AEE9EE85）\n\n当前学科暂无学习起点诊断实施安排。\n\n暂无可完成的学习起点诊断。",
+        "headings": [
+          "信息科技（SIM-AEE9EE85）学习起点诊断（前测）",
+          "信息科技（SIM-AEE9EE85）"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 5,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "返回",
+            "width": 366,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": [
+          "暂无可完成的学习起点诊断。"
+        ]
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/pretests/2",
+      "finalUrl": "http://127.0.0.1:8010/app/student/pretests/2",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-pretests-2.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 844
+        },
+        "horizontalOverflow": false,
+        "bodyText": "了解各学习目标的起始情况，为后续学习支持与任务安排提供依据\n\n政治学习起点诊断（前测）\n返回\n政治\n\n当前学科暂无学习起点诊断实施安排。\n\n暂无可完成的学习起点诊断。",
+        "headings": [
+          "政治学习起点诊断（前测）",
+          "政治"
+        ],
+        "nav": {
+          "display": "none",
+          "visible": false,
+          "linkCount": 6,
+          "togglePresent": true,
+          "toggleVisible": true
+        },
+        "targetCount": 5,
+        "smallTargets": [
+          {
+            "tag": "a",
+            "label": "跳到主要内容",
+            "width": 124,
+            "height": 41
+          },
+          {
+            "tag": "a",
+            "label": "SSTRATA数智教学系统",
+            "width": 214,
+            "height": 40
+          },
+          {
+            "tag": "button",
+            "label": "导航",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "退出",
+            "width": 66,
+            "height": 42
+          },
+          {
+            "tag": "button",
+            "label": "返回",
+            "width": 366,
+            "height": 42
+          }
+        ],
+        "emptyOrErrorText": [
+          "暂无可完成的学习起点诊断。"
+        ]
+      },
+      "events": []
+    },
+    {
+      "route": "/app/student/assessments/3",
+      "finalUrl": "http://127.0.0.1:8010/app/student/assessments/3",
+      "screenshot": "E:\\newproject\\xlzxedu\\docs\\ui-self-check\\student-before\\mobile-390\\student-assessments-3.png",
+      "title": "STRATA数智教学系统",
+      "navigationError": "",
+      "metrics": {
+        "viewport": {
+          "width": 390,
+          "height": 844
+        },
+        "document": {
+          "width": 390,
+          "height": 1004
+        },
+        "horizontalOverflow": false,
+        "bodyText": "答题卡\n20 / 20\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n已作答\n未作答\n已交卷\n信息科技学习情况检测\n\n测试已完成。\n\n返回测试列表",
+        "headings": [
+          "信息科技学习情况检测"
+        ],
+        "nav": null,
+        "targetCount": 22,
+        "smallTargets": [
+          {
+            "tag": "button",
+            "label": "返回",
+            "width": 60,
+            "height": 40
+          }
+        ],
+        "emptyOrErrorText": []
+      },
+      "events": []
+    }
+  ],
+  "interceptedWrites": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8010/api/v1/student/classroom/3/resources/2/opened/"
+    }
+  ],
+  "allEvents": [
+    {
+      "route": "/app/student",
+      "kind": "request-failed",
+      "detail": "GET http://127.0.0.1:8010/api/v1/student/dashboard/ net::ERR_ABORTED"
+    }
+  ]
+}

@@ -8,7 +8,7 @@ from functools import wraps
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Count, Prefetch, Q
 from django.http import FileResponse, HttpResponse, JsonResponse
 from django.urls import reverse
 from rest_framework.decorators import api_view, parser_classes, permission_classes
@@ -57,6 +57,7 @@ from .processing import (
     dispatch_processing_job,
     processing_job_summary,
     reconcile_stale_processing_jobs,
+    resume_processing_job,
     request_job_cancel,
     retry_processing_job,
 )
@@ -396,6 +397,9 @@ def _standard_row(
     request, standard: CurriculumStandard, *, detail: bool = False
 ) -> dict:
     current = standard.current_version
+    version_count = getattr(standard, "version_count", None)
+    if version_count is None:
+        version_count = len(standard.versions.all())
     row = {
         "id": standard.id,
         "title": standard.title,
@@ -407,9 +411,9 @@ def _standard_row(
         "subject_name": standard.subject_name,
         "is_active": standard.is_active,
         "current_version": (
-            _version_row(request, current, include_nodes=True) if current else None
+            _version_row(request, current) if current else None
         ),
-        "version_count": len(standard.versions.all()),
+        "version_count": version_count,
         "created_at": standard.created_at,
         "updated_at": standard.updated_at,
     }
@@ -429,6 +433,46 @@ def _standard_row(
             for audit in standard.audit_logs.select_related("actor").all()
         ]
     return row
+
+
+def _version_summary_row(version: CurriculumStandardVersion | None) -> dict | None:
+    """Return only the fields needed to render the standards directory."""
+    if version is None:
+        return None
+    return {
+        "id": version.id,
+        "standard": version.source_id,
+        "version_label": version.version_label,
+        "publication_year": version.publication_year,
+        "effective_year": version.effective_year,
+        "title": version.official_title,
+        "status": version.status,
+        "status_label": version.get_status_display(),
+        "content_hash": version.content_hash,
+        "pdf_sha256": version.pdf_sha256,
+        "extraction_status": version.extraction_status,
+        "extraction_status_label": version.get_extraction_status_display(),
+        "created_at": version.created_at,
+        "published_at": version.published_at,
+    }
+
+
+def _standard_summary_row(standard: CurriculumStandard) -> dict:
+    return {
+        "id": standard.id,
+        "title": standard.title,
+        "document_type": standard.document_type,
+        "document_type_label": standard.get_document_type_display(),
+        "school_stage": standard.school_stage,
+        "school_stage_label": standard.get_school_stage_display(),
+        "subject_code": standard.subject_code,
+        "subject_name": standard.subject_name,
+        "is_active": standard.is_active,
+        "current_version": _version_summary_row(standard.current_version),
+        "version_count": standard.version_count,
+        "created_at": standard.created_at,
+        "updated_at": standard.updated_at,
+    }
 
 
 def _page_summaries_prefetch() -> Prefetch:
@@ -513,7 +557,11 @@ def _subject_name_aliases(value: str) -> set[str]:
 @atomic_mutation
 def super_admin_standards(request):
     if request.method == "GET":
-        rows = _standards_queryset()
+        rows = (
+            CurriculumStandard.objects.select_related("current_version")
+            .annotate(version_count=Count("versions", distinct=True))
+            .order_by("school_stage", "document_type", "subject_name", "title", "id")
+        )
         query = str(request.query_params.get("q") or "").strip()
         stage = str(request.query_params.get("school_stage") or "").strip()
         document_type = str(request.query_params.get("document_type") or "").strip()
@@ -530,9 +578,45 @@ def super_admin_standards(request):
             rows = rows.filter(document_type=document_type)
         if subject_code:
             rows = rows.filter(subject_code=subject_code)
+        try:
+            page = max(1, int(request.query_params.get("page") or 1))
+            page_size = min(
+                50, max(1, int(request.query_params.get("page_size") or 8))
+            )
+        except (TypeError, ValueError):
+            return fail(
+                "分页条件不正确。",
+                errors={"page": ["页码和每页数量必须是整数。"]},
+                status=400,
+            )
+        summary = rows.aggregate(
+            total=Count("id"),
+            published=Count(
+                "id",
+                filter=Q(
+                    is_active=True,
+                    current_version__status=CurriculumVersionStatus.PUBLISHED,
+                ),
+            ),
+            k1_k9=Count("id", filter=Q(school_stage="k1_k9")),
+            k10_k12=Count("id", filter=Q(school_stage="k10_k12")),
+        )
+        total = int(summary["total"] or 0)
+        page_count = max(1, (total + page_size - 1) // page_size)
+        if page > page_count:
+            page = page_count
+        offset = (page - 1) * page_size
+        page_rows = list(rows[offset : offset + page_size])
         return ok(
             {
-                "standards": [_standard_row(request, item) for item in rows],
+                "standards": [_standard_summary_row(item) for item in page_rows],
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "page_count": page_count,
+                    "total": total,
+                },
+                "summary": summary,
                 "school_stages": [
                     {"value": value, "label": label}
                     for value, label in CurriculumStandard._meta.get_field(
@@ -1710,6 +1794,10 @@ def _processing_job_row(job: CurriculumProcessingJob) -> dict:
             }
             and job.version.status == CurriculumVersionStatus.DRAFT
         ),
+        "can_resume": (
+            job.status == CurriculumProcessingJobStatus.QUEUED
+            and job.version.status == CurriculumVersionStatus.DRAFT
+        ),
         "can_cancel": job.status
         in {
             CurriculumProcessingJobStatus.QUEUED,
@@ -1861,3 +1949,23 @@ def super_admin_retry_processing_job(request, pk: int):
     else:
         message = "重试任务已创建并进入队列。"
     return ok(_processing_job_row(retry_job), message, status=202 if created else 200)
+
+
+@api_view(["POST"])
+@permission_classes([IsSuperAdmin])
+def super_admin_resume_processing_job(request, pk: int):
+    job = _processing_job_queryset().filter(pk=pk).first()
+    if not job:
+        return fail("课程标准后台任务不存在。", status=404)
+    try:
+        job = resume_processing_job(job, actor=request.user)
+    except DjangoValidationError as exc:
+        return fail("后台任务不能继续处理。", errors=_errors(exc), status=409)
+    job = _processing_job_queryset().get(pk=job.pk)
+    if job.status == CurriculumProcessingJobStatus.FAILED:
+        return ok(_processing_job_row(job), job.error_message, status=202)
+    return ok(
+        _processing_job_row(job),
+        "任务已重新发送至后台队列，将从已保存的状态继续处理。",
+        status=202,
+    )

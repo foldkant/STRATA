@@ -358,13 +358,13 @@ onMounted(load)
 </script>
 
 <template>
-  <AppShell title="教师管理" eyebrow="学校管理员" :nav-items="navItems">
+  <AppShell title="教师管理" eyebrow="学校教学管理" :nav-items="navItems" shell-variant="school-admin">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <ManagementPage
       v-model:query="query"
       v-model:status="status"
       title="教师管理"
-      description="维护本校教师账号。教师允许课堂简易密码；删除前必须先停用。"
+      description="维护本校教师账号和基本信息。删除教师账号前需先停用，避免影响已有课程和课堂记录。"
       :total="total"
       :page="page"
       :page-size="pageSize"

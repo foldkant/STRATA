@@ -50,6 +50,11 @@ urlpatterns = [
         name="api_super_admin_curriculum_processing_job_retry",
     ),
     path(
+        "super-admin/curriculum-processing-jobs/<int:pk>/resume/",
+        views.super_admin_resume_processing_job,
+        name="api_super_admin_curriculum_processing_job_resume",
+    ),
+    path(
         "super-admin/curriculum-standard-versions/<int:pk>/nodes/",
         views.super_admin_version_nodes,
         name="api_super_admin_curriculum_standard_version_nodes",

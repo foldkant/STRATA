@@ -5,19 +5,28 @@ from datetime import date
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
 from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework.decorators import api_view, permission_classes
 
 from api.permissions import IsTeacher
 from api.responses import fail, ok
 from api.services import write_audit
 from courses.models import Course, CourseClass
-from learning.models import StratificationDecision, StudentMasterySnapshot, TestAssessment
+from learning.models import (
+    LearningContentRecommendation,
+    LearningSupportRecommendation,
+    StratificationDecision,
+    StudentSubjectBand,
+    StudentLearningTargetStateVersion,
+    StudentMasterySnapshot,
+    TestAssessment,
+)
 from learning.services.bands import (
     apply_student_subject_band,
     resolve_student_band,
+    validate_content_band_evidence,
 )
 from learning_analytics.models import StudentLearningSummary
 from learning_analytics.services.learning_summaries import (
@@ -48,7 +57,9 @@ REVIEW_STATUS_MAP = {
     "adjust": StratificationDecision.Status.ADJUSTED,
     "defer": StratificationDecision.Status.DEFERRED,
 }
-STRATIFICATION_BULK_LIMIT = 200
+# Keep the write limit aligned with the suggestion workspace read limit so
+# “处理当前范围全部建议” never degrades into a page-only action.
+STRATIFICATION_BULK_LIMIT = 1000
 
 
 class DecisionReviewError(Exception):
@@ -77,6 +88,83 @@ def _parse_review_payload(decision, data, *, allow_adjust: bool = True):
     is_content_band = (
         decision.decision_kind == StratificationDecision.DecisionKind.CONTENT_BAND
     )
+    recommendation = (
+        LearningContentRecommendation.objects.select_related("target_state")
+        .filter(source_decision=decision)
+        .first()
+        if is_content_band
+        else LearningSupportRecommendation.objects.select_related(
+            "target_state", "source_summary"
+        )
+        .filter(source_decision=decision)
+        .first()
+    )
+    target_state = recommendation.target_state if recommendation else None
+    confirms_recommendation = action in (
+        {"accept", "adjust"} if is_content_band else {"accept", "keep"}
+    )
+    if is_content_band and action in {"accept", "adjust"}:
+        try:
+            recommendation = validate_content_band_evidence(decision=decision)
+        except ValidationError as exc:
+            raise DecisionReviewError(str(exc.messages[0]), status=409) from exc
+        target_state = recommendation.target_state
+    if confirms_recommendation and target_state is not None:
+        if target_state.valid_until is None:
+            raise DecisionReviewError(
+                "该建议的学习材料未设置有效期，请先重新汇总或补充材料。",
+                status=409,
+            )
+        if target_state.valid_until <= timezone.now():
+            raise DecisionReviewError(
+                "该建议所依据的学习材料已超过有效期，请先重新汇总或补充材料。",
+                status=409,
+            )
+        if is_content_band:
+            target_states = list(
+                recommendation.target_states.order_by("content_recommendation_links__sort_order")
+            )
+            if not target_states:
+                raise DecisionReviewError(
+                    "该学习内容层级建议没有目标级学习依据，不能采纳。",
+                    status=409,
+                )
+            if any(
+                state.valid_until is None or state.valid_until <= timezone.now()
+                for state in target_states
+            ):
+                raise DecisionReviewError(
+                    "该建议包含已过期或未设置有效期的目标级材料，请重新计算后再处理。",
+                    status=409,
+                )
+    elif confirms_recommendation and recommendation is not None and not is_content_band:
+        evidence = recommendation.evidence_snapshot or {}
+        valid_until = evidence.get("valid_until")
+        if isinstance(valid_until, str):
+            valid_until = parse_datetime(valid_until)
+        if valid_until is None:
+            raise DecisionReviewError(
+                "该学习支持建议未冻结材料有效期，请先重新汇总材料。",
+                status=409,
+            )
+        if timezone.is_naive(valid_until):
+            valid_until = timezone.make_aware(
+                valid_until, timezone.get_current_timezone()
+            )
+        if valid_until <= timezone.now():
+            raise DecisionReviewError(
+                "该学习支持建议所依据的材料已超过有效期，请先重新汇总材料。",
+                status=409,
+            )
+        if (
+            recommendation.source_summary_id
+            and recommendation.source_summary.source_hash
+            != recommendation.source_summary_hash
+        ):
+            raise DecisionReviewError(
+                "该学习支持建议的材料版本校验失败，请重新汇总材料。",
+                status=409,
+            )
     if action == "adjust" and not is_content_band:
         raise DecisionReviewError("学习支持建议不能直接调整层级，请使用手动调整。")
 
@@ -143,12 +231,48 @@ def _apply_review(decision, review, *, actor):
         ]
     )
     if review["is_content_band"]:
+        recommendation = LearningContentRecommendation.objects.filter(
+            source_decision=decision
+        ).first()
+        if recommendation:
+            recommendation.status = {
+                "accept": LearningContentRecommendation.Status.CONFIRMED,
+                "keep": LearningContentRecommendation.Status.KEPT,
+                "adjust": LearningContentRecommendation.Status.ADJUSTED,
+                "defer": LearningContentRecommendation.Status.NOT_RECOMMENDED,
+            }.get(review["action"], recommendation.status)
+            recommendation.teacher_selected_band = review["selected_layer"]
+            recommendation.reviewed_by = actor
+            recommendation.reviewed_at = decision.reviewed_at
+            recommendation.save(
+                update_fields=[
+                    "status",
+                    "teacher_selected_band",
+                    "reviewed_by",
+                    "reviewed_at",
+                ]
+            )
         record_band_transition_review(
             decision=decision,
             action=review["action"],
             final_band=review["selected_layer"],
             actor=actor,
         )
+    else:
+        recommendation = LearningSupportRecommendation.objects.filter(
+            source_decision=decision
+        ).first()
+        if recommendation:
+            recommendation.status = {
+                "accept": LearningSupportRecommendation.Status.CONFIRMED,
+                "keep": LearningSupportRecommendation.Status.CONFIRMED,
+                "defer": LearningSupportRecommendation.Status.DEFERRED,
+            }.get(review["action"], recommendation.status)
+            recommendation.reviewed_by = actor
+            recommendation.reviewed_at = decision.reviewed_at
+            recommendation.save(
+                update_fields=["status", "reviewed_by", "reviewed_at"]
+            )
 
 
 def _teacher_class_ids(user):
@@ -225,6 +349,25 @@ def _mastery_row(snapshot: StudentMasterySnapshot) -> dict:
         "answered_ratio": snapshot.answered_ratio,
         "knowledge_results": snapshot.knowledge_results,
         "comparability_evidence": snapshot.comparability_evidence,
+        "legacy_unmapped": snapshot.legacy_unmapped,
+        "target_results": [
+            {
+                "id": result.id,
+                "learning_target_version_id": result.learning_target_version_id,
+                "learning_target_code": result.learning_target_version.code,
+                "learning_target_name": result.learning_target_version.title,
+                "target_version_hash": result.learning_target_version.content_hash,
+                "data_status": result.data_status,
+                "data_status_label": result.get_data_status_display(),
+                "mastery_score": result.mastery_score,
+                "measurement_error": result.measurement_error,
+                "item_count": result.item_count,
+                "answered_item_count": result.answered_item_count,
+                "evidence_coverage": result.evidence_coverage,
+                "content_hash": result.content_hash,
+            }
+            for result in snapshot.target_results.all()
+        ],
         "observed_at": snapshot.observed_at,
     }
 
@@ -264,16 +407,25 @@ def _rate_for_export(value, *, empty_text="数据不足"):
     return f"{round(value * 100, 1)}%"
 
 
-def _decision_row(decision):
+def _decision_row(decision, *, resolved_layer=None):
     profile = decision.student.student_profile
     current_layer = (
-        resolve_student_band(
+        resolved_layer
+        if resolved_layer is not None
+        else resolve_student_band(
             student=decision.student,
             subject=decision.subject,
             course=decision.course,
         )
         if decision.subject_id
         else None
+    )
+    content_recommendation = getattr(decision, "content_recommendation", None)
+    support_recommendation = getattr(decision, "support_recommendation", None)
+    recommendation = (
+        content_recommendation
+        if decision.decision_kind == StratificationDecision.DecisionKind.CONTENT_BAND
+        else support_recommendation
     )
     return {
         "id": decision.id,
@@ -301,7 +453,7 @@ def _decision_row(decision):
         "previous_layer": decision.previous_layer,
         "current_layer": current_layer or "",
         "current_layer_label": (
-            dict(StudentProfile.Layer.choices).get(current_layer, "")
+            dict(StudentSubjectBand.Band.choices).get(current_layer, "")
         ),
         "suggested_layer": decision.suggested_layer,
         "confidence": decision.confidence,
@@ -314,6 +466,66 @@ def _decision_row(decision):
         "boundary_band": decision.boundary_band,
         "policy_version": decision.policy_version,
         "abstain_reason": decision.abstain_reason,
+        "recommendation_status": (
+            recommendation.status
+            if recommendation
+            else "not_recommended"
+            if decision.decision_kind == StratificationDecision.DecisionKind.CONTENT_BAND
+            and not decision.suggested_layer
+            else ""
+        ),
+        "recommendation_status_label": (
+            recommendation.get_status_display()
+            if recommendation
+            else "暂不建议"
+            if decision.decision_kind == StratificationDecision.DecisionKind.CONTENT_BAND
+            and not decision.suggested_layer
+            else ""
+        ),
+        "target_state": (
+            {
+                "id": recommendation.target_state_id,
+                "learning_target_code": recommendation.target_state.learning_target_code,
+                "learning_target_name": recommendation.target_state.learning_target_name,
+                "evidence_status": recommendation.target_state.evidence_status,
+                "evidence_status_label": recommendation.target_state.get_evidence_status_display(),
+                "evidence_coverage": recommendation.target_state.evidence_coverage,
+                "uncertainty": recommendation.target_state.uncertainty,
+                "valid_until": recommendation.target_state.valid_until,
+            }
+            if recommendation and recommendation.target_state_id
+            else None
+        ),
+        "target_states": (
+            [
+                {
+                    "id": link.target_state_id,
+                    "learning_target_version_id": link.target_state.learning_target_version_id,
+                    "learning_target_code": link.target_state.learning_target_code,
+                    "learning_target_name": link.target_state.learning_target_name,
+                    "evidence_status": link.target_state.evidence_status,
+                    "evidence_coverage": link.target_state.evidence_coverage,
+                    "estimate": link.target_state.estimate,
+                    "uncertainty": link.target_state.uncertainty,
+                    "valid_until": link.target_state.valid_until,
+                    "content_hash": link.target_state.content_hash,
+                }
+                for link in content_recommendation.target_state_links.all()
+            ]
+            if content_recommendation
+            else []
+        ),
+        "support_evidence": (
+            {
+                "source_summary_id": support_recommendation.source_summary_id,
+                "source_summary_hash": support_recommendation.source_summary_hash,
+                "source_hash": support_recommendation.source_hash,
+                "evidence_snapshot": support_recommendation.evidence_snapshot,
+                "learning_target_estimate": None,
+            }
+            if support_recommendation
+            else None
+        ),
         "transition_checks": decision.transition_checks,
         "mastery_snapshot_id": decision.mastery_snapshot_id,
         "rule_version": decision.rule_version,
@@ -355,8 +567,70 @@ def _visible_stratification_decisions(user, class_ids):
             "subject",
             "course",
             "reviewed_by",
+            "content_recommendation__target_state",
+            "support_recommendation__target_state",
+            "support_recommendation__source_summary",
+        )
+        .prefetch_related(
+            "content_recommendation__target_state_links__target_state"
         )
     )
+
+
+def _target_state_row(state):
+    latest_content = state.content_recommendations.order_by("-created_at", "-id").first()
+    latest_support = state.support_recommendations.order_by("-created_at", "-id").first()
+    return {
+        "id": state.id,
+        "student": {
+            "id": state.student_id,
+            "username": state.student.username,
+            "display_name": state.student.display_name or state.student.username,
+            "student_no": state.student.student_profile.student_no,
+        },
+        "class_group": {
+            "id": state.class_group_id,
+            "name": state.class_group.name,
+            "grade": state.class_group.grade,
+        },
+        "subject": {"id": state.subject_id, "name": state.subject.name},
+        "course": (
+            {"id": state.course_id, "title": state.course.title}
+            if state.course_id
+            else None
+        ),
+        "learning_target_code": state.learning_target_code,
+        "learning_target_name": state.learning_target_name,
+        "learning_target_version_id": state.learning_target_version_id,
+        "legacy_unmapped": state.legacy_unmapped,
+        "evidence_status": state.evidence_status,
+        "evidence_status_label": state.get_evidence_status_display(),
+        "evidence_coverage": state.evidence_coverage,
+        "estimate": state.estimate,
+        "uncertainty": state.uncertainty,
+        "is_initial_diagnostic": state.is_initial_diagnostic,
+        "observed_at": state.observed_at,
+        "valid_until": state.valid_until,
+        "content_recommendation": (
+            {
+                "status": latest_content.status,
+                "status_label": latest_content.get_status_display(),
+                "suggested_band": latest_content.suggested_band,
+            }
+            if latest_content
+            else None
+        ),
+        "support_recommendation": (
+            {
+                "status": latest_support.status,
+                "status_label": latest_support.get_status_display(),
+                "priority": latest_support.priority,
+                "suggestion": latest_support.suggestion,
+            }
+            if latest_support
+            else None
+        ),
+    }
 
 
 def _stratification_scope(user, query_params):
@@ -423,6 +697,29 @@ def _stratification_overview_data(user, query_params):
         )
     )
     student_ids = [profile.user_id for profile in profiles]
+    now = timezone.now()
+    active_bands = []
+    if course and student_ids:
+        active_bands = list(
+            StudentSubjectBand.objects.filter(
+                student_id__in=student_ids,
+                subject=course.subject,
+                valid_from__lte=now,
+            )
+            .filter(Q(valid_until__isnull=True) | Q(valid_until__gt=now))
+            .filter(Q(course=course) | Q(course__isnull=True))
+            .annotate(
+                course_priority=Case(
+                    When(course=course, then=Value(0)),
+                    default=Value(1),
+                    output_field=IntegerField(),
+                )
+            )
+            .order_by("student_id", "course_priority", "-valid_from", "-id")
+        )
+    active_band_by_student = {}
+    for band in active_bands:
+        active_band_by_student.setdefault(band.student_id, band.band)
     decisions = _visible_stratification_decisions(user, class_ids).filter(
         student_id__in=student_ids
     )
@@ -461,7 +758,9 @@ def _stratification_overview_data(user, query_params):
             summary.course if summary else None
         )
         layer = (
-            resolve_student_band(
+            active_band_by_student.get(profile.user_id)
+            if course and band_course and band_course.id == course.id
+            else resolve_student_band(
                 student=profile.user,
                 subject=band_course.subject,
                 course=band_course,
@@ -503,7 +802,7 @@ def _stratification_overview_data(user, query_params):
                 },
                 "current_layer": layer or "",
                 "current_layer_label": (
-                    dict(StudentProfile.Layer.choices).get(layer, "未分层")
+                    dict(StudentSubjectBand.Band.choices).get(layer, "未分层")
                 ),
                 "learning": (
                     {
@@ -520,7 +819,11 @@ def _stratification_overview_data(user, query_params):
                     if summary
                     else None
                 ),
-                "latest_decision": _decision_row(decision) if decision else None,
+                "latest_decision": (
+                    _decision_row(decision, resolved_layer=layer or "")
+                    if decision
+                    else None
+                ),
             }
         )
 
@@ -810,6 +1113,69 @@ def stratification_suggestions(request):
 
 @api_view(["GET"])
 @permission_classes([IsTeacher])
+def learning_target_states(request):
+    class_ids = set(_teacher_class_ids(request.user))
+    teaching_scopes = list(
+        CourseClass.objects.filter(
+            course__teacher=request.user,
+            course__subject__school=request.user.school,
+            class_group_id__in=class_ids,
+        ).values_list("class_group_id", "course_id", "course__subject_id")
+    )
+    visible_class_ids = {class_group_id for class_group_id, _course_id, _subject_id in teaching_scopes}
+    visible_course_ids = {course_id for _class_group_id, course_id, _subject_id in teaching_scopes}
+    state_scope = Q(pk__in=[])
+    subject_scopes = set()
+    for class_group_id, course_id, subject_id in teaching_scopes:
+        state_scope |= Q(
+            class_group_id=class_group_id,
+            subject_id=subject_id,
+            course_id=course_id,
+        )
+        subject_scopes.add((class_group_id, subject_id))
+    for class_group_id, subject_id in subject_scopes:
+        state_scope |= Q(
+            class_group_id=class_group_id,
+            subject_id=subject_id,
+            course__isnull=True,
+        )
+
+    rows = StudentLearningTargetStateVersion.objects.filter(
+        state_scope,
+        school=request.user.school,
+    ).select_related(
+        "student__student_profile",
+        "class_group",
+        "subject",
+        "course",
+    ).prefetch_related("content_recommendations", "support_recommendations")
+    if request.query_params.get("class_group"):
+        try:
+            class_group_id = int(request.query_params["class_group"])
+        except (TypeError, ValueError):
+            return fail("班级筛选条件不正确。", status=400)
+        if class_group_id not in visible_class_ids:
+            return fail("学习目标情况不存在或无权查看。", status=404)
+        rows = rows.filter(class_group_id=class_group_id)
+    if request.query_params.get("course"):
+        try:
+            course_id = int(request.query_params["course"])
+        except (TypeError, ValueError):
+            return fail("课程筛选条件不正确。", status=400)
+        if course_id not in visible_course_ids:
+            return fail("学习目标情况不存在或无权查看。", status=404)
+        rows = rows.filter(course_id=course_id)
+    if request.query_params.get("student"):
+        rows = rows.filter(student_id=request.query_params["student"])
+    if request.query_params.get("learning_target_code"):
+        rows = rows.filter(
+            learning_target_code=request.query_params["learning_target_code"]
+        )
+    return ok([_target_state_row(row) for row in rows[:1000]])
+
+
+@api_view(["GET"])
+@permission_classes([IsTeacher])
 def mastery_snapshots(request):
     class_ids = _teacher_class_ids(request.user)
     rows = (
@@ -821,6 +1187,7 @@ def mastery_snapshots(request):
         .select_related(
             "student", "class_group", "subject", "course", "assessment"
         )
+        .prefetch_related("target_results__learning_target_version")
         .order_by("-observed_at", "class_group__name", "student__username")
     )
     if request.query_params.get("class_group"):
@@ -979,8 +1346,11 @@ def manually_adjust_stratification(request):
     try:
         student_id = int(request.data.get("student") or 0)
         course_id = int(request.data.get("course") or 0)
+        source_decision_id = int(request.data.get("source_decision") or 0)
     except (TypeError, ValueError):
-        return fail("学生或课程参数不正确。", status=400)
+        return fail("学生、课程或依据建议参数不正确。", status=400)
+    if source_decision_id <= 0:
+        return fail("再次调整必须选择一条可追溯的学习内容层级依据。", status=400)
     selected_layer = str(request.data.get("layer") or "").strip().upper()
     if selected_layer not in {"A", "B", "C"}:
         return fail("请选择 A、B 或 C。", status=400)
@@ -1016,6 +1386,31 @@ def manually_adjust_stratification(request):
     if profile is None or course is None:
         return fail("学生或课程不存在，或无权调整。", status=404)
 
+    source_decision = (
+        _visible_stratification_decisions(request.user, class_ids)
+        .select_related("student", "class_group", "subject", "course")
+        .filter(
+            pk=source_decision_id,
+            student_id=profile.user_id,
+            course=course,
+            decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
+        )
+        .first()
+    )
+    if source_decision is None:
+        return fail("学习内容层级依据不存在，或不在当前任教范围内。", status=404)
+    try:
+        source_recommendation = validate_content_band_evidence(
+            decision=source_decision,
+            require_pending_recommendation=False,
+        )
+    except ValidationError as exc:
+        return fail(str(exc.messages[0]), status=409)
+    source_links = list(
+        source_recommendation.target_state_links.select_related("target_state")
+        .order_by("sort_order", "id")
+    )
+
     current_layer = resolve_student_band(
         student=profile.user,
         subject=course.subject,
@@ -1032,21 +1427,27 @@ def manually_adjust_stratification(request):
             subject=course.subject,
             course=course,
             previous_layer=current_layer,
-            suggested_layer="",
+            suggested_layer=selected_layer,
             confidence=0,
             reasons=[REVIEW_REASON_LABELS[reason_code]],
             missing_data=[],
             learning_summary={
                 "source": "teacher_manual_adjustment",
+                "source_decision_id": source_decision.id,
+                "source_recommendation_id": source_recommendation.id,
+                "target_state_ids": [link.target_state_id for link in source_links],
                 "reason_code": reason_code,
                 "confidence_status": "not_applicable",
             },
             support_suggestion="",
             decision_kind=StratificationDecision.DecisionKind.CONTENT_BAND,
-            policy_version="teacher-manual-v1",
+            policy_version=source_decision.policy_version,
+            policy=source_decision.policy,
+            mastery_snapshot=source_decision.mastery_snapshot,
             transition_checks={
                 "manual_override": True,
                 "reason_code": reason_code,
+                "source_decision_id": source_decision.id,
             },
             window_start=now,
             window_end=now,
@@ -1058,11 +1459,40 @@ def manually_adjust_stratification(request):
             reviewed_by=request.user,
             reviewed_at=now,
         )
+        recommendation = LearningContentRecommendation.objects.create(
+            source_decision=decision,
+            target_state=source_links[0].target_state,
+            suggested_band=selected_layer,
+            status=LearningContentRecommendation.Status.PENDING,
+            rationale=[
+                REVIEW_REASON_LABELS[reason_code],
+                f"沿用已复核建议 {source_decision.id} 的目标级材料。",
+            ],
+            evidence_coverage=source_recommendation.evidence_coverage,
+            uncertainty=source_recommendation.uncertainty,
+        )
+        for link in source_links:
+            recommendation.target_state_links.create(
+                target_state=link.target_state,
+                sort_order=link.sort_order,
+            )
         apply_student_subject_band(
             decision=decision,
             selected_band=selected_layer,
             confirmed_by=request.user,
             effective_at=now,
+        )
+        recommendation.status = LearningContentRecommendation.Status.ADJUSTED
+        recommendation.teacher_selected_band = selected_layer
+        recommendation.reviewed_by = request.user
+        recommendation.reviewed_at = now
+        recommendation.save(
+            update_fields=[
+                "status",
+                "teacher_selected_band",
+                "reviewed_by",
+                "reviewed_at",
+            ]
         )
         record_band_transition_review(
             decision=decision,
@@ -1079,6 +1509,7 @@ def manually_adjust_stratification(request):
         detail={
             "student_id": profile.user_id,
             "course_id": course.id,
+            "source_decision_id": source_decision.id,
             "previous_layer": current_layer,
             "selected_layer": selected_layer,
             "reason_code": reason_code,

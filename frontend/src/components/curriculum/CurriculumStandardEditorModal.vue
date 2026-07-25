@@ -53,7 +53,7 @@ async function save() {
     if (error instanceof ApiError) {
       notice.value = error.message
       errors.value = error.errors
-    } else notice.value = '课程标准元数据保存失败。'
+    } else notice.value = '课程标准基本信息保存失败。'
   } finally {
     saving.value = false
   }
@@ -65,8 +65,8 @@ async function save() {
     <section v-curriculum-modal-focus="() => emit('close')" class="entity-modal curriculum-standard-editor" role="dialog" aria-modal="true" aria-labelledby="curriculum-standard-editor-title">
       <header class="modal-header">
         <div>
-          <h2 id="curriculum-standard-editor-title">{{ draft ? '编辑课程标准元数据' : '登记课程标准' }}</h2>
-          <p>登记文件身份和适用范围；正式内容通过不可变版本管理。</p>
+          <h2 id="curriculum-standard-editor-title">{{ draft ? '编辑课程标准基本信息' : '登记课程标准' }}</h2>
+          <p>登记课程标准名称、学段和学科信息。PDF 原文及其修订内容通过版本管理。</p>
         </div>
         <button class="icon-button" type="button" aria-label="关闭" data-modal-initial-focus @click="emit('close')">×</button>
       </header>
@@ -95,7 +95,7 @@ async function save() {
         <label>
           <span>学科代码<b v-if="form.document_type === 'subject_standard'">*</b></span>
           <input v-model.trim="form.subject_code" maxlength="64" placeholder="例如 information_technology" />
-          <small>代码用于课程和评价方案的稳定关联，保存后不建议随意更改。</small>
+          <small>学科代码用于准确关联课程和评价方案，保存后请勿随意更改。</small>
           <small v-if="errors.subject_code" class="field-error">{{ errors.subject_code[0] }}</small>
         </label>
         <label>

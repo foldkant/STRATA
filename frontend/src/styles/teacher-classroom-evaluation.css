@@ -1,0 +1,620 @@
+/* Classroom evaluation is a teacher-only working surface.
+   Keep its layout dependency beside the classroom feature instead of relying
+   on the unrelated platform-governance stylesheet. */
+
+body.teacher-theme-active .classroom-evaluation-backdrop {
+  z-index: 110;
+  align-items: center;
+  padding: 16px;
+}
+
+body.teacher-theme-active .classroom-evaluation-modal {
+  width: min(1320px, calc(100vw - 32px));
+  height: min(900px, calc(100dvh - 32px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid var(--teacher-line-strong);
+  border-radius: 8px;
+  background: var(--teacher-paper);
+  box-shadow: 0 28px 80px rgba(13, 53, 46, 0.24);
+}
+
+body.teacher-theme-active .classroom-evaluation-modal > .modal-header {
+  min-height: 76px;
+  padding: 16px 20px;
+}
+
+body.teacher-theme-active .runtime-evaluation-body {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  overflow: hidden;
+  background:
+    linear-gradient(90deg, rgba(23, 72, 63, 0.022) 1px, transparent 1px) 0 0 / 64px 64px,
+    var(--teacher-fog);
+}
+
+body.teacher-theme-active .runtime-evaluation-overview,
+body.teacher-theme-active .teacher-evaluation-panel {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--teacher-line);
+  border-radius: 6px;
+  background: rgba(255, 255, 253, 0.98);
+  box-shadow: 0 12px 28px rgba(31, 59, 51, 0.045);
+}
+
+body.teacher-theme-active .runtime-evaluation-overview {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+  overflow: auto;
+}
+
+body.teacher-theme-active .teacher-evaluation-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  overflow: hidden;
+}
+
+body.teacher-theme-active .evaluation-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+body.teacher-theme-active .evaluation-section-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+body.teacher-theme-active .evaluation-section-head span {
+  color: var(--teacher-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+body.teacher-theme-active .evaluation-section-head strong {
+  color: var(--teacher-ink-deep);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+body.teacher-theme-active .teacher-evaluation-panel-head {
+  min-height: 48px;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--teacher-line);
+}
+
+body.teacher-theme-active .teacher-evaluation-panel-head > small {
+  flex: 0 0 auto;
+  color: var(--teacher-muted);
+  font-size: 13px;
+}
+
+body.teacher-theme-active .evaluation-runtime-switch-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  border: 1px solid var(--teacher-line);
+  border-left: 3px solid var(--teacher-muted);
+  border-radius: 5px;
+  padding: 11px 12px;
+  background: #f7f9f6;
+}
+
+body.teacher-theme-active .evaluation-runtime-switch-card.active {
+  border-color: #a9c5b6;
+  border-left-color: var(--teacher-success);
+  background: var(--teacher-success-soft);
+}
+
+body.teacher-theme-active .evaluation-runtime-switch-card > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+body.teacher-theme-active .evaluation-runtime-switch-card span {
+  color: var(--teacher-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+body.teacher-theme-active .evaluation-runtime-switch-card strong {
+  color: var(--teacher-ink-deep);
+  font-size: 15px;
+}
+
+body.teacher-theme-active .evaluation-summary-grid {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+body.teacher-theme-active .evaluation-summary-grid article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  align-items: center;
+  border: 0;
+  border-bottom: 1px solid var(--teacher-line);
+  border-radius: 0;
+  padding: 9px 2px;
+  background: transparent;
+}
+
+body.teacher-theme-active .evaluation-summary-grid article:last-child {
+  border-bottom: 0;
+}
+
+body.teacher-theme-active .evaluation-summary-grid span {
+  color: #4d645c;
+  font-size: 13px;
+}
+
+body.teacher-theme-active .evaluation-summary-grid strong {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--teacher-ink-deep);
+  font-family: var(--teacher-font-data);
+  font-size: 24px;
+  font-weight: 700;
+}
+
+body.teacher-theme-active .evaluation-summary-grid small {
+  min-width: 0;
+  color: var(--teacher-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-list {
+  display: grid;
+  gap: 7px;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-list details {
+  border: 1px solid var(--teacher-line);
+  border-radius: 5px;
+  background: #f8faf7;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-list summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  color: var(--teacher-ink-deep);
+  cursor: pointer;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-list summary::marker {
+  color: var(--teacher-ink);
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-list summary span {
+  color: var(--teacher-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-content {
+  display: grid;
+  gap: 7px;
+  padding: 0 10px 10px;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-content article {
+  display: grid;
+  gap: 3px;
+  border-top: 1px solid var(--teacher-line);
+  padding-top: 8px;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-content article strong {
+  color: #263832;
+  font-size: 13px;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-content article small {
+  color: var(--teacher-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+body.teacher-theme-active .runtime-evaluation-criteria-content .empty {
+  margin: 0;
+  padding: 8px 0 2px;
+}
+
+body.teacher-theme-active .evaluation-availability-card {
+  gap: 10px;
+  border-color: #d8c29f;
+  border-left: 3px solid var(--teacher-warning);
+  border-radius: 5px;
+  padding: 12px;
+  background: var(--teacher-warning-soft);
+}
+
+body.teacher-theme-active .evaluation-availability-card > div:first-child > span,
+body.teacher-theme-active .evaluation-availability-card dt {
+  color: #805326;
+}
+
+body.teacher-theme-active .evaluation-availability-card > div:first-child > strong {
+  color: #5e4226;
+  line-height: 1.5;
+}
+
+body.teacher-theme-active .evaluation-availability-card p {
+  color: #6f5233;
+}
+
+body.teacher-theme-active .evaluation-availability-card dl {
+  grid-template-columns: 1fr;
+}
+
+body.teacher-theme-active .evaluation-availability-card dl div {
+  border-color: #e3d3b9;
+  border-radius: 4px;
+  background: rgba(255, 255, 253, 0.72);
+}
+
+body.teacher-theme-active .teacher-evaluation-setup,
+body.teacher-theme-active .teacher-evaluation-empty {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 18px;
+  border: 1px dashed #aebfb6;
+  border-radius: 6px;
+  padding: 28px;
+  color: #52675f;
+  background:
+    linear-gradient(135deg, rgba(23, 72, 63, 0.035), transparent 56%),
+    #f7f9f6;
+  text-align: center;
+}
+
+body.teacher-theme-active .teacher-evaluation-setup > div,
+body.teacher-theme-active .teacher-evaluation-empty {
+  gap: 5px;
+}
+
+body.teacher-theme-active .teacher-evaluation-setup > div {
+  display: grid;
+  max-width: 540px;
+}
+
+body.teacher-theme-active .teacher-evaluation-setup span {
+  color: var(--teacher-cinnabar-dark);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+body.teacher-theme-active .teacher-evaluation-setup strong,
+body.teacher-theme-active .teacher-evaluation-empty strong {
+  color: var(--teacher-ink-deep);
+  font-size: 18px;
+}
+
+body.teacher-theme-active .teacher-evaluation-setup p,
+body.teacher-theme-active .teacher-evaluation-empty p {
+  max-width: 520px;
+  margin: 0;
+  line-height: 1.65;
+}
+
+body.teacher-theme-active .teacher-evaluation-layout {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 14px;
+  overflow: hidden;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-column {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 9px;
+  padding-right: 10px;
+  border-right: 1px solid var(--teacher-line);
+}
+
+body.teacher-theme-active .teacher-evaluation-student-search {
+  display: grid;
+  gap: 5px;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-search span {
+  color: var(--teacher-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-search input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--teacher-line-strong);
+  border-radius: 4px;
+  padding: 0 10px;
+  color: #263832;
+  background: #fff;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-search input:focus {
+  border-color: var(--teacher-ink);
+  outline: 3px solid rgba(23, 72, 63, 0.12);
+  outline-offset: 0;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  scrollbar-color: #b8c8bf transparent;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-list button {
+  min-height: 52px;
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--teacher-line);
+  border-radius: 4px;
+  padding: 8px 9px;
+  color: #263832;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-list button:hover {
+  border-color: #8fa89d;
+  background: #f2f6f3;
+}
+
+body.teacher-theme-active .teacher-evaluation-student-list button.active {
+  border-color: #719287;
+  color: var(--teacher-ink-deep);
+  background: #eaf2ed;
+  box-shadow: inset 3px 0 0 var(--teacher-cinnabar);
+}
+
+body.teacher-theme-active .teacher-evaluation-student-list button span {
+  overflow: hidden;
+  color: var(--teacher-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.teacher-theme-active .teacher-evaluation-form {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+body.teacher-theme-active .teacher-evaluation-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--teacher-line);
+  border-left: 3px solid var(--teacher-ink);
+  border-radius: 5px;
+  padding: 10px 12px;
+  background: #f5f8f5;
+}
+
+body.teacher-theme-active .teacher-evaluation-target > div {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+body.teacher-theme-active .teacher-evaluation-target > div > span {
+  color: var(--teacher-muted);
+  font-size: 11px;
+}
+
+body.teacher-theme-active .teacher-evaluation-target strong {
+  color: var(--teacher-ink-deep);
+  font-size: 17px;
+}
+
+body.teacher-theme-active .teacher-evaluation-target > span {
+  flex: 0 0 auto;
+  color: #52675f;
+  font-size: 12px;
+}
+
+body.teacher-theme-active .evaluation-star-list {
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+  container-type: inline-size;
+}
+
+body.teacher-theme-active .evaluation-star-list .evaluation-rating-item:first-child {
+  padding-top: 0;
+}
+
+body.teacher-theme-active .evaluation-comment-box {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 2px;
+}
+
+body.teacher-theme-active .evaluation-comment-box > span {
+  color: var(--teacher-ink-deep);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+body.teacher-theme-active .evaluation-comment-box textarea {
+  width: 100%;
+  min-height: 86px;
+  resize: vertical;
+  border: 1px solid var(--teacher-line-strong);
+  border-radius: 4px;
+  padding: 10px 11px;
+  color: #263832;
+  background: #fff;
+}
+
+body.teacher-theme-active .evaluation-comment-box textarea:focus {
+  border-color: var(--teacher-ink);
+  outline: 3px solid rgba(23, 72, 63, 0.12);
+}
+
+body.teacher-theme-active .classroom-evaluation-modal .star-rating-control button {
+  border-color: #d6c7a8;
+  border-radius: 4px;
+  color: #987038;
+  background: #fbf7ee;
+}
+
+body.teacher-theme-active .classroom-evaluation-modal .star-rating-control button:hover,
+body.teacher-theme-active .classroom-evaluation-modal .star-rating-control button.active {
+  border-color: #a9874f;
+  color: #7a5428;
+  background: #f5ead8;
+}
+
+body.teacher-theme-active .classroom-evaluation-modal .evaluation-modal-actions {
+  gap: 10px;
+  min-height: 68px;
+  padding: 12px 18px;
+  border-top-color: var(--teacher-line);
+  background: #fafbf8;
+}
+
+body.teacher-theme-active .classroom-evaluation-modal .evaluation-modal-actions > span {
+  margin-right: auto;
+  color: var(--teacher-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 1080px) {
+  body.teacher-theme-active .runtime-evaluation-body {
+    grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+  }
+
+  body.teacher-theme-active .teacher-evaluation-layout {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  body.teacher-theme-active .classroom-evaluation-backdrop {
+    padding: 8px;
+  }
+
+  body.teacher-theme-active .classroom-evaluation-modal {
+    width: 100%;
+    height: calc(100dvh - 16px);
+  }
+
+  body.teacher-theme-active .runtime-evaluation-body {
+    grid-template-columns: 1fr;
+    grid-auto-rows: max-content;
+    overflow: auto;
+  }
+
+  body.teacher-theme-active .runtime-evaluation-overview,
+  body.teacher-theme-active .teacher-evaluation-panel {
+    height: auto;
+    overflow: visible;
+  }
+
+  body.teacher-theme-active .runtime-evaluation-overview {
+    min-height: max-content;
+    max-height: none;
+  }
+
+  body.teacher-theme-active .teacher-evaluation-panel {
+    min-height: 560px;
+  }
+}
+
+@media (max-width: 640px) {
+  body.teacher-theme-active .classroom-evaluation-backdrop {
+    padding: 0;
+  }
+
+  body.teacher-theme-active .classroom-evaluation-modal {
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  body.teacher-theme-active .classroom-evaluation-modal > .modal-header {
+    min-height: 68px;
+    padding: 12px 14px;
+  }
+
+  body.teacher-theme-active .runtime-evaluation-body {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  body.teacher-theme-active .teacher-evaluation-layout {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  body.teacher-theme-active .teacher-evaluation-panel {
+    min-height: 480px;
+  }
+
+  body.teacher-theme-active .teacher-evaluation-student-column {
+    min-height: 270px;
+    max-height: 320px;
+    padding: 0 0 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--teacher-line);
+  }
+
+  body.teacher-theme-active .teacher-evaluation-target {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  body.teacher-theme-active .classroom-evaluation-modal .evaluation-modal-actions > span {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.teacher-theme-active .classroom-evaluation-modal *,
+  body.teacher-theme-active .classroom-evaluation-modal *::before,
+  body.teacher-theme-active .classroom-evaluation-modal *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}

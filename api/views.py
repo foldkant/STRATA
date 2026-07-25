@@ -12,12 +12,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape
 
 from django.conf import settings
-from django.contrib.auth import (
-    authenticate,
-    login as auth_login,
-    logout as auth_logout,
-    update_session_auth_hash,
-)
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
@@ -25,12 +20,11 @@ from django.db import connection, transaction
 from django.http import JsonResponse
 from django.db.models import Count, F, Max, Prefetch, Q, Sum, TextField
 from django.db.models.functions import Cast, TruncDate
-from django.middleware.csrf import get_token
 from django.utils import timezone
-from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 
 from config.onlyoffice import (
     OnlyOfficeJWTError,
@@ -420,42 +414,6 @@ def _xlsx_filename(prefix: str) -> str:
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
-def csrf_token_view(request):
-    return ok({"csrf_token": get_token(request)})
-
-
-@api_view(["POST"])
-@permission_classes([AllowAny])
-@ensure_csrf_cookie
-def login_view(request):
-    username = str(request.data.get("username", "")).strip()
-    password = str(request.data.get("password", ""))
-    if not username or not password:
-        return fail("请输入账号和密码。", status=400)
-    user = authenticate(request, username=username, password=password)
-    if user is None:
-        return fail("账号或密码不正确。", status=400)
-    if not user.is_active:
-        return fail("账号已停用，请联系管理员。", status=403)
-    auth_login(request, user)
-    return ok(user_summary(user), "登录成功")
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def logout_view(request):
-    auth_logout(request)
-    return ok({}, "已退出")
-
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def me_view(request):
-    return ok(user_summary(request.user))
-
-
-@api_view(["GET"])
 @permission_classes([IsSuperAdmin])
 def super_admin_dashboard(request):
     User = get_user_model()
@@ -517,7 +475,7 @@ def super_admin_dashboard(request):
                 "sub": "行政/教学班",
             },
             {
-                "label": "行为事件",
+                "label": "学习活动记录",
                 "value": LearningEvent.objects.filter(
                     actor__school__is_synthetic=False
                 ).count(),
@@ -535,25 +493,25 @@ def super_admin_dashboard(request):
         },
         "status_rows": [
             {
-                "label": "待校验采集包",
+                "label": "待检查学校数据",
                 "count": pending_imports,
                 "level": "warn" if pending_imports else "ok",
                 "path": "/super-admin/collection?status=uploaded",
             },
             {
-                "label": "采集校验失败",
+                "label": "学校数据检查未通过",
                 "count": failed_imports,
                 "level": "failed" if failed_imports else "ok",
                 "path": "/super-admin/collection?status=failed",
             },
             {
-                "label": "训练失败",
+                "label": "学习情况分析未完成",
                 "count": failed_training_jobs,
                 "level": "failed" if failed_training_jobs else "ok",
                 "path": "/super-admin/health",
             },
             {
-                "label": "教师待确认层级",
+                "label": "教师待确认学习安排",
                 "count": pending_decisions,
                 "level": "warn" if pending_decisions else "ok",
                 "path": "/super-admin/analysis",
@@ -943,21 +901,6 @@ def school_admin_dashboard(request):
                     "count": active_students.filter(class_group__isnull=True).count(),
                 },
             ],
-            "student_layers": [
-                {
-                    "label": label,
-                    "value": value,
-                    "count": students.filter(current_layer=value).count(),
-                }
-                for value, label in StudentProfile.Layer.choices
-            ]
-            + [
-                {
-                    "label": "未分层",
-                    "value": "unassigned",
-                    "count": students.filter(current_layer__isnull=True).count(),
-                }
-            ],
             "class_status": _choice_counts(
                 classes, "status", ClassGroup.Status.choices
             ),
@@ -973,7 +916,7 @@ def school_admin_dashboard(request):
             ),
             "pretest_completion": [
                 {
-                    "label": "已完成首次前测",
+                    "label": "已完成学习起点诊断",
                     "value": "completed",
                     "count": active_students.filter(
                         onboarding_status__in=[
@@ -1728,14 +1671,14 @@ def teacher_dashboard(request):
             {"label": "课程", "value": courses.count(), "sub": "本人课程"},
             {"label": "资源", "value": resources.count(), "sub": "本人上传"},
             {
-                "label": "今日行为",
+                "label": "今日学习记录",
                 "value": events.filter(occurred_at__date=today).count(),
                 "sub": "任教班级内",
             },
             {
-                "label": "待确认分层",
+                "label": "待确认教学安排",
                 "value": pending_decisions,
-                "sub": "本人课程的层级建议",
+                "sub": "学习内容与支持建议",
             },
         ],
         "charts": {
@@ -1753,21 +1696,6 @@ def teacher_dashboard(request):
             ),
             "class_students": _class_student_counts(class_rows),
             "class_activity": _class_event_counts(class_rows),
-            "student_layers": [
-                {
-                    "label": label,
-                    "value": value,
-                    "count": students.filter(current_layer=value).count(),
-                }
-                for value, label in StudentProfile.Layer.choices
-            ]
-            + [
-                {
-                    "label": "未分层",
-                    "value": "unassigned",
-                    "count": students.filter(current_layer__isnull=True).count(),
-                }
-            ],
             "event_types": _event_type_counts(last_7d_events),
             "decision_status": _choice_counts(
                 decisions, "status", StratificationDecision.Status.choices
@@ -1789,13 +1717,13 @@ def teacher_dashboard(request):
         ],
         "todo_rows": [
             {
-                "label": "待确认分层",
+                "label": "待确认学习内容安排",
                 "count": pending_decisions,
                 "level": "warn" if pending_decisions else "ok",
                 "path": "/teacher/stratification?view=pending",
             },
             {
-                "label": "待查看学习支持",
+                "label": "待确认学习支持安排",
                 "count": pending_support,
                 "level": "warn" if pending_support else "ok",
                 "path": "/teacher/stratification?view=pending",
@@ -1807,7 +1735,7 @@ def teacher_dashboard(request):
                 "path": "/teacher/students",
             },
             {
-                "label": "未完成前测",
+                "label": "未完成学习起点诊断",
                 "count": pending_pretest,
                 "level": "warn" if pending_pretest else "ok",
                 "path": "/teacher/students",
@@ -2039,7 +1967,13 @@ def _classroom_group_queryset(collaboration: ClassroomGroupCollaboration):
                 to_attr="prefetched_files",
             ),
         )
-        .select_related("leader", "collaboration", "collaboration__session")
+        .select_related(
+            "leader",
+            "collaboration",
+            "collaboration__session",
+            "collaboration__session__course",
+            "collaboration__session__course__subject",
+        )
         .order_by("group_no", "id")
     )
 
@@ -2247,10 +2181,14 @@ def _course_student_profiles(
     )
 
 
-def _evaluation_student_row(profile: StudentProfile) -> dict:
+def _evaluation_student_row(profile: StudentProfile, *, course: Course) -> dict:
     return {
         "student": account_row(profile.user),
-        "profile": teacher_student_profile_summary(profile),
+        "profile": teacher_student_profile_summary(
+            profile,
+            subject=course.subject if course.subject_id else None,
+            course=course,
+        ),
     }
 
 
@@ -2517,7 +2455,7 @@ def _teacher_course_evaluation_payload(
         peer_submissions = peer_by_target.get(profile.user_id, [])
         student_rows.append(
             {
-                **_evaluation_student_row(profile),
+                **_evaluation_student_row(profile, course=course),
                 "self_submission": classroom_evaluation_submission_row(
                     self_by_target.get(profile.user_id)
                 ),
@@ -3105,42 +3043,116 @@ def _student_current_classroom(profile: StudentProfile) -> ClassroomSession | No
 
 
 def _student_required_pretest_status(user, subject: Subject | None) -> dict:
+    empty = {
+        "required": False,
+        "completed": False,
+        "assigned": False,
+        "status": "not_assigned",
+        "course_access": "eligible",
+        "missing": [],
+        "completion_scope": "diagnostic_administration",
+    }
     if subject is None:
-        return {"required": False, "completed": True, "missing": []}
-
-    papers = list(
-        PretestPaper.objects.filter(
-            school=user.school,
-            subject=subject,
-            status=PretestPaper.Status.PUBLISHED,
-        ).order_by("kind", "-version")
+        return empty
+    try:
+        class_group_id = user.student_profile.class_group_id
+    except (AttributeError, StudentProfile.DoesNotExist):
+        class_group_id = None
+    if not class_group_id:
+        return empty
+    from learning.models import (
+        DiagnosticAdministration,
+        DiagnosticAdministrationAssignment,
+        DiagnosticSubmissionBinding,
     )
-    if not papers:
-        return {"required": False, "completed": True, "missing": []}
-
-    latest_by_kind: dict[str, PretestPaper] = {}
-    for paper in papers:
-        latest_by_kind.setdefault(paper.kind, paper)
-
-    submitted_paper_ids = set(
-        PretestSubmission.objects.filter(
-            student=user, paper_id__in=[paper.id for paper in latest_by_kind.values()]
-        ).values_list("paper_id", flat=True)
+    from learning.services.diagnostic_administrations import (
+        availability_status,
+        diagnostic_completion_status,
     )
+
+    assignments = list(
+        DiagnosticAdministrationAssignment.objects.filter(
+            class_group_id=class_group_id,
+            administration__school=user.school,
+            administration__subject=subject,
+            administration__purpose=DiagnosticAdministration.Purpose.ENTRY_DIAGNOSTIC,
+            administration__status=DiagnosticAdministration.Status.PUBLISHED,
+        )
+        .select_related(
+            "administration",
+            "administration__paper_version",
+            "administration__paper_version__source",
+        )
+        .order_by("administration__open_at", "administration_id")
+    )
+    if not assignments:
+        return empty
+    bindings = {}
+    for binding in DiagnosticSubmissionBinding.objects.filter(
+            student=user,
+            administration_id__in=[item.administration_id for item in assignments],
+        ).select_related("submission").order_by("administration_id", "-attempt_no"):
+        bindings.setdefault(binding.administration_id, binding)
+
+    rows = []
+    for item in assignments:
+        completion = diagnostic_completion_status(
+            item,
+            bindings.get(item.administration_id),
+        )
+        rows.append({
+            "kind": item.administration.paper_version.kind,
+            "kind_label": item.administration.paper_version.source.get_kind_display(),
+            "paper_id": item.administration.paper_version.source_id,
+            "administration_id": item.administration_id,
+            "batch_code": item.administration.batch_code,
+            "title": item.administration.title,
+            "availability_status": availability_status(item.administration),
+            "completion": completion,
+        })
+
     missing = [
-        {
-            "kind": paper.kind,
-            "kind_label": paper.get_kind_display(),
-            "paper_id": paper.id,
-            "title": paper.title,
-        }
-        for paper in latest_by_kind.values()
-        if paper.id not in submitted_paper_ids
+        row
+        for row in rows
+        if row["availability_status"] == "open"
+        and row["completion"]["submission"] in {"pending", "reported"}
     ]
+    scheduled = any(
+        row["availability_status"] == "scheduled"
+        and row["completion"]["submission"] == "pending"
+        for row in rows
+    )
+    exempt = all(row["completion"]["submission"] == "not_required" for row in rows)
+    completed = all(
+        row["completion"]["submission"] in {"completed", "not_required"}
+        for row in rows
+    )
+    if missing:
+        status = "action_required"
+        course_access = "deferred"
+    elif scheduled:
+        status = "scheduled"
+        course_access = "eligible"
+    elif exempt:
+        status = "exempt"
+        course_access = "exempt"
+    elif completed:
+        status = "completed"
+        course_access = "eligible"
+    else:
+        status = "no_current_action"
+        course_access = "eligible"
     return {
-        "required": bool(latest_by_kind),
-        "completed": not missing,
+        # Compatibility fields now describe only a currently actionable
+        # administration. Scheduled work must not redirect a student to a
+        # page that cannot yet accept a submission.
+        "required": bool(missing),
+        "completed": completed,
+        "assigned": True,
+        "status": status,
+        "course_access": course_access,
         "missing": missing,
+        "completion_scope": "diagnostic_administration",
     }
 
 
@@ -3461,11 +3473,14 @@ from .classroom_views import (
     teacher_classroom_step_progress,
 )
 from .pretest_views import (
+    pretest_materials_pending_review,
+    review_pretest_material,
     _school_pretest_papers,
     school_admin_pretest_paper_archive,
     school_admin_pretest_paper_detail,
     school_admin_pretest_paper_publish,
     school_admin_pretest_papers,
+    school_admin_pretest_learning_target_versions,
     school_admin_pretest_question_detail,
     school_admin_pretest_questions,
     student_pretest_paper,
@@ -3548,6 +3563,7 @@ from .student_views import (
     student_onboarding_classes,
     student_onboarding_password,
     student_profile_archive,
+    teacher_student_learning_profile,
     teacher_student_reset_password,
     teacher_students,
     teacher_students_bulk_reset_password,

@@ -26,6 +26,9 @@ const emit = defineEmits<{
 const standards = ref<CurriculumReferenceStandard[]>([])
 const selectedStandardId = ref<number | ''>('')
 const selectedIds = ref<number[]>(props.selected.map((node) => node.id))
+const selectedSchoolStage = ref<CurriculumSchoolStage | ''>(
+  props.schoolStage || props.selected[0]?.school_stage || ''
+)
 const query = ref('')
 const nodeType = ref<CurriculumNodeType | ''>('')
 const loading = ref(false)
@@ -91,6 +94,19 @@ function changeStandard(event: Event) {
   nodeType.value = ''
 }
 
+async function changeSchoolStage() {
+  selectedStandardId.value = ''
+  standards.value = []
+  selectedIds.value = []
+  query.value = ''
+  nodeType.value = ''
+  if (!selectedSchoolStage.value) {
+    notice.value = '请先选择本课程所属学段，再选择课程标准版本。'
+    return
+  }
+  await load()
+}
+
 async function load() {
   loading.value = true
   notice.value = ''
@@ -98,7 +114,7 @@ async function load() {
     const result = await getCurriculumReferenceOptions({
       subject_code: props.subjectCode,
       subject_name: props.subjectName,
-      school_stage: props.schoolStage || ''
+      school_stage: selectedSchoolStage.value
     })
     standards.value = result.standards
     const selectedVersionId = props.selected[0]?.version_id || props.selected[0]?.version
@@ -123,7 +139,10 @@ function apply() {
   emit('apply', selectedNodes.value)
 }
 
-onMounted(load)
+onMounted(() => {
+  if (selectedSchoolStage.value) void load()
+  else notice.value = '请先选择本课程所属学段，再选择课程标准版本。'
+})
 </script>
 
 <template>
@@ -142,6 +161,15 @@ onMounted(load)
           <p v-if="notice" class="curriculum-reference-notice" role="status">{{ notice }}</p>
 
           <section class="curriculum-reference-context">
+            <label v-if="!schoolStage">
+              <span>学段<b>*</b></span>
+              <AppSelect v-model="selectedSchoolStage" data-modal-initial-focus :disabled="loading" @change="changeSchoolStage">
+                <option value="" disabled>请选择学段</option>
+                <option value="k1_k9">义务教育（K1—K9）</option>
+                <option value="k10_k12">普通高中（K10—K12）</option>
+              </AppSelect>
+              <small>课程尚未设置学段，本次必须明确选择，避免引用错误学段的课程标准。</small>
+            </label>
             <label>
               <span>课程标准版本</span>
               <select :value="selectedStandardId" :disabled="loading || !standards.length" @change="changeStandard">
@@ -157,7 +185,7 @@ onMounted(load)
               <small>
                 {{ currentStandard.current_version.version_label }}
                 · {{ currentStandard.current_version.publication_year || '年份未标注' }}
-                · 校验值 {{ currentStandard.current_version.content_hash?.slice(0, 12) || '未提供' }}
+                · 内容校验信息 {{ currentStandard.current_version.content_hash?.slice(0, 12) || '未提供' }}
               </small>
               <div>
                 <a v-if="currentStandard.current_version.pdf_url" :href="currentStandard.current_version.pdf_url" target="_blank" rel="noopener">查看 PDF 原文</a>
@@ -220,7 +248,7 @@ onMounted(load)
           <span>已选择 {{ selectedIds.length }} 个内容条目</span>
           <button v-if="selectedIds.length" class="secondary-button" type="button" @click="selectedIds = []">清空选择</button>
           <button class="secondary-button" type="button" @click="emit('close')">取消</button>
-          <button class="primary-button" type="button" :disabled="loading" @click="apply">确认引用</button>
+          <button class="primary-button" type="button" :disabled="loading || !selectedSchoolStage" @click="apply">确认引用</button>
         </footer>
       </section>
     </div>
@@ -229,7 +257,9 @@ onMounted(load)
 
 <style scoped>
 .curriculum-reference-backdrop {
-  z-index: 1200;
+  /* 课程标准选择器会从评价方案编辑器（z-index: 1300）中打开。
+     作为嵌套对话框必须位于父对话框之上，否则界面可见但无法点击。 */
+  z-index: 1400;
 }
 
 .curriculum-reference-picker {
@@ -252,11 +282,11 @@ onMounted(load)
 
 .curriculum-reference-notice {
   margin: 0 0 14px;
-  border: 1px solid #bfdbfe;
+  border: 1px solid #c5d6cc;
   border-radius: 6px;
   padding: 9px 11px;
-  background: #eff6ff;
-  color: #1e40af;
+  background: #eef5f1;
+  color: #315f50;
   line-height: 1.5;
 }
 
@@ -369,8 +399,8 @@ onMounted(load)
 }
 
 .curriculum-reference-list article.selected {
-  border-color: #93c5fd;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, .08);
+  border-color: #8ba59b;
+  box-shadow: 0 0 0 2px rgba(23, 72, 63, .08);
 }
 
 .curriculum-reference-list article > label {
@@ -398,7 +428,7 @@ onMounted(load)
   width: fit-content;
   border-radius: 999px;
   padding: 2px 7px;
-  background: #e8f1ff;
+  background: #e4ede8;
   color: var(--primary-dark);
   font-size: 11px;
   font-style: normal;

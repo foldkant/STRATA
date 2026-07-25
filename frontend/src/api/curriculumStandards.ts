@@ -51,6 +51,7 @@ export type CurriculumProcessingJob = {
   retry_of: number | null
   retry_count: number
   can_retry: boolean
+  can_resume: boolean
   can_cancel: boolean
   worker_hostname?: string
   heartbeat_at?: string | null
@@ -260,6 +261,18 @@ export type CurriculumReferenceOptions = {
 
 export type CurriculumStandardsIndex = {
   standards: CurriculumStandard[]
+  pagination: {
+    page: number
+    page_size: number
+    page_count: number
+    total: number
+  }
+  summary: {
+    total: number
+    published: number
+    k1_k9: number
+    k10_k12: number
+  }
   school_stages: Array<{ value: CurriculumSchoolStage; label: string }>
   document_types: Array<{ value: CurriculumDocumentType; label: string }>
   version_statuses: Array<{ value: CurriculumVersionStatus; label: string }>
@@ -321,6 +334,8 @@ export function getCurriculumStandards(params: {
   document_type?: CurriculumDocumentType | ''
   school_stage?: CurriculumSchoolStage | ''
   subject_code?: string
+  page?: number
+  page_size?: number
 } = {}) {
   return apiRequest<CurriculumStandardsIndex>(
     `${superAdminBase}/curriculum-standards/${queryString(params)}`
@@ -529,6 +544,13 @@ export function cancelCurriculumProcessingJob(id: number) {
 export function retryCurriculumProcessingJob(id: number) {
   return apiRequest<CurriculumProcessingJob>(
     `${superAdminBase}/curriculum-processing-jobs/${id}/retry/`,
+    { method: 'POST', body: toJsonBody({}) }
+  )
+}
+
+export function resumeCurriculumProcessingJob(id: number) {
+  return apiRequest<CurriculumProcessingJob>(
+    `${superAdminBase}/curriculum-processing-jobs/${id}/resume/`,
     { method: 'POST', body: toJsonBody({}) }
   )
 }

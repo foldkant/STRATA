@@ -11,9 +11,13 @@
     "assets:prune:dry": "node scripts/prune-build-assets.mjs --dry-run",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:smoke": "playwright test e2e/core-workflows.spec.ts",
+    "test:visual-audit": "playwright test e2e/visual-audit.spec.ts",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@tabler/icons-vue": "^3.45.0",
     "@vitejs/plugin-vue": "^6.0.1",
     "echarts": "^6.1.0",
     "pinia": "^3.0.3",
@@ -24,6 +28,7 @@
     "vue-tsc": "^3.1.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@vue/test-utils": "^2.4.11",
     "jsdom": "^29.1.1",
     "vitest": "^4.1.10"

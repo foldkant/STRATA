@@ -29,8 +29,10 @@ from learning.models import (
     Notice,
     PretestPaper,
     PretestQuestion,
+    StudentSubjectBand,
     StudentWorkAttachment,
 )
+from learning.services.bands import resolve_student_band
 from learning_analytics.privacy import sanitize_student_payload
 from school.models import ClassGroup, School, StudentProfile, TeachingAssignment
 
@@ -80,6 +82,8 @@ DEFAULT_LESSON_FILE_EXTENSIONS = [
     "jpg",
     "jpeg",
 ]
+
+STUDENT_BAND_LABELS = dict(StudentSubjectBand.Band.choices)
 
 
 def clean_resource_ext(*values) -> str:
@@ -570,16 +574,40 @@ def student_profile_summary(profile: StudentProfile | None) -> dict | None:
     }
 
 
-def teacher_student_profile_summary(profile: StudentProfile | None) -> dict | None:
+def _student_band_values(
+    profile: StudentProfile | None,
+    *,
+    subject: Subject | None,
+    course: Course | None = None,
+) -> tuple[str, str]:
+    if profile is None or subject is None:
+        return "", ""
+    band = resolve_student_band(
+        student=profile.user,
+        subject=subject,
+        course=course,
+    )
+    return band or "", STUDENT_BAND_LABELS.get(band, "")
+
+
+def teacher_student_profile_summary(
+    profile: StudentProfile | None,
+    *,
+    subject: Subject | None = None,
+    course: Course | None = None,
+) -> dict | None:
     row = student_profile_summary(profile)
     if row is None:
         return None
+    band, band_label = _student_band_values(
+        profile,
+        subject=subject,
+        course=course,
+    )
     return {
         **row,
-        "current_layer": profile.current_layer,
-        "current_layer_label": (
-            profile.get_current_layer_display() if profile.current_layer else ""
-        ),
+        "current_layer": band,
+        "current_layer_label": band_label,
         "current_group_no": profile.current_group_no,
     }
 
@@ -925,9 +953,19 @@ def classroom_group_file_row(file: ClassroomGroupFile) -> dict:
     }
 
 
-def classroom_group_member_row(member: ClassroomGroupMember) -> dict:
+def classroom_group_member_row(
+    member: ClassroomGroupMember,
+    *,
+    course: Course | None = None,
+) -> dict:
     profile = member.student_profile
     student = member.student
+    subject = course.subject if course and course.subject_id else None
+    band, band_label = _student_band_values(
+        profile,
+        subject=subject,
+        course=course,
+    )
     return {
         "id": member.id,
         "student_id": student.id,
@@ -935,12 +973,8 @@ def classroom_group_member_row(member: ClassroomGroupMember) -> dict:
         "username": student.username,
         "display_name": student.display_name or student.username,
         "student_no": profile.student_no if profile else "",
-        "current_layer": profile.current_layer if profile else "",
-        "current_layer_label": (
-            profile.get_current_layer_display()
-            if profile and profile.current_layer
-            else ""
-        ),
+        "current_layer": band,
+        "current_layer_label": band_label,
         "role": member.role,
         "role_label": member.get_role_display(),
         "joined_at": member.joined_at,
@@ -963,6 +997,7 @@ def student_classroom_group_member_row(member: ClassroomGroupMember) -> dict:
 
 
 def classroom_group_row(group: ClassroomGroup, *, include_files: bool = True) -> dict:
+    course = group.collaboration.session.course
     document_url = (
         protected_file_url("group-document", group.id)
         if group.collaboration_document
@@ -1005,7 +1040,9 @@ def classroom_group_row(group: ClassroomGroup, *, include_files: bool = True) ->
         },
         "used_storage_bytes": used_storage_bytes,
         "used_storage_mb": round(used_storage_bytes / 1024 / 1024, 2),
-        "members": [classroom_group_member_row(member) for member in members],
+        "members": [
+            classroom_group_member_row(member, course=course) for member in members
+        ],
         "files": (
             [classroom_group_file_row(file) for file in files] if include_files else []
         ),
@@ -1192,11 +1229,17 @@ def classroom_evaluation_criteria_rows(items) -> list[dict]:
             "dimension",
             "evaluation_target",
             "evaluation_sources",
+            "learning_goal_codes",
+            "learning_target_links",
+            "evaluation_task_codes",
+            "evidence_ownership",
+            "material_types",
             "level_descriptions",
             "skip_condition",
             "support_options",
             "common_problems",
             "follow_up_suggestion",
+            "curriculum_alignment",
         ):
             if field in item:
                 row[field] = item[field]
@@ -1331,6 +1374,15 @@ def pretest_paper_row(paper: PretestPaper, *, include_questions: bool = False) -
         "question_count": getattr(paper, "question_count", 0),
         "submission_count": getattr(paper, "submission_count", 0),
         "published_at": paper.published_at,
+        "published_version": (
+            {
+                "id": latest_version.id,
+                "version_no": latest_version.version_no,
+                "content_hash": latest_version.content_hash,
+            }
+            if (latest_version := paper.published_versions.order_by("-version_no", "-id").first())
+            else None
+        ),
         "created_at": paper.created_at,
         "updated_at": paper.updated_at,
     }
@@ -1352,6 +1404,20 @@ def pretest_question_row(question: PretestQuestion) -> dict:
         "answer": question.answer,
         "score": question.score,
         "dimension": question.dimension,
+        "learning_target_code": question.learning_target_code,
+        "learning_target_name": question.learning_target_name,
+        "learning_target_version": (
+            {
+                "id": question.learning_target_version_id,
+                "version_no": question.learning_target_version.version_no,
+                "content_hash": question.learning_target_version.content_hash,
+                "logical_key": str(question.learning_target_version.target.logical_key),
+            }
+            if question.learning_target_version_id
+            else None
+        ),
+        "legacy_unmapped": question.legacy_unmapped,
+        "material_requirements": question.material_requirements,
         "sort_order": question.sort_order,
         "is_required": question.is_required,
         "created_at": question.created_at,
@@ -1369,6 +1435,9 @@ def student_pretest_question_row(question: PretestQuestion) -> dict:
         "options": question.options,
         "score": question.score,
         "dimension": question.dimension,
+        "learning_target_code": question.learning_target_code,
+        "learning_target_name": question.learning_target_name,
+        "material_requirements": question.material_requirements,
         "sort_order": question.sort_order,
         "is_required": question.is_required,
     }
@@ -1403,10 +1472,6 @@ def student_row(profile: StudentProfile) -> dict:
         "phone": user.phone,
         "student_no": profile.student_no,
         "class_group": class_group,
-        "current_layer": profile.current_layer,
-        "current_layer_label": (
-            profile.get_current_layer_display() if profile.current_layer else ""
-        ),
         "current_group_no": profile.current_group_no,
         "score": profile.score,
         "is_first_use": profile.is_first_use,
@@ -1563,6 +1628,13 @@ def classroom_attendance_row(
     profile: StudentProfile,
     latest_event: LearningEvent | None,
 ) -> dict:
+    course = activity.session.course
+    subject = course.subject if course.subject_id else None
+    band, band_label = _student_band_values(
+        profile,
+        subject=subject,
+        course=course,
+    )
     status = "not_signed"
     status_label = "未签到"
     source = ""
@@ -1590,8 +1662,8 @@ def classroom_attendance_row(
         "username": profile.user.username,
         "display_name": profile.user.display_name or profile.user.username,
         "student_no": profile.student_no,
-        "current_layer": profile.current_layer,
-        "current_layer_label": profile.get_current_layer_display(),
+        "current_layer": band,
+        "current_layer_label": band_label,
         "status": status,
         "status_label": status_label,
         "source": source,

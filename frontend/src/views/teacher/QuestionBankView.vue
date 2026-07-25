@@ -1,21 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ApiError, type FieldErrors } from '@/api/client'
 import {
   actionBankQuestion,
+  cancelQuestionBankDraftJob,
   confirmQuestionBankDrafts,
   createBankQuestion,
   deleteBankQuestion,
   getAssessmentOptions,
+  getLatestQuestionBankDraftJob,
+  getQuestionBankDraftJob,
   getQuestionBank,
   generateQuestionBankDrafts,
   importQuestionBank,
   questionBankExportUrl,
   questionBankTemplateUrl,
+  retryQuestionBankDraftJob,
   updateBankQuestion,
   type AssessmentOptions,
   type AiQuestionDraft,
   type AiQuestionGenerationPayload,
+  type AiQuestionGenerationJob,
+  type AiQuestionGenerationResult,
   type BankQuestion,
   type BankQuestionPayload
 } from '@/api/assessments'
@@ -49,6 +55,8 @@ const aiSaving = ref(false)
 const aiErrors = ref<FieldErrors>({})
 const aiNotice = ref('')
 const aiDrafts = ref<AiQuestionDraft[]>([])
+const aiJob = ref<AiQuestionGenerationJob | null>(null)
+let aiPollTimer: ReturnType<typeof setTimeout> | null = null
 const aiForm = reactive<AiQuestionGenerationPayload>({
   subject: '',
   direction: '',
@@ -70,12 +78,14 @@ const form = reactive<BankQuestionPayload>({
   knowledge_point: '',
   default_score: 2,
   item_role: 'regular',
-  layer_scope: 'all'
+  layer_scope: 'all',
+  learning_target_version_id: ''
 })
 
 const isChoice = computed(() => ['single', 'multiple'].includes(form.question_type))
 const isJudge = computed(() => form.question_type === 'judge')
 const needsAnswerText = computed(() => form.question_type === 'blank')
+const formTargetVersions = computed(() => targetVersionsForSubject(form.subject))
 const summary = computed(() => [
   { label: '当前题目', value: rows.value.length, sub: scope.value === 'mine' ? '本人创建' : '学校共享' },
   { label: '个人可用', value: rows.value.filter((item) => item.library_scope === 'personal' && item.status === 'draft').length, sub: '无需审核即可组卷' },
@@ -84,10 +94,12 @@ const summary = computed(() => [
 ])
 const selectedAiDrafts = computed(() => aiDrafts.value.filter((item) => item.selected))
 
-function openAiGenerate() {
+async function openAiGenerate() {
+  stopAiPolling()
   aiErrors.value = {}
   aiNotice.value = ''
   aiDrafts.value = []
+  aiJob.value = null
   aiForm.subject = subject.value || options.value?.subjects[0]?.id || ''
   aiForm.direction = ''
   aiForm.knowledge_point = ''
@@ -96,6 +108,21 @@ function openAiGenerate() {
   aiForm.count = 5
   aiForm.requirement = ''
   aiOpen.value = true
+  try {
+    const latest = await getLatestQuestionBankDraftJob()
+    if (!latest) return
+    aiJob.value = latest
+    if (latest.status === 'queued' || latest.status === 'running') {
+      aiLoading.value = true
+      aiNotice.value = '已恢复上次后台生成任务，可以关闭窗口，生成会继续进行。'
+      scheduleAiPolling()
+    } else if (latest.status === 'succeeded') {
+      applyAiJobResult(latest)
+      aiNotice.value = '已恢复上次生成的题目草稿，请检查后再保存。'
+    }
+  } catch {
+    // 恢复历史任务失败不影响教师开始一次新的生成。
+  }
 }
 
 function validateAiForm() {
@@ -114,28 +141,119 @@ async function generateAiDrafts() {
   aiLoading.value = true
   aiNotice.value = ''
   try {
-    const result = await generateQuestionBankDrafts({
+    const job = await generateQuestionBankDrafts({
       ...aiForm,
       direction: aiForm.direction.trim(),
       knowledge_point: aiForm.knowledge_point.trim(),
       requirement: aiForm.requirement.trim(),
       count: Number(aiForm.count)
     })
-    aiDrafts.value = result.questions.map((item) => ({ ...item, subject: result.subject.id, selected: true }))
-    aiNotice.value = `AI 返回 ${result.valid_count} 道有效草稿。请检查题干、答案和解析后再入库。`
+    aiJob.value = job
+    aiNotice.value = '题目草稿已加入后台生成队列。可以关闭窗口或离开本页，稍后回来继续。'
+    scheduleAiPolling()
   } catch (error) {
+    aiLoading.value = false
     if (error instanceof ApiError) {
       aiNotice.value = error.message
       aiErrors.value = error.errors
     } else aiNotice.value = 'AI 出题失败，请检查接入配置后重试。'
-  } finally {
+  }
+}
+
+function stopAiPolling() {
+  if (aiPollTimer) clearTimeout(aiPollTimer)
+  aiPollTimer = null
+}
+
+function applyAiJobResult(job: AiQuestionGenerationJob) {
+  const result = job.result as AiQuestionGenerationResult
+  aiDrafts.value = (result.questions || []).map((item) => ({
+    ...item,
+    subject: result.subject.id,
+    learning_target_version_id: '',
+    selected: true
+  }))
+  aiLoading.value = false
+  aiErrors.value = {}
+  aiNotice.value = `AI 返回 ${result.valid_count} 道有效草稿。请检查题干、答案和解析后再入库。`
+}
+
+async function refreshAiJob() {
+  if (!aiJob.value) return
+  try {
+    const job = await getQuestionBankDraftJob(aiJob.value.id)
+    aiJob.value = job
+    if (job.status === 'succeeded') {
+      stopAiPolling()
+      applyAiJobResult(job)
+      return
+    }
+    if (job.status === 'failed' || job.status === 'cancelled') {
+      stopAiPolling()
+      aiLoading.value = false
+      aiNotice.value = job.error_message || job.status_label
+      aiErrors.value = job.error_fields || {}
+      return
+    }
+    scheduleAiPolling()
+  } catch (error) {
+    stopAiPolling()
     aiLoading.value = false
+    aiNotice.value = error instanceof ApiError ? error.message : '后台任务状态读取失败，请稍后重新打开。'
+  }
+}
+
+function scheduleAiPolling() {
+  stopAiPolling()
+  aiLoading.value = true
+  aiPollTimer = setTimeout(() => void refreshAiJob(), 1500)
+}
+
+async function retryAiJob() {
+  if (!aiJob.value) return
+  aiLoading.value = true
+  aiNotice.value = ''
+  try {
+    aiJob.value = await retryQuestionBankDraftJob(aiJob.value.id)
+    aiNotice.value = '题目草稿已重新排队。'
+    scheduleAiPolling()
+  } catch (error) {
+    aiLoading.value = false
+    aiNotice.value = error instanceof ApiError ? error.message : '任务重新排队失败。'
+  }
+}
+
+async function cancelAiJob() {
+  if (!aiJob.value || aiJob.value.status !== 'queued') return
+  try {
+    aiJob.value = await cancelQuestionBankDraftJob(aiJob.value.id)
+    stopAiPolling()
+    aiLoading.value = false
+    aiNotice.value = '等待中的生成任务已取消。'
+  } catch (error) {
+    aiNotice.value = error instanceof ApiError ? error.message : '任务取消失败。'
   }
 }
 
 function aiDraftOptions(draft: AiQuestionDraft) {
   if (draft.question_type === 'judge') return ['正确', '错误']
   return draft.options
+}
+
+function targetVersionsForSubject(subjectId: number | string) {
+  return (options.value?.learning_target_versions || []).filter(
+    (item) => Number(item.subject) === Number(subjectId)
+  )
+}
+
+function targetVersionLabel(item: { code: string; title: string; course_title: string }) {
+  return `${item.course_title} · ${item.code} ${item.title}`
+}
+
+function handleFormSubjectChange() {
+  if (!formTargetVersions.value.some((item) => item.id === Number(form.learning_target_version_id))) {
+    form.learning_target_version_id = ''
+  }
 }
 
 function setAiDraftType(draft: AiQuestionDraft, type: string) {
@@ -182,6 +300,7 @@ function validateAiDrafts() {
   const messages: string[] = []
   selectedAiDrafts.value.forEach((draft, index) => {
     if (draft.stem.trim().length < 2) messages.push(`第 ${index + 1} 题题干不能为空。`)
+    if (!draft.learning_target_version_id) messages.push(`第 ${index + 1} 题请选择对应的学习目标版本。`)
     const optionValues = aiDraftOptions(draft).map((item) => item.trim()).filter(Boolean)
     if (['single', 'multiple', 'judge'].includes(draft.question_type) && optionValues.length < 2) messages.push(`第 ${index + 1} 题至少需要两个选项。`)
     if (draft.question_type !== 'text' && !draft.answer.some((item) => item.trim())) messages.push(`第 ${index + 1} 题缺少参考答案。`)
@@ -231,6 +350,7 @@ function resetForm() {
   form.default_score = 2
   form.item_role = 'regular'
   form.layer_scope = 'all'
+  form.learning_target_version_id = ''
   optionDrafts.value = ['', '', '', '']
   answerDrafts.value = []
 }
@@ -253,7 +373,8 @@ function openEdit(row: BankQuestion) {
     knowledge_point: row.knowledge_point,
     default_score: row.default_score,
     item_role: row.item_role === 'layered' ? 'layered' : 'regular',
-    layer_scope: row.layer_scope
+    layer_scope: row.layer_scope,
+    learning_target_version_id: row.learning_target_version?.id || ''
   })
   optionDrafts.value = row.question_type === 'judge' ? ['正确', '错误'] : [...row.options, '', '', '', ''].slice(0, Math.max(row.options.length, 4))
   answerDrafts.value = [...row.answer]
@@ -301,6 +422,10 @@ function validate() {
   if (form.question_type !== 'text' && !answerDrafts.value.length) next.answer = ['请设置参考答案。']
   if (form.default_score <= 0 || form.default_score > 100) next.default_score = ['分值应在 0-100 之间。']
   if (form.item_role === 'layered' && form.layer_scope === 'all') next.layer_scope = ['请选择适用层级。']
+  if (
+    form.learning_target_version_id
+    && !formTargetVersions.value.some((item) => item.id === Number(form.learning_target_version_id))
+  ) next.learning_target_version_id = ['所选学习目标版本与当前学科不一致，请重新选择。']
   errors.value = next
   return !Object.keys(next).length
 }
@@ -419,6 +544,7 @@ onMounted(async () => {
   options.value = await getAssessmentOptions()
   await load()
 })
+onBeforeUnmount(stopAiPolling)
 </script>
 
 <template>
@@ -467,6 +593,11 @@ onMounted(async () => {
                 <span>{{ item.source_label }}</span>
                 <span>版本 {{ item.version_no }}</span>
               </div>
+              <div v-if="item.learning_target_version" class="question-target-binding">
+                <span>学习目标</span>
+                <strong>{{ item.learning_target_version.code }} · {{ item.learning_target_version.title }}</strong>
+              </div>
+              <p v-else class="question-target-warning">尚未绑定学习目标版本，不能纳入正式共同题集合，也不能形成目标级学习情况。</p>
             </div>
             <b>{{ item.default_score }} 分</b>
           </header>
@@ -503,12 +634,13 @@ onMounted(async () => {
         <header class="modal-header"><div><h2>{{ editing ? '编辑个人题目' : '新增题目' }}</h2><p>保存后立即进入“我的题目”，本人可直接组卷；申请共享时才进入审核。</p></div><button class="icon-button" type="button" aria-label="关闭" @click="modalOpen = false">×</button></header>
         <div class="assessment-modal-body">
           <div class="assessment-form-grid">
-            <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="form.subject" required><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></AppSelect><small v-if="errors.subject" class="field-error">{{ errors.subject[0] }}</small></label>
+            <label><span>所属学科 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="form.subject" required @change="handleFormSubjectChange"><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></AppSelect><small v-if="errors.subject" class="field-error">{{ errors.subject[0] }}</small></label>
             <label><span>题型 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect :value="form.question_type" required @change="setType(($event.target as HTMLSelectElement).value)"><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
             <label><span>难度</span><AppSelect v-model="form.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
-            <label><span>题目用途</span><AppSelect v-model="form.item_role" @change="form.layer_scope = form.item_role === 'layered' ? 'a' : 'all'"><option value="regular">普通题</option><option value="layered">分层题</option></AppSelect></label>
+            <label><span>题目用途</span><AppSelect v-model="form.item_role" @change="form.layer_scope = form.item_role === 'layered' ? 'a' : 'all'"><option value="regular">普通题</option><option value="layered">差异化题目</option></AppSelect></label>
             <label v-if="form.item_role === 'layered'"><span>适用层级 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="form.layer_scope"><option v-for="item in options?.layer_scopes.filter((row) => row.value !== 'all')" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect><small v-if="errors.layer_scope" class="field-error">{{ errors.layer_scope[0] }}</small></label>
             <label><span>默认分值 <b class="required-mark" aria-hidden="true">*</b></span><input v-model.number="form.default_score" type="number" min="0.5" max="100" step="0.5" required /><small v-if="errors.default_score" class="field-error">{{ errors.default_score[0] }}</small></label>
+            <label class="assessment-target-field"><span>对应学习目标版本</span><AppSelect v-model="form.learning_target_version_id"><option value="">暂不绑定（仅作个人草稿）</option><option v-for="item in formTargetVersions" :key="item.id" :value="item.id">{{ targetVersionLabel(item) }}</option></AppSelect><small>学习目标由教师依据课程内容选择；未绑定的题目不能成为正式共同题。</small><small v-if="errors.learning_target_version_id" class="field-error">{{ errors.learning_target_version_id[0] }}</small></label>
           </div>
           <label class="assessment-wide-field"><span>题干 <b class="required-mark" aria-hidden="true">*</b></span><textarea v-model.trim="form.stem" rows="4" maxlength="2000" placeholder="请输入题目内容" required></textarea><small v-if="errors.stem" class="field-error">{{ errors.stem[0] }}</small></label>
 
@@ -533,11 +665,11 @@ onMounted(async () => {
       </section>
     </div>
 
-    <div v-if="aiOpen" class="modal-backdrop" @click.self="!aiLoading && !aiSaving && (aiOpen = false)">
+    <div v-if="aiOpen" class="modal-backdrop" @click.self="!aiSaving && (aiOpen = false)">
       <section class="entity-modal assessment-ai-modal" role="dialog" aria-modal="true" aria-labelledby="assessment-ai-title">
         <header class="modal-header">
           <div><h2 id="assessment-ai-title">AI 批量出题</h2><p>使用教师自己的 DeepSeek 接口生成题目，确认后保存到“我的题目”，无需共享审核。</p></div>
-          <button class="icon-button" type="button" aria-label="关闭" :disabled="aiLoading || aiSaving" @click="aiOpen = false">×</button>
+          <button class="icon-button" type="button" aria-label="关闭" :disabled="aiSaving" @click="aiOpen = false">×</button>
         </header>
 
         <div class="assessment-ai-workspace">
@@ -556,6 +688,7 @@ onMounted(async () => {
             </div>
             <label><span>补充要求</span><textarea v-model.trim="aiForm.requirement" rows="3" maxlength="1000" placeholder="可选：情境、语言风格、避免内容等"></textarea><small v-if="aiErrors.requirement" class="field-error">{{ aiErrors.requirement[0] }}</small></label>
             <button class="primary-button wide" type="button" :disabled="aiLoading || aiSaving" @click="generateAiDrafts">{{ aiLoading ? 'AI 生成中' : aiDrafts.length ? '重新生成草稿' : '生成题目草稿' }}</button>
+            <small>提交后在后台生成，可以关闭窗口或离开本页；再次进入时可继续查看。</small>
           </aside>
 
           <main class="assessment-ai-drafts">
@@ -564,7 +697,11 @@ onMounted(async () => {
               <div v-if="aiDrafts.length"><button type="button" @click="aiDrafts.forEach((item) => item.selected = true)">全选</button><button type="button" @click="aiDrafts.forEach((item) => item.selected = false)">取消全选</button></div>
             </header>
             <NoticeLine v-if="aiNotice" :message="aiNotice" :tone="aiDrafts.length ? 'success' : 'warning'" />
-            <div v-if="aiLoading" class="assessment-ai-loading"><strong>正在生成题目草稿</strong><span>复杂批量出题可能需要几十秒，请勿关闭窗口。</span></div>
+            <div v-if="aiLoading" class="assessment-ai-loading">
+              <strong>{{ aiJob?.status_label || '正在准备后台任务' }}</strong>
+              <span>可以关闭窗口或离开本页，生成不会中断；再次进入可继续查看。</span>
+              <button v-if="aiJob?.status === 'queued'" class="secondary-button" type="button" @click="cancelAiJob">取消等待</button>
+            </div>
             <div v-else-if="aiDrafts.length" class="assessment-ai-draft-list">
               <article v-for="(draft, draftIndex) in aiDrafts" :key="draft.draft_id" :class="{ unselected: !draft.selected }">
                 <header>
@@ -576,6 +713,7 @@ onMounted(async () => {
                   <label><span>难度</span><AppSelect v-model="draft.difficulty"><option v-for="item in options?.difficulties" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></label>
                   <label><span>分值</span><input v-model.number="draft.default_score" type="number" min="0.5" max="100" step="0.5" /></label>
                   <label><span>知识点</span><input v-model.trim="draft.knowledge_point" maxlength="128" /></label>
+                  <label class="assessment-ai-target-field"><span>对应学习目标版本 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="draft.learning_target_version_id"><option value="">请由教师选择</option><option v-for="item in targetVersionsForSubject(draft.subject)" :key="item.id" :value="item.id">{{ targetVersionLabel(item) }}</option></AppSelect><small>AI 不代替教师确定课程目标依据。</small></label>
                 </div>
                 <label class="assessment-ai-wide"><span>题干</span><textarea v-model.trim="draft.stem" rows="3" maxlength="2000"></textarea></label>
                 <section v-if="['single', 'multiple', 'judge'].includes(draft.question_type)" class="assessment-ai-option-list">
@@ -591,11 +729,15 @@ onMounted(async () => {
                 <label class="assessment-ai-wide"><span>{{ draft.question_type === 'text' ? '评分要点' : '答案解析' }}</span><textarea v-model.trim="draft.analysis" rows="3" maxlength="4000"></textarea></label>
               </article>
             </div>
-            <div v-else class="assessment-ai-empty"><strong>填写出题方向后生成草稿</strong><span>AI 结果不会自动入库，教师可以逐题修改和选择。</span></div>
+            <div v-else class="assessment-ai-empty">
+              <strong>{{ aiJob?.status === 'failed' ? '本次生成未完成' : '填写出题方向后生成草稿' }}</strong>
+              <span>{{ aiJob?.error_message || 'AI 结果不会自动入库，教师可以逐题修改和选择。' }}</span>
+              <button v-if="aiJob?.status === 'failed' || aiJob?.status === 'cancelled'" class="primary-button" type="button" @click="retryAiJob">使用原设置重新生成</button>
+            </div>
             <div v-if="aiErrors.questions" class="assessment-ai-error-list" role="alert"><span v-for="message in aiErrors.questions" :key="message">{{ message }}</span></div>
           </main>
         </div>
-        <footer class="modal-actions"><button class="secondary-button" type="button" :disabled="aiLoading || aiSaving" @click="aiOpen = false">关闭</button><button class="primary-button" type="button" :disabled="aiLoading || aiSaving || !selectedAiDrafts.length" @click="confirmAiDrafts">{{ aiSaving ? '正在保存' : `保存 ${selectedAiDrafts.length} 道到我的题目` }}</button></footer>
+        <footer class="modal-actions"><button class="secondary-button" type="button" :disabled="aiSaving" @click="aiOpen = false">{{ aiLoading ? '关闭，后台继续' : '关闭' }}</button><button class="primary-button" type="button" :disabled="aiLoading || aiSaving || !selectedAiDrafts.length" @click="confirmAiDrafts">{{ aiSaving ? '正在保存' : `保存 ${selectedAiDrafts.length} 道到我的题目` }}</button></footer>
       </section>
     </div>
   </AppShell>

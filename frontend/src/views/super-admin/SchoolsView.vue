@@ -245,7 +245,7 @@ function removeRow(row: SchoolRow) {
     notice.value = '请先将学校停用或归档，再执行删除。'
     return
   }
-  ask('删除学校', `确认删除 ${row.name}？已有业务数据时系统会拒绝物理删除。`, async () => {
+  ask('删除学校', `确认删除 ${row.name}？如果学校已有班级、账号或教学记录，系统将保留学校档案。`, async () => {
     await deleteSchool(row.id)
     notice.value = '学校已删除。'
   }, true)
@@ -262,7 +262,7 @@ const { disableSelected: bulkDisableSelected, deleteSelected: bulkDeleteSelected
   isActive: (row) => row.status === 'active',
   bulkDisable: bulkDisableSchools,
   bulkDelete: bulkDeleteSchools,
-  deleteMessage: '确认删除已选非启用学校？已有班级、账号、采集记录或导出记录时系统会保留当前状态。'
+  deleteMessage: '确认删除所选的停用或归档学校？如果学校已有班级、账号或教学记录，系统将保留学校档案。'
 })
 
 function download(url: string) {
@@ -270,20 +270,20 @@ function download(url: string) {
 }
 
 function showImportNotice() {
-  notice.value = '批量导入上传弹窗下一步接入；当前可先通过调试页验证模板。'
+  notice.value = '批量导入功能尚未开放，请暂时使用“新增学校”逐项登记。'
 }
 
 onMounted(load)
 </script>
 
 <template>
-  <AppShell title="学校管理" eyebrow="超级管理员" :nav-items="navItems">
+  <AppShell title="学校信息" eyebrow="超级管理员" :nav-items="navItems" shell-variant="super-admin">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
     <ManagementPage
       v-model:query="query"
       v-model:status="status"
-      title="学校管理"
-      description="维护可接入 STRATA 的学校档案。删除学校前必须先停用或归档。"
+      title="学校信息"
+      description="登记使用平台的学校、联系人和当前使用状态。停用或归档学校不会影响已经形成的教学记录。"
       :total="total"
       :page="page"
       :page-size="pageSize"

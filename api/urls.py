@@ -1,9 +1,19 @@
 from django.urls import include, path
 
-from . import assessment_views, chat_views, protected_files, super_admin_views, views
+from . import (
+    assessment_views,
+    auth_views,
+    chat_views,
+    diagnostic_administration_views,
+    protected_files,
+    super_admin_views,
+    views,
+)
+from . import classroom_views
 
 urlpatterns = [
     path("", include("curriculum_standards.urls")),
+    path("", include("research.urls")),
     path("", include("api.analytics.urls")),
     path(
         "files/courses/<int:pk>/cover/",
@@ -31,6 +41,11 @@ urlpatterns = [
         name="api_protected_student_work",
     ),
     path(
+        "files/pretest-materials/<uuid:attachment_id>/",
+        protected_files.pretest_material_file,
+        name="api_protected_pretest_material",
+    ),
+    path(
         "files/classroom-group-files/<int:pk>/",
         protected_files.classroom_group_file,
         name="api_protected_classroom_group_file",
@@ -40,10 +55,10 @@ urlpatterns = [
         protected_files.classroom_group_document,
         name="api_protected_classroom_group_document",
     ),
-    path("auth/csrf/", views.csrf_token_view, name="api_csrf"),
-    path("auth/login/", views.login_view, name="api_login"),
-    path("auth/logout/", views.logout_view, name="api_logout"),
-    path("auth/me/", views.me_view, name="api_me"),
+    path("auth/csrf/", auth_views.csrf_token_view, name="api_csrf"),
+    path("auth/login/", auth_views.login_view, name="api_login"),
+    path("auth/logout/", auth_views.logout_view, name="api_logout"),
+    path("auth/me/", auth_views.me_view, name="api_me"),
     path(
         "super-admin/dashboard/",
         views.super_admin_dashboard,
@@ -280,6 +295,36 @@ urlpatterns = [
         name="api_school_admin_pretests",
     ),
     path(
+        "school-admin/pretests/learning-target-versions/",
+        views.school_admin_pretest_learning_target_versions,
+        name="api_school_admin_pretest_learning_target_versions",
+    ),
+    path(
+        "school-admin/diagnostic-administrations/",
+        diagnostic_administration_views.school_admin_diagnostic_administrations,
+        name="api_school_admin_diagnostic_administrations",
+    ),
+    path(
+        "school-admin/diagnostic-administrations/<int:pk>/",
+        diagnostic_administration_views.school_admin_diagnostic_administration_detail,
+        name="api_school_admin_diagnostic_administration_detail",
+    ),
+    path(
+        "school-admin/diagnostic-administrations/<int:pk>/assignments/",
+        diagnostic_administration_views.school_admin_diagnostic_administration_assignments,
+        name="api_school_admin_diagnostic_administration_assignments",
+    ),
+    path(
+        "school-admin/diagnostic-administrations/<int:pk>/publish/",
+        diagnostic_administration_views.school_admin_diagnostic_administration_publish,
+        name="api_school_admin_diagnostic_administration_publish",
+    ),
+    path(
+        "school-admin/diagnostic-administrations/<int:pk>/close/",
+        diagnostic_administration_views.school_admin_diagnostic_administration_close,
+        name="api_school_admin_diagnostic_administration_close",
+    ),
+    path(
         "school-admin/pretests/<int:pk>/",
         views.school_admin_pretest_paper_detail,
         name="api_school_admin_pretest_detail",
@@ -303,6 +348,26 @@ urlpatterns = [
         "school-admin/pretests/<int:paper_id>/questions/<int:pk>/",
         views.school_admin_pretest_question_detail,
         name="api_school_admin_pretest_question_detail",
+    ),
+    path(
+        "school-admin/pretest-materials/pending/",
+        views.pretest_materials_pending_review,
+        name="api_school_admin_pretest_materials_pending",
+    ),
+    path(
+        "school-admin/pretest-materials/<uuid:material_id>/review/",
+        views.review_pretest_material,
+        name="api_school_admin_pretest_material_review",
+    ),
+    path(
+        "teacher/pretest-materials/pending/",
+        views.pretest_materials_pending_review,
+        name="api_teacher_pretest_materials_pending",
+    ),
+    path(
+        "teacher/pretest-materials/<uuid:material_id>/review/",
+        views.review_pretest_material,
+        name="api_teacher_pretest_material_review",
     ),
     path(
         "school-admin/teaching/options/",
@@ -388,6 +453,11 @@ urlpatterns = [
     ),
     path("teacher/students/", views.teacher_students, name="api_teacher_students"),
     path(
+        "teacher/students/<int:pk>/learning-profile/",
+        views.teacher_student_learning_profile,
+        name="api_teacher_student_learning_profile",
+    ),
+    path(
         "teacher/students/bulk-reset-password/",
         views.teacher_students_bulk_reset_password,
         name="api_teacher_students_bulk_reset_password",
@@ -457,6 +527,26 @@ urlpatterns = [
         "teacher/question-bank/ai-generate/",
         assessment_views.teacher_question_bank_ai_generate,
         name="api_teacher_question_bank_ai_generate",
+    ),
+    path(
+        "teacher/question-bank/ai-jobs/latest/",
+        assessment_views.teacher_question_bank_ai_job_latest,
+        name="api_teacher_question_bank_ai_job_latest",
+    ),
+    path(
+        "teacher/question-bank/ai-jobs/<int:pk>/",
+        assessment_views.teacher_question_bank_ai_job_detail,
+        name="api_teacher_question_bank_ai_job_detail",
+    ),
+    path(
+        "teacher/question-bank/ai-jobs/<int:pk>/retry/",
+        assessment_views.teacher_question_bank_ai_job_retry,
+        name="api_teacher_question_bank_ai_job_retry",
+    ),
+    path(
+        "teacher/question-bank/ai-jobs/<int:pk>/cancel/",
+        assessment_views.teacher_question_bank_ai_job_cancel,
+        name="api_teacher_question_bank_ai_job_cancel",
     ),
     path(
         "teacher/question-bank/ai-confirm/",
@@ -710,9 +800,24 @@ urlpatterns = [
         name="api_teacher_classroom_grouping_candidates",
     ),
     path(
+        "teacher/classroom/sessions/<int:pk>/group-collaboration/decision/",
+        classroom_views.teacher_classroom_grouping_decision,
+        name="api_teacher_classroom_grouping_decision",
+    ),
+    path(
         "teacher/classroom/sessions/<int:pk>/group-collaboration/candidates/<int:run_id>/confirm/",
         views.teacher_classroom_grouping_confirm,
         name="api_teacher_classroom_grouping_confirm",
+    ),
+    path(
+        "teacher/classroom/sessions/<int:pk>/group-collaboration/plans/<int:plan_id>/activate/",
+        classroom_views.teacher_classroom_grouping_activate,
+        name="api_teacher_classroom_grouping_activate",
+    ),
+    path(
+        "teacher/classroom/sessions/<int:pk>/group-collaboration/plans/<int:plan_id>/notify/",
+        classroom_views.teacher_classroom_grouping_notify,
+        name="api_teacher_classroom_grouping_notify",
     ),
     path(
         "teacher/classroom/sessions/<int:pk>/group-collaboration/close/",
@@ -867,6 +972,21 @@ urlpatterns = [
         "student/pretests/required/",
         views.student_pretests_required,
         name="api_student_pretests_required",
+    ),
+    path(
+        "student/diagnostic-administrations/",
+        diagnostic_administration_views.student_diagnostic_administrations,
+        name="api_student_diagnostic_administrations",
+    ),
+    path(
+        "student/diagnostic-administrations/<int:pk>/",
+        diagnostic_administration_views.student_diagnostic_administration_detail,
+        name="api_student_diagnostic_administration_detail",
+    ),
+    path(
+        "student/diagnostic-administrations/<int:administration_id>/paper/",
+        views.student_pretest_paper,
+        name="api_student_diagnostic_administration_paper",
     ),
     path(
         "student/pretests/<int:subject_id>/",

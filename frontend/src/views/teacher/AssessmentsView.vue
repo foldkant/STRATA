@@ -137,6 +137,9 @@ async function openEdit(row: TestAssessment) {
     await loadBank(Number(detail.subject.id))
     paperItems.value = (detail.questions || []).map((question) => {
       const bank = bankRows.value.find((item) => item.id === question.source_question)
+      const target = options.value?.learning_target_versions.find(
+        (item) => item.id === question.learning_target_version_id
+      )
       return bank ? { question: bank, score: question.score } : {
         question: {
           id: Number(question.source_question || -question.id), subject: detail.subject, creator: detail.teacher,
@@ -145,8 +148,13 @@ async function openEdit(row: TestAssessment) {
           difficulty_label: '快照', knowledge_point: question.knowledge_point, default_score: question.score,
           status: 'active', status_label: '启用', source: 'existing', source_label: '试卷快照',
           library_scope: 'school', library_scope_label: '校内共享',
-          item_role: question.item_role || 'regular', item_role_label: question.item_role === 'common' ? '共同题' : question.item_role === 'layered' ? '分层题' : '普通题',
+          item_role: question.item_role || 'regular', item_role_label: question.item_role === 'common' ? '共同题' : question.item_role === 'layered' ? '差异化题目' : '普通题',
           layer_scope: question.layer_scope || 'all', layer_scope_label: question.layer_scope || '全体', comparison_code: question.comparison_code || '',
+          learning_target_version: target ? {
+            id: target.id, code: target.code, title: target.title, content_hash: target.content_hash,
+            course_id: target.course, alignment_status: 'complete'
+          } : null,
+          legacy_unmapped: question.legacy_unmapped ?? !target,
           version_no: 1, content_hash: '', usage_count: 0, response_count: 0, correct_count: 0,
           correct_rate: null, trial_usage_count: 0, trial_response_count: 0, trial_correct_count: 0,
           trial_correct_rate: null, submitted_for_review_at: null, reviewed_by: null, reviewed_at: null,
@@ -215,6 +223,11 @@ function inPaper(id: number) {
 
 function addQuestion(question: BankQuestion) {
   if (!inPaper(question.id)) paperItems.value.push({ question, score: question.default_score })
+}
+
+function questionTargetLabel(question: BankQuestion) {
+  const target = question.learning_target_version
+  return target ? `${target.code} · ${target.title}` : '未绑定学习目标版本'
 }
 
 function removeQuestion(id: number) {
@@ -371,7 +384,7 @@ onMounted(async () => {
         <div class="assessment-form-grid">
           <label><span>测试名称 <b class="required-mark" aria-hidden="true">*</b></span><input v-model.trim="form.title" maxlength="128" placeholder="例如 第一单元检测" required /><small v-if="errors.title" class="field-error">{{ errors.title[0] }}</small></label>
           <label><span>学科 <b class="required-mark" aria-hidden="true">*</b></span><AppSelect v-model="form.subject" :disabled="Boolean(editing)" required @change="form.common_question_set = ''"><option value="">请选择</option><option v-for="item in options?.subjects" :key="item.id" :value="item.id">{{ item.name }}</option></AppSelect><small v-if="errors.subject" class="field-error">{{ errors.subject[0] }}</small></label>
-          <label><span>关联课程</span><AppSelect v-model="form.course"><option value="">不关联课程</option><option v-for="item in availableCourses" :key="item.id" :value="item.id">{{ item.title }}</option></AppSelect></label>
+          <label><span>关联课程</span><AppSelect v-model="form.course"><option value="">不关联课程</option><option v-for="item in availableCourses" :key="item.id" :value="item.id">{{ item.title }}</option></AppSelect><small>如需形成目标级学习情况或内容层级建议，必须明确具体课程。</small></label>
           <label><span>共同题集合</span><AppSelect v-model="form.common_question_set"><option value="">普通测试</option><option v-for="item in availableCommonSets" :key="item.id" :value="item.id">{{ item.title }} · v{{ item.version_no }} · {{ item.question_count }} 题</option></AppSelect><small v-if="errors.common_question_set" class="field-error">{{ errors.common_question_set[0] }}</small></label>
           <label><span>作答时长 <b class="required-mark" aria-hidden="true">*</b></span><input v-model.number="form.duration_minutes" type="number" min="1" max="300" required /><small v-if="errors.duration_minutes" class="field-error">{{ errors.duration_minutes[0] }}</small></label>
           <label><span>计划开始</span><input v-model="form.start_at" type="datetime-local" /></label>
@@ -381,8 +394,8 @@ onMounted(async () => {
         <label class="assessment-wide-field"><span>作答说明</span><textarea v-model.trim="form.instruction" rows="3" maxlength="2000" placeholder="学生进入测试前看到的说明"></textarea></label><label class="check-row"><input v-model="form.show_score_after_submit" type="checkbox" /><span>学生提交后立即显示当前得分</span></label>
       </div>
       <div v-else class="assessment-paper-builder">
-        <section class="assessment-bank-picker"><header><div><strong>可用题目</strong><span>{{ filteredBank.length }} 道可选</span></div><div><input v-model.trim="bankQuery" placeholder="搜索题干或知识点" /><AppSelect v-model="bankType"><option value="">全部题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></div></header><div class="assessment-picker-list"><article v-for="item in filteredBank" :key="item.id"><div><span>{{ item.question_type_label }} · {{ item.difficulty_label }} · {{ item.item_role_label }}<template v-if="item.item_role === 'layered'">（{{ item.layer_scope_label }}）</template> · {{ item.default_score }} 分</span><strong>{{ item.stem }}</strong><small>{{ item.knowledge_point || '未设置知识点' }}<template v-if="item.comparison_code"> · {{ item.comparison_code }}</template></small></div><button type="button" :disabled="inPaper(item.id)" @click="addQuestion(item)">{{ inPaper(item.id) ? '已加入' : '加入' }}</button></article></div></section>
-        <section class="assessment-paper-list"><header><div><strong>当前试卷</strong><span>{{ paperItems.length }} 题 · {{ paperTotal }} 分</span></div></header><div class="assessment-random-settings"><label><input v-model="form.randomize_question_order" type="checkbox" /><span><strong>随机题目顺序</strong><small>每位学生使用不同题序，刷新后保持不变</small></span></label><label><input v-model="form.randomize_option_order" type="checkbox" /><span><strong>随机选项顺序</strong><small>单选、多选和判断题选项独立随机</small></span></label></div><div class="assessment-paper-items"><article v-for="(item, index) in paperItems" :key="item.question.id"><em>{{ index + 1 }}</em><div><span>{{ item.question.question_type_label }} · {{ item.question.knowledge_point || '未设置知识点' }}</span><strong>{{ item.question.stem }}</strong></div><label><span>分值</span><input v-model.number="item.score" type="number" min="0.5" max="100" step="0.5" /></label><div class="assessment-sort-actions"><button type="button" :disabled="index === 0" @click="moveQuestion(index, -1)">↑</button><button type="button" :disabled="index === paperItems.length - 1" @click="moveQuestion(index, 1)">↓</button><button type="button" @click="removeQuestion(item.question.id)">×</button></div></article><p v-if="!paperItems.length" class="empty">从左侧选择题目加入试卷。</p></div></section>
+        <section class="assessment-bank-picker"><header><div><strong>可用题目</strong><span>{{ filteredBank.length }} 道可选</span></div><div><input v-model.trim="bankQuery" placeholder="搜索题干或知识点" /><AppSelect v-model="bankType"><option value="">全部题型</option><option v-for="item in options?.question_types" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect></div></header><div class="assessment-picker-list"><article v-for="item in filteredBank" :key="item.id"><div><span>{{ item.question_type_label }} · {{ item.difficulty_label }} · {{ item.item_role_label }}<template v-if="item.item_role === 'layered'">（{{ item.layer_scope_label }}）</template> · {{ item.default_score }} 分</span><strong>{{ item.stem }}</strong><small>{{ item.knowledge_point || '未设置知识点' }}<template v-if="item.comparison_code"> · {{ item.comparison_code }}</template></small><small :class="item.learning_target_version ? 'assessment-target-bound' : 'assessment-target-unmapped'">{{ item.learning_target_version ? `学习目标：${questionTargetLabel(item)}` : '未绑定学习目标版本：可用于一般教学，但不能作为正式共同题证据。' }}</small></div><button type="button" :disabled="inPaper(item.id)" @click="addQuestion(item)">{{ inPaper(item.id) ? '已加入' : '加入' }}</button></article></div></section>
+        <section class="assessment-paper-list"><header><div><strong>当前试卷</strong><span>{{ paperItems.length }} 题 · {{ paperTotal }} 分</span></div></header><div class="assessment-random-settings"><label><input v-model="form.randomize_question_order" type="checkbox" /><span><strong>随机题目顺序</strong><small>每位学生使用不同题序，刷新后保持不变</small></span></label><label><input v-model="form.randomize_option_order" type="checkbox" /><span><strong>随机选项顺序</strong><small>单选、多选和判断题选项独立随机</small></span></label></div><div class="assessment-paper-items"><article v-for="(item, index) in paperItems" :key="item.question.id"><em>{{ index + 1 }}</em><div><span>{{ item.question.question_type_label }} · {{ item.question.knowledge_point || '未设置知识点' }}</span><strong>{{ item.question.stem }}</strong><small :class="item.question.learning_target_version ? 'assessment-target-bound' : 'assessment-target-unmapped'">{{ questionTargetLabel(item.question) }}</small></div><label><span>分值</span><input v-model.number="item.score" type="number" min="0.5" max="100" step="0.5" /></label><div class="assessment-sort-actions"><button type="button" :disabled="index === 0" @click="moveQuestion(index, -1)">↑</button><button type="button" :disabled="index === paperItems.length - 1" @click="moveQuestion(index, 1)">↓</button><button type="button" @click="removeQuestion(item.question.id)">×</button></div></article><p v-if="!paperItems.length" class="empty">从左侧选择题目加入试卷。</p></div></section>
       </div>
       <footer class="modal-actions"><button class="secondary-button" type="button" @click="editorOpen = false">取消</button><button v-if="editorStep === 'info'" class="primary-button" type="button" :disabled="saving" @click="saveInfoAndCompose">保存并开始组卷</button><button v-else class="primary-button" type="button" :disabled="saving || !paperItems.length" @click="savePaper">保存试卷</button></footer>
     </section></div>

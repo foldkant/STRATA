@@ -14,10 +14,6 @@ const notice = ref('')
 const loading = ref(false)
 const navItems = studentNav('/student/courses')
 
-function courseInitial() {
-  return course.value?.title.slice(0, 8) || '课程'
-}
-
 function pretestPath() {
   return course.value?.pretest_status.required && !course.value.pretest_status.completed && course.value.subject
     ? `/student/pretests/${course.value.subject.id}`
@@ -66,7 +62,7 @@ onMounted(async () => {
     <template v-else>
       <section class="student-course-hero">
         <img v-if="course.cover_url" :src="course.cover_url" :alt="course.title" />
-        <div v-else class="student-course-cover hero"><strong>{{ courseInitial() }}</strong></div>
+        <div v-else class="student-course-cover hero" aria-hidden="true"></div>
         <div>
           <span>{{ course.subject?.name || '未设置学科' }} · {{ course.teaching_model_label }}</span>
           <h2>{{ course.title }}</h2>

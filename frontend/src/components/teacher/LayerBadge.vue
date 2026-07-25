@@ -13,10 +13,10 @@ const props = withDefaults(defineProps<{
 
 const normalizedLayer = computed(() => ['A', 'B', 'C'].includes(String(props.layer)) ? String(props.layer) : '')
 const fallbackLabel = computed(() => ({
-  A: '拓展挑战层',
-  B: '核心发展层',
-  C: '基础提升层'
-}[normalizedLayer.value] || '未分层'))
+  A: '拓展挑战内容',
+  B: '核心发展内容',
+  C: '基础提升内容'
+}[normalizedLayer.value] || '尚未安排'))
 </script>
 
 <template>
@@ -32,9 +32,9 @@ const fallbackLabel = computed(() => ({
   align-items: center;
   gap: 8px;
   min-height: 34px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #cbd5ce;
   border-radius: 5px;
-  background: #f8fafc;
+  background: #f5f7f4;
   padding: 4px 9px;
   color: #475569;
   white-space: nowrap;
@@ -46,8 +46,8 @@ const fallbackLabel = computed(() => ({
   width: 23px;
   height: 23px;
   border-radius: 4px;
-  background: #e2e8f0;
-  color: #334155;
+  background: #e5eae6;
+  color: #334a43;
   font-size: 13px;
   line-height: 1;
 }
@@ -59,8 +59,8 @@ const fallbackLabel = computed(() => ({
 
 .layer-A { border-color: #99d5cb; background: #effaf7; color: #0f6258; }
 .layer-A strong { background: #0f766e; color: #fff; }
-.layer-B { border-color: #a9c9f2; background: #f0f6ff; color: #174f91; }
-.layer-B strong { background: #2563a9; color: #fff; }
+.layer-B { border-color: #b8cdc4; background: #f0f5f2; color: #466b60; }
+.layer-B strong { background: #6f9186; color: #fff; }
 .layer-C { border-color: #e5c38e; background: #fff8e9; color: #7c4a0e; }
 .layer-C strong { background: #b7791f; color: #fff; }
 

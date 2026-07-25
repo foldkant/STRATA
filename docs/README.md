@@ -36,6 +36,8 @@
 - [P0 数据库、媒体与代码回滚手册](p0_rollback_runbook.md)：规定停写、备份副本验证、SQLite/媒体/代码恢复、恢复后验收和实际副本演练结果。
 - [P0 基线机器可读清单](p0_baseline_manifest.json)：保存治理文档、批次登记代码、数据库备份、课程标准媒体和测试结果的 SHA-256 基线。
 - [P1 课程标准检索与机器可读导出边界](p1_curriculum_retrieval.md)：记录结构化 JSON/JSONL、稳定检索片段、原文页码与哈希追溯、权限过滤及未来检索后端替换边界。
+- [P6 AI 辅助起草评价与 P7 联调验证](p6_p7_ai_evaluation_development.md)：冻结两阶段 AI 起草流程、教师逐项处理、审计留痕、草稿隔离及工程验收边界。
+- [教育实验研究支持模块（原误标 P6—P7）](p6_p7_research_governance_development.md)：保留 E1—E6 研究治理工程记录；不再占用评价重构的 P6、P7 编号。
 - [测试与共同题集合](assessment_module_design.md)：记录普通题、共同题、分层题、题目版本、组卷快照、共同测量比较和小样本提示规则。
 - [学习数据检查](data_quality_pipeline.md)：定义七项检查指标、完整日窗口、重试状态、本校 API、夜间任务和学校管理员页面。
 - [统计验证与模型比较](model_validation_design.md)：定义 LONG-01 重复测量统计、M00-M03 透明基线、V-A 至 V-E 验证折、拒绝预测、负对照和模型卡。
@@ -62,6 +64,7 @@
 - [课堂实名文字聊天](classroom_chat_design.md)：全班、师生私聊、小组聊天、本地言论判断、撤回和扣分反馈。
 - [ONLYOFFICE 集成](onlyoffice_integration.md)：文档预览、编辑、JWT、协作和无 ONLYOFFICE 降级方案。
 - [教学资源中心](resource_center_design.md)：课外资源、学生项目、班级/校内/跨校共享、审核与行为采集。
+- [2026-07-24 平台综合检查](platform-audit-2026-07-24/README.md)：覆盖四类用户的 50 个页面场景、100 张全页面截图、46 张功能流程截图、前端可用性、接口查询量、安全边界和分阶段优化建议；另附[全角色操作体验优化方案](platform-audit-2026-07-24/all-role-operation-experience-plan.md)，学校管理员“教育实验”按要求排除。
 
 ## 品牌与界面
 

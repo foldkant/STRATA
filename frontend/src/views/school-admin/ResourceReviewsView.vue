@@ -82,7 +82,7 @@ onMounted(loadRows)
 </script>
 
 <template>
-  <AppShell title="资源审核" eyebrow="学校管理员" :nav-items="navItems">
+  <AppShell title="资源审核" eyebrow="学校教学管理" :nav-items="navItems" shell-variant="school-admin">
     <NoticeLine v-if="notice" :message="notice" floating @dismiss="notice = ''" />
 
     <section class="resource-review-head">
@@ -91,7 +91,8 @@ onMounted(loadRows)
         <p>检查教师提交资源的内容、来源和学生项目信息，通过后才进入跨校资源库。</p>
       </div>
       <div class="resource-review-search">
-        <input v-model.trim="query" placeholder="搜索标题或教师" @keyup.enter="loadRows" />
+        <label class="sr-only" for="resource-review-query">搜索资源标题或提交教师</label>
+        <input id="resource-review-query" v-model.trim="query" placeholder="搜索标题或教师" @keyup.enter="loadRows" />
         <button class="secondary-button" type="button" :disabled="loading" @click="loadRows">查询</button>
       </div>
     </section>

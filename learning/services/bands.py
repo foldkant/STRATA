@@ -1,24 +1,120 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Case, IntegerField, Q, Value, When
 from django.utils import timezone
 
-from learning.models import StratificationDecision, StudentSubjectBand
+from learning.models import (
+    LearningContentRecommendation,
+    StratificationDecision,
+    StudentLearningTargetStateVersion,
+    StudentSubjectBand,
+)
 from school.models import StudentProfile
 
 
 COMPARABLE_EVIDENCE_STATUSES = {"comparable", "verified"}
 
 
+def validate_content_band_evidence(
+    *,
+    decision: StratificationDecision,
+    at=None,
+    require_pending_recommendation: bool = True,
+) -> LearningContentRecommendation:
+    """Fail closed before a content-band candidate can become an arrangement."""
+    at = at or timezone.now()
+    if decision.decision_kind != StratificationDecision.DecisionKind.CONTENT_BAND:
+        raise ValidationError("当前记录不是学习内容层级建议。")
+    if decision.abstain_reason or decision.suggested_layer not in StudentSubjectBand.Band.values:
+        raise ValidationError("当前材料只能形成“暂不建议”，不能生成学习内容层级安排。")
+    recommendation = (
+        LearningContentRecommendation.objects.select_related("target_state")
+        .prefetch_related("target_state_links__target_state__learning_target_version__target")
+        .filter(source_decision=decision)
+        .first()
+    )
+    if recommendation is None:
+        raise ValidationError("学习内容层级建议缺少可追溯的目标级材料。")
+    if (
+        require_pending_recommendation
+        and recommendation.status != LearningContentRecommendation.Status.PENDING
+    ):
+        raise ValidationError("该学习内容层级建议已经处理，请刷新后重试。")
+    if recommendation.suggested_band not in StudentSubjectBand.Band.values:
+        raise ValidationError("学习内容层级建议没有可确认的候选层级。")
+
+    links = list(recommendation.target_state_links.all())
+    if not links:
+        raise ValidationError("学习内容层级建议没有目标级学习情况依据。")
+    states = [link.target_state for link in links]
+    if recommendation.target_state_id != states[0].id:
+        raise ValidationError("学习内容层级建议的主要依据与目标情况清单不一致。")
+    if recommendation.evidence_coverage <= 0 or recommendation.uncertainty is None:
+        raise ValidationError("学习内容层级建议缺少材料覆盖或不确定性记录。")
+
+    allowed_status = StudentLearningTargetStateVersion.EvidenceStatus.AVAILABLE
+    for state in states:
+        version = state.learning_target_version
+        target = version.target if version is not None else None
+        if (
+            state.legacy_unmapped
+            or version is None
+            or version.alignment_status != "complete"
+            or not version.curriculum_alignments.exists()
+        ):
+            raise ValidationError("学习内容层级建议包含未完成课标映射的目标情况。")
+        if (
+            target.school_id != decision.class_group.school_id
+            or target.subject_id != decision.subject_id
+            or target.course_id != decision.course_id
+        ):
+            raise ValidationError("学习目标情况与建议的学校、学科或课程范围不一致。")
+        if (
+            state.student_id != decision.student_id
+            or state.class_group_id != decision.class_group_id
+            or state.subject_id != decision.subject_id
+            or state.course_id != decision.course_id
+        ):
+            raise ValidationError("学习目标情况与建议的学生或教学范围不一致。")
+        if state.evidence_status != allowed_status or state.estimate is None:
+            raise ValidationError("学习目标材料不足或尚未完成处理，只能暂不建议。")
+        if state.uncertainty is None:
+            raise ValidationError("学习目标情况缺少不确定性记录，只能暂不建议。")
+        if state.valid_from > at or state.valid_until is None or state.valid_until <= at:
+            raise ValidationError("学习目标材料尚未生效或已超过有效期，请重新汇总。")
+        expected_hash = state.content_hash
+        calculated_hash = hashlib.sha256(
+            json.dumps(
+                state.semantic_content(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        if calculated_hash != expected_hash:
+            raise ValidationError("学习目标情况的材料校验值不一致，不能确认层级安排。")
+    return recommendation
+
+
 def active_student_band_queryset(*, student, subject, course=None, at=None):
     at = at or timezone.now()
+    school_id = getattr(student, "school_id", None)
     query = StudentSubjectBand.objects.filter(
         student=student,
+        school_id=school_id,
         subject=subject,
         valid_from__lte=at,
     ).filter(Q(valid_until__isnull=True) | Q(valid_until__gt=at))
+    if getattr(subject, "school_id", None) != school_id:
+        return query.none()
+    if course is not None and course.subject_id != subject.id:
+        return query.none()
     if course is None:
         return query.filter(course__isnull=True).order_by("-valid_from", "-id")
     return (
@@ -158,6 +254,9 @@ def apply_student_subject_band(
     if not decision.subject_id:
         raise ValidationError("正式学习内容层级必须关联学科。")
 
+    effective_at = effective_at or timezone.now()
+    validate_content_band_evidence(decision=decision, at=effective_at)
+
     existing = StudentSubjectBand.objects.filter(
         source_decision=decision,
         valid_until__isnull=True,
@@ -165,7 +264,6 @@ def apply_student_subject_band(
     if existing and existing.band == selected_band:
         return existing
 
-    effective_at = effective_at or timezone.now()
     scope = StudentSubjectBand.objects.select_for_update().filter(
         student_id=decision.student_id,
         subject_id=decision.subject_id,
@@ -175,7 +273,9 @@ def apply_student_subject_band(
         scope = scope.filter(course_id=decision.course_id)
     else:
         scope = scope.filter(course__isnull=True)
-    scope.update(valid_until=effective_at)
+    if scope.filter(valid_from__gte=effective_at).exists():
+        raise ValidationError("新的学习内容层级安排必须晚于当前安排的生效时间。")
+    scope.close_at(effective_at)
 
     evidence_snapshot = {
         "decision_id": decision.id,
@@ -204,10 +304,4 @@ def apply_student_subject_band(
         confirmed_by=confirmed_by,
     )
 
-    profile = StudentProfile.objects.select_for_update().get(
-        user_id=decision.student_id
-    )
-    if profile.current_layer != selected_band:
-        profile.current_layer = selected_band
-        profile.save(update_fields=["current_layer", "updated_at"])
     return band

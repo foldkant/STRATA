@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue'
-import type { EvaluationOptions, EvaluationCriterion } from '@/api/evaluation'
+import type { EvaluationEvidenceOwnership, EvaluationOptions, EvaluationCriterion, EvaluationPlanVersionOption } from '@/api/evaluation'
+import { vModalFocus } from '@/directives/modalFocus'
 
 const props = defineProps<{
   criterion: EvaluationCriterion | null
   options: EvaluationOptions
+  planVersion: EvaluationPlanVersionOption | null
+  suggestedCode: string
+  aiDrafted?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -14,6 +18,11 @@ const emit = defineEmits<{
 
 const step = ref(1)
 const error = ref('')
+const submitted = ref(false)
+
+function requestCancel() {
+  if (!submitted.value) emit('cancel')
+}
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -21,11 +30,15 @@ function cloneJson<T>(value: T): T {
 
 function emptyCriterion(): EvaluationCriterion {
   return {
-    code: '',
+    code: props.suggestedCode,
     dimension: 'subject_practice',
     title: '',
     evaluation_target: '',
     evaluation_sources: [],
+    learning_goal_codes: [],
+    evaluation_task_codes: [],
+    evidence_ownership: 'individual',
+    material_types: [],
     expected_performance: '',
     skip_condition: '',
     support_options: [],
@@ -39,8 +52,61 @@ function emptyCriterion(): EvaluationCriterion {
   }
 }
 
-const form = reactive<EvaluationCriterion>(cloneJson(props.criterion || emptyCriterion()))
-const title = computed(() => props.criterion ? '编辑评价指标' : '新增评价指标')
+const materialLabelByValue = new Map(props.options.material_types.map((item) => [item.value, item.label]))
+
+function readableEvaluationSources(values: string[]) {
+  return values.map((value) => materialLabelByValue.get(value) || value)
+}
+
+const form = reactive<EvaluationCriterion>({
+  ...emptyCriterion(),
+  ...cloneJson(props.criterion || {} as EvaluationCriterion),
+  learning_goal_codes: [...(props.criterion?.learning_goal_codes || [])],
+  evaluation_task_codes: [...(props.criterion?.evaluation_task_codes || [])],
+  evaluation_sources: readableEvaluationSources(props.criterion?.evaluation_sources || []),
+  material_types: [...(props.criterion?.material_types || [])]
+})
+const title = computed(() => {
+  if (props.aiDrafted && props.criterion) return '审阅 AI 起草的评价指标'
+  return props.criterion ? '编辑评价指标' : '手工补充评价指标'
+})
+const introduction = computed(() => (
+  props.aiDrafted && props.criterion
+    ? 'AI 已起草评价材料、具体表现、星级说明和评分示例，请结合本班教学实际逐项核对。'
+    : '这是一项手工补充指标，需要依次设置评价材料、具体表现、星级说明和评分示例。'
+))
+const selectedTasks = computed(() => (props.planVersion?.evaluation_tasks || []).filter((task) => (
+  form.evaluation_task_codes.includes(task.code)
+)))
+
+const allowedOwnershipValues = computed(() => {
+  const allValues = props.options.evidence_ownerships.map((item) => item.value)
+  if (!selectedTasks.value.length) return new Set(allValues)
+  const compatible = {
+    individual: new Set(['individual']),
+    group: new Set(['group']),
+    both: new Set(['individual', 'group', 'both'])
+  } as const
+  return selectedTasks.value.reduce<Set<string>>((allowed, task) => {
+    const taskAllowed = compatible[task.evidence_ownership as keyof typeof compatible] || new Set<string>()
+    return new Set([...allowed].filter((value) => taskAllowed.has(value)))
+  }, new Set(allValues))
+})
+
+const allowedOwnershipOptions = computed(() => props.options.evidence_ownerships.filter((item) => (
+  allowedOwnershipValues.value.has(item.value)
+)))
+
+const allowedMaterialValues = computed(() => {
+  if (!selectedTasks.value.length) {
+    return new Set(props.options.material_types.map((item) => item.value))
+  }
+  return new Set(selectedTasks.value.flatMap((task) => task.material_types))
+})
+
+const allowedMaterialOptions = computed(() => props.options.material_types.filter((item) => (
+  allowedMaterialValues.value.has(item.value)
+)))
 
 function lines(value: string) {
   return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
@@ -54,6 +120,21 @@ function addExample() {
   form.scoring_examples.push({ level: 3, title: '', example_description: '', file_reference: '' })
 }
 
+function toggleReference(values: string[], value: string, checked: boolean) {
+  const next = checked ? Array.from(new Set([...values, value])) : values.filter((item) => item !== value)
+  values.splice(0, values.length, ...next)
+}
+
+function toggleTaskReference(value: string, checked: boolean) {
+  toggleReference(form.evaluation_task_codes, value, checked)
+  form.material_types = form.material_types.filter((item) => allowedMaterialValues.value.has(item))
+  const allowedGoalCodes = new Set(selectedTasks.value.flatMap((task) => task.goal_codes))
+  form.learning_goal_codes = form.learning_goal_codes.filter((item) => allowedGoalCodes.has(item))
+  if (!allowedOwnershipValues.value.has(form.evidence_ownership) && allowedOwnershipOptions.value.length) {
+    form.evidence_ownership = allowedOwnershipOptions.value[0].value as EvaluationEvidenceOwnership
+  }
+}
+
 function validateCurrentStep() {
   error.value = ''
   if (step.value === 1) {
@@ -61,6 +142,15 @@ function validateCurrentStep() {
     else if (form.title.trim().length < 2) error.value = '请填写条目名称。'
     else if (form.evaluation_target.trim().length < 4) error.value = '请明确评价对象。'
     else if (!form.evaluation_sources.length) error.value = '至少填写一种材料来源。'
+    else if (!form.learning_goal_codes.length) error.value = '评价指标必须关联至少一条学习目标。'
+    else if (!form.evaluation_task_codes.length) error.value = '评价指标必须关联至少一个评价任务。'
+    else if (selectedTasks.value.some((task) => !task.goal_codes.some((code) => form.learning_goal_codes.includes(code)))) error.value = '每个所选评价任务都必须与本指标至少共享一条学习目标。'
+    else if (form.learning_goal_codes.some((code) => !selectedTasks.value.some((task) => task.goal_codes.includes(code)))) error.value = '评价指标只能关联所选评价任务覆盖的学习目标。'
+    else if (!allowedOwnershipOptions.value.length) error.value = '所选评价任务没有共同的材料归属，请拆分为不同评价指标。'
+    else if (!allowedOwnershipValues.value.has(form.evidence_ownership)) error.value = '评价材料归属与所选评价任务不一致。'
+    else if (!form.material_types.length) error.value = '至少选择一种评价材料类型。'
+    else if (form.material_types.some((item) => !allowedMaterialValues.value.has(item))) error.value = '评价材料类型与所选评价任务不一致。'
+    else if (selectedTasks.value.some((task) => !task.material_types.some((item) => form.material_types.includes(item)))) error.value = '所选材料必须分别覆盖每个评价任务可形成的材料类型。'
     else if (form.expected_performance.trim().length < 8) error.value = '具体表现至少 8 个字符。'
   } else if (step.value === 2) {
     if (form.skip_condition.trim().length < 8) error.value = '请明确哪些情况下暂不评价。'
@@ -82,7 +172,9 @@ function nextStep() {
 }
 
 function submit() {
+  if (submitted.value) return
   if (!validateCurrentStep()) return
+  submitted.value = true
   emit('save', {
     ...cloneJson(form),
     code: form.code.trim(),
@@ -103,14 +195,14 @@ function submit() {
 </script>
 
 <template>
-  <div class="modal-backdrop">
-    <section class="entity-modal compact-modal evaluation-editor criterion-editor" role="dialog" aria-modal="true" aria-labelledby="criterion-editor-title">
+  <div class="modal-backdrop evaluation-editor-backdrop" @click.self="requestCancel">
+    <section v-modal-focus="requestCancel" class="entity-modal compact-modal evaluation-editor criterion-editor" role="dialog" aria-modal="true" aria-labelledby="criterion-editor-title">
       <header class="modal-header">
         <div>
           <h2 id="criterion-editor-title">{{ title }}</h2>
-          <p>每项指标分别设置评价材料、具体表现、星级说明和评分示例。</p>
+          <p>{{ introduction }}</p>
         </div>
-        <button class="icon-button" type="button" aria-label="返回评价标准" @click="emit('cancel')">×</button>
+        <button class="icon-button" type="button" aria-label="返回评价标准" :disabled="submitted" @click="requestCancel">×</button>
       </header>
 
       <nav class="evaluation-stepper" aria-label="评价指标编辑步骤">
@@ -123,10 +215,24 @@ function submit() {
         <p v-if="error" class="evaluation-inline-error" role="alert">{{ error }}</p>
 
         <section v-if="step === 1" class="evaluation-form-grid">
+          <fieldset class="criterion-link-field">
+            <legend>对应学习目标<b>*</b></legend>
+            <label v-for="goal in planVersion?.learning_goals || []" :key="goal.code"><input type="checkbox" :disabled="Boolean(selectedTasks.length) && !selectedTasks.some((task) => task.goal_codes.includes(goal.code))" :checked="form.learning_goal_codes.includes(goal.code)" @change="toggleReference(form.learning_goal_codes, goal.code, ($event.target as HTMLInputElement).checked)" />{{ goal.title }}</label>
+          </fieldset>
+          <fieldset class="criterion-link-field">
+            <legend>对应评价任务<b>*</b></legend>
+            <label v-for="task in planVersion?.evaluation_tasks || []" :key="task.code"><input type="checkbox" :checked="form.evaluation_task_codes.includes(task.code)" @change="toggleTaskReference(task.code, ($event.target as HTMLInputElement).checked)" />{{ task.title }}</label>
+          </fieldset>
           <label>
-            <span>指标代码<b>*</b></span>
-            <input v-model.trim="form.code" maxlength="32" placeholder="例如 D1" />
+            <span>评价材料归属<b>*</b></span>
+            <AppSelect v-model="form.evidence_ownership"><option v-for="item in allowedOwnershipOptions" :key="item.value" :value="item.value">{{ item.label }}</option></AppSelect>
+            <small v-if="form.evidence_ownership === 'both'">个人评价材料与小组评价材料分别记录，小组材料不替代个人材料。</small>
           </label>
+          <fieldset class="criterion-link-field">
+            <legend>评价材料类型<b>*</b></legend>
+            <label v-for="item in allowedMaterialOptions" :key="item.value"><input v-model="form.material_types" type="checkbox" :value="item.value" />{{ item.label }}</label>
+            <small v-if="form.evaluation_task_codes.length">可为不同任务分别选择相容材料；所选材料需覆盖每个关联任务。</small>
+          </fieldset>
           <label>
             <span>评价方面<b>*</b></span>
             <AppSelect v-model="form.dimension">
@@ -135,7 +241,7 @@ function submit() {
           </label>
           <label class="span-2">
             <span>指标名称<b>*</b></span>
-            <input v-model.trim="form.title" maxlength="160" placeholder="例如 表达方案的选择与论证" />
+            <input v-model.trim="form.title" data-modal-initial-focus maxlength="160" placeholder="例如 表达方案的选择与论证" />
           </label>
           <label class="span-2">
             <span>评价对象<b>*</b></span>
@@ -209,16 +315,20 @@ function submit() {
 
       <footer class="modal-actions evaluation-modal-actions">
         <span>出勤、积分和在线时长不能直接作为学科评价指标。</span>
-        <button class="secondary-button" type="button" @click="emit('cancel')">返回评价标准</button>
+        <button class="secondary-button" type="button" :disabled="submitted" @click="requestCancel">返回评价标准</button>
         <button v-if="step > 1" class="secondary-button" type="button" @click="step -= 1">上一步</button>
         <button v-if="step < 3" class="primary-button" type="button" @click="nextStep">下一步</button>
-        <button v-else class="primary-button" type="button" @click="submit">保存指标</button>
+        <button v-else class="primary-button" type="button" :disabled="submitted" @click="submit">{{ submitted ? '保存中' : '保存指标' }}</button>
       </footer>
     </section>
   </div>
 </template>
 
 <style scoped>
+.evaluation-editor-backdrop {
+  z-index: 1300;
+}
+
 .criterion-editor {
   width: min(980px, 100%);
 }
@@ -234,6 +344,35 @@ function submit() {
 .criterion-anchor-list {
   display: grid;
   gap: 16px;
+}
+
+.criterion-link-field {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.criterion-link-field legend {
+  padding: 0 4px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.criterion-link-field label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.criterion-link-field input {
+  width: 18px;
+  min-height: 18px;
 }
 
 .criterion-anchor-list {

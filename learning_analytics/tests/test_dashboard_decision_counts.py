@@ -104,9 +104,34 @@ class DashboardDecisionCountTests(TestCase):
         payload = response.data["data"]
         metrics = {item["label"]: item["value"] for item in payload["metrics"]}
         todos = {item["label"]: item["count"] for item in payload["todo_rows"]}
-        self.assertEqual(metrics["待确认分层"], 1)
-        self.assertEqual(todos["待确认分层"], 1)
-        self.assertEqual(todos["待查看学习支持"], 1)
+        self.assertEqual(metrics["待确认教学安排"], 1)
+        self.assertEqual(todos["待确认学习内容安排"], 1)
+        self.assertEqual(todos["待确认学习支持安排"], 1)
+        self.assertNotIn("student_layers", payload["charts"])
+
+    def test_teacher_global_student_list_does_not_filter_or_show_legacy_layer(self):
+        self.student.student_profile.current_layer = "A"
+        self.student.student_profile.save(update_fields=["current_layer"])
+        other_student = User.objects.create_user(
+            username="dashboard_student_other",
+            password="123456",
+            role=User.Role.STUDENT,
+            school=self.school,
+        )
+        StudentProfile.objects.create(
+            user=other_student,
+            class_group=self.class_group,
+            current_layer="C",
+        )
+
+        self.client.force_authenticate(self.teacher)
+        response = self.client.get("/api/v1/teacher/students/?layer=A")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        rows = response.data["data"]["results"]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all("current_layer" not in row for row in rows))
+        self.assertTrue(all("current_layer_label" not in row for row in rows))
 
     def test_super_admin_dashboard_ignores_support_unpublished_and_test_school(self):
         self.decision(
